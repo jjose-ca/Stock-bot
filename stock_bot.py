@@ -2,6 +2,7 @@ import yfinance as yf
 import pandas_ta as ta
 import requests
 import os
+import pandas as pd
 
 # --- CONFIGURATION ---
 TICKERS = [
@@ -18,55 +19,42 @@ TICKERS = [
     'HUT.TO',             # Crypto Miner
     
     # --- US SWINGS ---
-    'PLTR', 'SOFI', 'CCL', 'NFLX', 'AAPL', 'MSFT'
+    'PLTR', 'SOFI', 'CCL', 'AMD', 'AAPL', 'MSFT', 'NFLX'
 ]
 
 WEBHOOK_URL = os.getenv('DISCORD_URL')
 
-# --- 1. CONFIDENCE SCORING (Updated: No Precision) ---
-def calculate_confidence(price, ema_200, rsi):
-    """Calculates a score from 0-10 based on TREND and VALUE only."""
+# --- 1. CONFIDENCE SCORING (RSI ONLY) ---
+def calculate_confidence(rsi):
     score = 0
     reasons = []
 
-    # A) The Trend (50% of Score)
-    # Are we in a long-term uptrend?
-    if price > ema_200:
-        score += 5
-        reasons.append("✅ **Trend:** Bullish (Price > 200 EMA)")
-    else:
-        score -= 3
-        reasons.append("⚠️ **Trend:** Bearish (Price < 200 EMA)")
-
-    # B) The Value / RSI (50% of Score)
+    # Since we removed Trend (200 EMA), we rely purely on Value (RSI)
     if rsi < 35:
-        score += 5
+        score = 10
         reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
     elif rsi < 45:
-        score += 3
+        score = 8
         reasons.append("📉 **Value:** Oversold (RSI < 45)")
     elif rsi < 55:
-        score += 2
+        score = 6
         reasons.append("🌊 **Value:** Momentum Dip (RSI < 55)")
-    elif rsi > 65:
-        score -= 5
-        reasons.append("🛑 **Risk:** Overbought (RSI > 65)")
+    elif rsi >= 55:
+        score = 4
+        reasons.append("⚠️ **Value:** Neutral/High (RSI > 55)")
 
-    # Cap score at 10
-    final_score = max(0, min(10, score))
-    return final_score, reasons
+    return score, reasons
 
 # --- 2. ALERT FUNCTION ---
 def send_discord_alert(ticker, price, ema_50, rsi, score, reasons):
-    # Color code based on Score
-    if score >= 7:
-        color = 5814783  # Green (Strong Buy)
+    if score >= 8:
+        color = 5814783  # Green
         rating = "🔥 STRONG BUY"
-    elif score >= 5:
-        color = 16776960 # Yellow (Moderate)
+    elif score >= 6:
+        color = 16776960 # Yellow
         rating = "⚠️ MODERATE BUY"
     else:
-        color = 15158332 # Red (Weak)
+        color = 15158332 # Red
         rating = "🚫 WEAK SETUP"
 
     news_link = f"https://finance.yahoo.com/quote/{ticker}/news"
@@ -80,11 +68,9 @@ def send_discord_alert(ticker, price, ema_50, rsi, score, reasons):
                 "description": f"**Analysis:**\n{reasons_text}",
                 "color": color,
                 "fields": [
-                    # --- THE VALUES YOU REQUESTED ---
                     {"name": "Current Price", "value": f"**${price:.2f}**", "inline": True},
                     {"name": "50 EMA Target", "value": f"${ema_50:.2f}", "inline": True},
                     {"name": "RSI Level", "value": f"**{rsi:.1f}**", "inline": True},
-                    
                     {"name": "Action", "value": f"👉 [**Check News**]({news_link})", "inline": False}
                 ],
                 "footer": {"text": "Bot running via GitHub Actions"}
@@ -99,34 +85,39 @@ def check_market():
     
     for ticker in TICKERS:
         try:
-            # Get 1 year of data for 200 EMA
+            # We only need 1y of data now (since 200 EMA is gone)
             df = yf.download(ticker, period="1y", interval="1d", progress=False)
-            if df.empty: continue
+            
+            if df.empty:
+                print(f"Skipping {ticker}: No data found.")
+                continue
 
             # Calculate Indicators
             df['EMA_50'] = ta.ema(df['Close'], length=50)
-            df['EMA_200'] = ta.ema(df['Close'], length=200)
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # Get latest values
-            price = df['Close'].iloc[-1]
-            ema_50 = df['EMA_50'].iloc[-1]
-            ema_200 = df['EMA_200'].iloc[-1]
-            rsi = df['RSI'].iloc[-1]
+            # Get latest row
+            latest = df.iloc[-1]
+            
+            # Check for valid data
+            if pd.isna(latest['EMA_50']) or pd.isna(latest['RSI']):
+                print(f"Skipping {ticker}: Not enough data.")
+                continue
+
+            price = float(latest['Close'])
+            ema_50 = float(latest['EMA_50'])
+            rsi = float(latest['RSI'])
 
             # --- TRIGGER LOGIC ---
-            
-            # 1. Price is within 2% of the 50 EMA (The "Zone")
+            # 1. Price is within 2% of the 50 EMA
             is_near_support = abs(price - ema_50) <= (ema_50 * 0.02)
             
             # 2. RSI is healthy (Below 60)
             is_good_rsi = rsi < 60
 
             if is_near_support and is_good_rsi:
-                # Calculate Score (Trend + Value only)
-                score, reasons = calculate_confidence(price, ema_200, rsi)
-                
-                print(f"TRIGGER: {ticker} | Price: {price} | RSI: {rsi}")
+                score, reasons = calculate_confidence(rsi)
+                print(f"TRIGGER: {ticker} | Price: {price:.2f} | RSI: {rsi:.1f}")
                 send_discord_alert(ticker, price, ema_50, rsi, score, reasons)
             else:
                 print(f"{ticker}: ${price:.2f} | RSI: {rsi:.1f} (No setup)")
