@@ -2,18 +2,28 @@ import yfinance as yf
 import pandas_ta as ta
 import requests
 import os
-import pandas as pd  # <--- Added this to handle the data format
+import pandas as pd
 
 # --- CONFIGURATION ---
 TICKERS = [
-    'VFV.TO',   # Your Safe Base
-    'NVDA.NE',  # Nvidia (CAD Hedged) - High Volatility
-    'TSLA.NE',  # Tesla (CAD Hedged) - High Volatility
-    'PLTR',     # Palantir (US) - aggressive AI swing
-    'SOFI',     # SoFi (US) - cheap fintech
-    'CCL',      # Carnival Cruise (US) - recovery play
-    'HUT.TO'    # Hut 8 Mining (Canadian Crypto miner) - fast swings
+    # --- The Safe Foundation ---
+    'VFV.TO',   # Vanguard S&P 500 (Canadian)
+
+    # --- Sector ETFs (Your new additions) ---
+    'SOXQ',     # Semiconductors (Nvidia/AMD) - Better for $500 acct than SMH
+    'XLY',      # Consumer Discretionary (Amazon/Tesla) - Medium Volatility
+
+    # --- High Volatility / CAD Hedged ---
+    'NVDA.NE',  # Nvidia (CAD Hedged)
+    'TSLA.NE',  # Tesla (CAD Hedged)
+    'HUT.TO',   # Hut 8 Mining (Crypto)
+
+    # --- US Aggressive Swings ---
+    'PLTR',     # Palantir (AI)
+    'SOFI',     # SoFi (Fintech)
+    'CCL'       # Carnival Cruise (Recovery)
 ]
+
 BENCHMARK_TICKER = "SPY"
 
 # WEBHOOK: Get this from your GitHub Secrets
@@ -29,24 +39,20 @@ def get_data(ticker):
             return None, None, None
 
         # --- THE FIX: FLATTEN WEIRD COLUMNS ---
-        # If columns are complex (e.g., ('Close', 'VFV.TO')), flatten them to just 'Close'
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
-        # Ensure 'Close' is a Series, not a 1-column DataFrame
-        # (This happens sometimes with recent updates)
         close_data = df['Close']
         if isinstance(close_data, pd.DataFrame):
-            close_data = close_data.iloc[:, 0] # Take the first column
+            close_data = close_data.iloc[:, 0]
 
         # Calculate Indicators
         df['EMA_50'] = ta.ema(close_data, length=50)
         df['RSI'] = ta.rsi(close_data, length=14)
 
-        # --- SAFE EXTRACT (Force values to be simple floats) ---
+        # --- SAFE EXTRACT ---
         def get_scalar(series):
             val = series.iloc[-1]
-            # If it's still a list/series (e.g. from a glitch), dig deeper
             if isinstance(val, pd.Series):
                 val = val.iloc[0]
             return float(val)
@@ -63,9 +69,10 @@ def get_data(ticker):
 
 def send_discord_alert(ticker, price, ema, rsi, note, color):
     if not WEBHOOK_URL:
+        print("Error: No Webhook URL found.")
         return
 
-    currency = "CAD" if ".TO" in ticker else "USD"
+    currency = "CAD" if ".TO" in ticker or ".NE" in ticker else "USD"
     news_link = f"https://finance.yahoo.com/quote/{ticker}/news"
     
     data = {
@@ -122,7 +129,6 @@ def check_market():
         threshold = ema * 0.02
         rsi_limit = 55
 
-        # Safe logic using simple floats
         is_near_ema = abs(price - ema) <= threshold
         is_cool_rsi = rsi < rsi_limit
 
