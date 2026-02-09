@@ -22,36 +22,30 @@ WEBHOOK_URL = os.getenv('DISCORD_URL')
 
 # --- 1. CONFIDENCE SCORING FUNCTION ---
 def calculate_confidence(price, ema_50, ema_200, rsi):
-    """Calculates a score from 0-10 based on Trend, Setup, and Value"""
+    """Calculates a score from 0-10 based on Trend and Value"""
     score = 0
     reasons = []
 
     # Criterion A: The Trend (Are we in a Bull Market?)
     if price > ema_200:
-        score += 3
+        score += 5  # Increased weight since we removed Precision
         reasons.append("✅ **Trend:** Bullish (Above 200 EMA)")
     else:
         reasons.append("⚠️ **Trend:** Bearish (Below 200 EMA)")
 
-    # Criterion B: The Setup (How close to the support line?)
-    distance = abs(price - ema_50) / price
-    if distance < 0.005: # Less than 0.5% away (Touching it)
-        score += 3
-        reasons.append("🎯 **Precision:** Perfect Bounce (<0.5% dist)")
-    elif distance < 0.015: # Less than 1.5% away
-        score += 1
-        reasons.append("👌 **Precision:** Close Enough (~1.5% dist)")
-
-    # Criterion C: The RSI (Is it cheap?)
+    # Criterion B: The RSI (Is it cheap?)
     if rsi < 35:
-        score += 4
+        score += 5
         reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
     elif rsi < 45:
-        score += 2
+        score += 3
         reasons.append("📉 **Value:** Oversold (RSI < 45)")
     elif rsi > 60:
         score -= 2
         reasons.append("🛑 **Risk:** Overbought (RSI > 60)")
+    
+    # Cap score at 10
+    if score > 10: score = 10
     
     return score, reasons
 
@@ -89,7 +83,7 @@ def get_data(ticker):
         print(f"Error fetching {ticker}: {e}")
         return None, None, None, None
 
-def send_discord_alert(ticker, price, ema, ema200, rsi, note, color):
+def send_discord_alert(ticker, price, ema, ema200, rsi, status_msg, reason_str, color):
     if not WEBHOOK_URL:
         return
 
@@ -100,11 +94,10 @@ def send_discord_alert(ticker, price, ema, ema200, rsi, note, color):
     
     embed = {
         "title": f"🚨 ACTION SIGNAL: {ticker}",
-        "description": f"{note}",
+        "description": f"**Status:** {status_msg}\n\n{reason_str}",
         "color": color, 
         "fields": [
             {"name": "Price", "value": f"${price:.2f} {currency}", "inline": True},
-            # Score field removed as requested
             {"name": "RSI", "value": f"{rsi:.1f}", "inline": True},
             {"name": "50 EMA", "value": f"${ema:.2f}", "inline": True},
             {"name": "200 EMA", "value": f"${ema200:.2f}", "inline": True},
@@ -142,13 +135,15 @@ def check_market():
         # --- CALCULATE SCORE ---
         confidence, reasons = calculate_confidence(price, ema, ema200, rsi)
         reason_str = "\n".join(reasons)
-        full_note = f"**Confidence Score: {confidence}/10**\n{reason_str}"
+        full_note = f"**Confidence Score: {confidence}/10**"
 
         # --- DECISION LOGIC ---
         
         # Trigger A: Standard Bounce (Near 50 EMA)
         if abs(price - ema) <= (ema * 0.02):
             print(f"!!! MATCH: {ticker} (Score: {confidence}) !!!")
+            
+            status_msg = "✅ **Standard Buy:** Bouncing off 50 EMA support."
             
             if confidence >= 7:
                 color = 5763719   # Green
@@ -157,13 +152,13 @@ def check_market():
             else:
                 color = 15158332  # Red
                 
-            send_discord_alert(ticker, price, ema, ema200, rsi, full_note, color)
+            send_discord_alert(ticker, price, ema, ema200, rsi, status_msg, full_note + "\n" + reason_str, color)
 
         # Trigger B: Deep Value (Near 200 EMA)
         elif abs(price - ema200) <= (ema200 * 0.02):
             print(f"!!! DEEP VALUE MATCH: {ticker} !!!")
-            deep_note = f"**💰 DEEP VALUE PLAY**\nStock is at the 200 EMA Floor!\n{reason_str}"
-            send_discord_alert(ticker, price, ema, ema200, rsi, deep_note, 10181046) # Purple
+            status_msg = "💰 **DEEP VALUE PLAY:** Stock crashed to 200 EMA Floor!"
+            send_discord_alert(ticker, price, ema, ema200, rsi, status_msg, full_note + "\n" + reason_str, 10181046) # Purple
 
         else:
             print(f"{ticker}: ${price:.2f} (Score: {confidence}/10) - No Setup")
