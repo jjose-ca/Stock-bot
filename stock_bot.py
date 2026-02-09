@@ -64,15 +64,3 @@ def check_market():
 
 if __name__ == "__main__":
     check_market()
-
-# --- TEST BLOCK (Delete this later) ---
-if __name__ == "__main__":
-    # Test the connection immediately
-    print("Sending test message...")
-    data = {
-        "content": "✅ **Bot Connection Test**\nIf you see this, your Discord Webhook is working perfectly!"
-    }
-    requests.post(WEBHOOK_URL, json=data)
-    
-    # Run the normal check
-    check_market()
