@@ -14,6 +14,7 @@ TICKERS = [
     'HUT.TO',   # Crypto Mining
     'PLTR',     # Aggressive Swing
     'SOFI',     # Fintech
+    'NFLX'      # Netflix
     'CCL'       # Recovery Play
 ]
 
