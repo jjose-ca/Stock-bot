@@ -6,7 +6,13 @@ import pandas as pd  # <--- Added this to handle the data format
 
 # --- CONFIGURATION ---
 TICKERS = [
-    'VFV.TO', 'TEC.TO', 'XIT.TO', 'ZEB.TO', 'XEG.TO', 'BTCX-B.TO'
+    'VFV.TO',   # Your Safe Base
+    'NVDA.NE',  # Nvidia (CAD Hedged) - High Volatility
+    'TSLA.NE',  # Tesla (CAD Hedged) - High Volatility
+    'PLTR',     # Palantir (US) - aggressive AI swing
+    'SOFI',     # SoFi (US) - cheap fintech
+    'CCL',      # Carnival Cruise (US) - recovery play
+    'HUT.TO'    # Hut 8 Mining (Canadian Crypto miner) - fast swings
 ]
 BENCHMARK_TICKER = "SPY"
 
