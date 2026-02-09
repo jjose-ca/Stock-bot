@@ -29,7 +29,6 @@ def calculate_confidence(rsi):
     score = 0
     reasons = []
 
-    # Since we removed Trend (200 EMA), we rely purely on Value (RSI)
     if rsi < 35:
         score = 10
         reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
@@ -85,9 +84,10 @@ def check_market():
     
     for ticker in TICKERS:
         try:
-            # We only need 1y of data now (since 200 EMA is gone)
+            # Download data
             df = yf.download(ticker, period="1y", interval="1d", progress=False)
             
+            # Check if dataframe is empty
             if df.empty:
                 print(f"Skipping {ticker}: No data found.")
                 continue
@@ -96,28 +96,33 @@ def check_market():
             df['EMA_50'] = ta.ema(df['Close'], length=50)
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # Get latest row
-            latest = df.iloc[-1]
-            
-            # Check for valid data
-            if pd.isna(latest['EMA_50']) or pd.isna(latest['RSI']):
-                print(f"Skipping {ticker}: Not enough data.")
+            # --- THE FIX: FORCE SINGLE NUMBERS ---
+            # We strictly grab the last row (.iloc[-1]) and convert to float immediately
+            # This prevents the 'Ambiguous Series' error
+            try:
+                price = float(df['Close'].iloc[-1])
+                ema_50 = float(df['EMA_50'].iloc[-1])
+                rsi = float(df['RSI'].iloc[-1])
+            except IndexError:
+                # This handles cases where calculation failed (e.g. new stock with no history)
+                print(f"Skipping {ticker}: Not enough data for EMA/RSI.")
                 continue
 
-            price = float(latest['Close'])
-            ema_50 = float(latest['EMA_50'])
-            rsi = float(latest['RSI'])
-
             # --- TRIGGER LOGIC ---
+            # Now we are comparing number vs number (Safe)
+            
             # 1. Price is within 2% of the 50 EMA
-            is_near_support = abs(price - ema_50) <= (ema_50 * 0.02)
+            # Note: We use abs() to catch it whether it is slightly above or slightly below
+            diff = abs(price - ema_50)
+            threshold = ema_50 * 0.02
+            is_near_support = diff <= threshold
             
             # 2. RSI is healthy (Below 60)
             is_good_rsi = rsi < 60
 
             if is_near_support and is_good_rsi:
                 score, reasons = calculate_confidence(rsi)
-                print(f"TRIGGER: {ticker} | Price: {price:.2f} | RSI: {rsi:.1f}")
+                print(f"!!! TRIGGER: {ticker} | Price: {price:.2f} | RSI: {rsi:.1f}")
                 send_discord_alert(ticker, price, ema_50, rsi, score, reasons)
             else:
                 print(f"{ticker}: ${price:.2f} | RSI: {rsi:.1f} (No setup)")
