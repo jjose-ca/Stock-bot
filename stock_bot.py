@@ -20,7 +20,7 @@ TICKERS = [
 BENCHMARK_TICKER = "SPY"
 WEBHOOK_URL = os.getenv('DISCORD_URL')
 
-# --- 1. NEW: CONFIDENCE SCORING FUNCTION ---
+# --- 1. CONFIDENCE SCORING FUNCTION ---
 def calculate_confidence(price, ema_50, ema_200, rsi):
     """Calculates a score from 0-10 based on Trend, Setup, and Value"""
     score = 0
@@ -93,10 +93,8 @@ def send_discord_alert(ticker, price, ema, ema200, rsi, note, color):
     if not WEBHOOK_URL:
         return
 
-    # Create Wealthsimple Buy Link
-    clean_ticker = ticker.replace('.TO', '').replace('.NE', '')
-    trade_link = f"https://my.wealthsimple.com/app/search?query={clean_ticker}"
-    news_link = f"https://finance.yahoo.com/quote/{ticker}/news"
+    # Yahoo Finance Link
+    news_link = f"https://finance.yahoo.com/quote/{ticker}"
     
     currency = "CAD" if ".TO" in ticker or ".NE" in ticker else "USD"
     
@@ -106,11 +104,11 @@ def send_discord_alert(ticker, price, ema, ema200, rsi, note, color):
         "color": color, 
         "fields": [
             {"name": "Price", "value": f"${price:.2f} {currency}", "inline": True},
-            {"name": "Score", "value": "See Description ⬆️", "inline": True},
+            # Score field removed as requested
             {"name": "RSI", "value": f"{rsi:.1f}", "inline": True},
             {"name": "50 EMA", "value": f"${ema:.2f}", "inline": True},
             {"name": "200 EMA", "value": f"${ema200:.2f}", "inline": True},
-            {"name": "⚡ EXECUTE", "value": f"[**>> CLICK TO BUY ON WEALTHSIMPLE <<**]({trade_link})", "inline": False}
+            {"name": "Research", "value": f"[View Chart & News on Yahoo]({news_link})", "inline": False}
         ],
         "footer": {"text": "Bot running via GitHub Actions"}
     }
@@ -141,7 +139,7 @@ def check_market():
         if price is None:
             continue
 
-        # --- 2. NEW: CALCULATE SCORE ---
+        # --- CALCULATE SCORE ---
         confidence, reasons = calculate_confidence(price, ema, ema200, rsi)
         reason_str = "\n".join(reasons)
         full_note = f"**Confidence Score: {confidence}/10**\n{reason_str}"
@@ -152,13 +150,12 @@ def check_market():
         if abs(price - ema) <= (ema * 0.02):
             print(f"!!! MATCH: {ticker} (Score: {confidence}) !!!")
             
-            # Color code based on confidence
             if confidence >= 7:
-                color = 5763719   # Green (High Conviction)
+                color = 5763719   # Green
             elif confidence >= 5:
-                color = 16776960  # Yellow (Medium)
+                color = 16776960  # Yellow
             else:
-                color = 15158332  # Red (Low Quality - probably ignore)
+                color = 15158332  # Red
                 
             send_discord_alert(ticker, price, ema, ema200, rsi, full_note, color)
 
