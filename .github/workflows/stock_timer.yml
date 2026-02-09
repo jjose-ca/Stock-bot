@@ -1,0 +1,29 @@
+name: Run Stock Bot
+
+on:
+  schedule:
+    # Runs at minute 0 past every hour from 9am to 5pm ET (Mon-Fri)
+    # (13:00 UTC to 21:00 UTC)
+    - cron: '0 13-21 * * 1-5'
+  workflow_dispatch: # Allows you to click a button to run it manually
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          # This connects to the Secret you made earlier
+          DISCORD_URL: ${{ secrets.DISCORD_URL }}
+        run: python stock_bot.py
