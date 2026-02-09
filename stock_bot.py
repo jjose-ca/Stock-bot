@@ -103,6 +103,37 @@ def send_discord_alert(ticker, price, ema, ema200, rsi, note, color):
     except Exception as e:
         print(f"Failed to send alert: {e}")
 
+def calculate_confidence(price, ema_50, ema_200, rsi):
+    score = 0
+    reasons = []
+
+    # Criterion 1: The Trend (Is it in a long-term bull market?)
+    if price > ema_200:
+        score += 3
+        reasons.append("✅ Above 200 EMA (Bull Trend)")
+    else:
+        reasons.append("⚠️ Below 200 EMA (Bear Trend)")
+
+    # Criterion 2: The Setup Quality (How close to the line?)
+    # If it's literally touching the line (within 0.5%), that's better than being 2% away
+    distance = abs(price - ema_50) / price
+    if distance < 0.005: # Less than 0.5% away
+        score += 3
+        reasons.append("🎯 Perfect Touch (<0.5% dist)")
+    elif distance < 0.015:
+        score += 1
+        reasons.append("OK Proximity (~1.5% dist)")
+
+    # Criterion 3: The RSI (How cheap is it?)
+    if rsi < 35:
+        score += 4
+        reasons.append("💎 Deeply Oversold (RSI < 35)")
+    elif rsi < 45:
+        score += 2
+        reasons.append("📉 Oversold (RSI < 45)")
+    
+    return score, reasons
+
 def check_market():
     print("--- 🚀 STARTING BOT RUN 🚀 ---")
     
