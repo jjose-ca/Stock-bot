@@ -87,32 +87,34 @@ def check_market():
             # Download data
             df = yf.download(ticker, period="1y", interval="1d", progress=False)
             
-            # Check if dataframe is empty
             if df.empty:
                 print(f"Skipping {ticker}: No data found.")
                 continue
+
+            # --- THE FIX: FLATTEN MULTI-LEVEL COLUMNS ---
+            # Yahoo sometimes returns columns like ('Close', 'VFV.TO')
+            # This forces them to just be 'Close'
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
 
             # Calculate Indicators
             df['EMA_50'] = ta.ema(df['Close'], length=50)
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # --- THE FIX: FORCE SINGLE NUMBERS ---
-            # We strictly grab the last row (.iloc[-1]) and convert to float immediately
-            # This prevents the 'Ambiguous Series' error
+            # Use .iloc[-1] to grab the last row, then force it to be a single float
             try:
+                # We access the column, take the last value, and convert to float
+                # This kills the "Series" error
                 price = float(df['Close'].iloc[-1])
                 ema_50 = float(df['EMA_50'].iloc[-1])
                 rsi = float(df['RSI'].iloc[-1])
-            except IndexError:
-                # This handles cases where calculation failed (e.g. new stock with no history)
-                print(f"Skipping {ticker}: Not enough data for EMA/RSI.")
+            except (IndexError, ValueError):
+                print(f"Skipping {ticker}: Data error.")
                 continue
 
             # --- TRIGGER LOGIC ---
-            # Now we are comparing number vs number (Safe)
             
             # 1. Price is within 2% of the 50 EMA
-            # Note: We use abs() to catch it whether it is slightly above or slightly below
             diff = abs(price - ema_50)
             threshold = ema_50 * 0.02
             is_near_support = diff <= threshold
