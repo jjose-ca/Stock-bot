@@ -9,9 +9,9 @@ TICKERS = [
     # --- The Safe Foundation ---
     'VFV.TO',   # Vanguard S&P 500 (Canadian)
 
-    # --- Sector ETFs (Your new additions) ---
-    'SOXQ',     # Semiconductors (Nvidia/AMD) - Better for $500 acct than SMH
-    'XLY',      # Consumer Discretionary (Amazon/Tesla) - Medium Volatility
+    # --- Sector ETFs ---
+    'SOXQ',     # Semiconductors (Nvidia/AMD)
+    'XLY',      # Consumer Discretionary (Amazon/Tesla)
 
     # --- High Volatility / CAD Hedged ---
     'NVDA.NE',  # Nvidia (CAD Hedged)
@@ -30,13 +30,14 @@ BENCHMARK_TICKER = "SPY"
 WEBHOOK_URL = os.getenv('DISCORD_URL')
 
 def get_data(ticker):
-    """Downloads data and strictly forces it into simple numbers"""
+    """Downloads data and calculates 50 EMA, 200 EMA, and RSI"""
     try:
         # Download data
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        # Note: We need more history (1y) to calculate the 200 EMA correctly
+        df = yf.download(ticker, period="1y", interval="1d", progress=False)
         
         if df.empty:
-            return None, None, None
+            return None, None, None, None
 
         # --- THE FIX: FLATTEN WEIRD COLUMNS ---
         if isinstance(df.columns, pd.MultiIndex):
@@ -46,8 +47,9 @@ def get_data(ticker):
         if isinstance(close_data, pd.DataFrame):
             close_data = close_data.iloc[:, 0]
 
-        # Calculate Indicators
+        # --- CALCULATE INDICATORS ---
         df['EMA_50'] = ta.ema(close_data, length=50)
+        df['EMA_200'] = ta.ema(close_data, length=200) # <--- NEW: 200 EMA
         df['RSI'] = ta.rsi(close_data, length=14)
 
         # --- SAFE EXTRACT ---
@@ -59,15 +61,16 @@ def get_data(ticker):
 
         current_price = get_scalar(close_data)
         current_ema = get_scalar(df['EMA_50'])
+        current_ema200 = get_scalar(df['EMA_200']) # <--- NEW
         current_rsi = get_scalar(df['RSI'])
         
-        return current_price, current_ema, current_rsi
+        return current_price, current_ema, current_ema200, current_rsi
 
     except Exception as e:
         print(f"Error fetching {ticker}: {e}")
-        return None, None, None
+        return None, None, None, None
 
-def send_discord_alert(ticker, price, ema, rsi, note, color):
+def send_discord_alert(ticker, price, ema, ema200, rsi, note, color):
     if not WEBHOOK_URL:
         print("Error: No Webhook URL found.")
         return
@@ -79,14 +82,14 @@ def send_discord_alert(ticker, price, ema, rsi, note, color):
         "content": f"🚨 **SWING ALERT: {ticker}**",
         "embeds": [
             {
-                "title": f"{ticker} is at 50 EMA Support",
-                "description": f"**Status:** {note}\nThe price has pulled back to the 50-day trend line.",
+                "title": f"Action Signal: {ticker}",
+                "description": f"**Status:** {note}\n{ticker} has hit a key support level.",
                 "color": color, 
                 "fields": [
                     {"name": "Current Price", "value": f"${price:.2f} {currency}", "inline": True},
-                    {"name": "50 EMA Level", "value": f"${ema:.2f} {currency}", "inline": True},
+                    {"name": "50 EMA (Trend)", "value": f"${ema:.2f}", "inline": True},
+                    {"name": "200 EMA (Floor)", "value": f"${ema200:.2f}", "inline": True},
                     {"name": "RSI Strength", "value": f"{rsi:.1f}", "inline": True},
-                    {"name": "Strategy", "value": "RSI < 55 + Near EMA", "inline": True},
                     {"name": "Action", "value": f"[Check News on Yahoo]({news_link})"}
                 ],
                 "footer": {"text": "Bot running via GitHub Actions"}
@@ -104,16 +107,15 @@ def check_market():
     print("--- 🚀 STARTING BOT RUN 🚀 ---")
     
     # 1. CHECK BENCHMARK (SPY)
-    spy_price, spy_ema, spy_rsi = get_data(BENCHMARK_TICKER)
+    spy_price, spy_ema, spy_ema200, spy_rsi = get_data(BENCHMARK_TICKER)
     spy_is_down = False
     
     if spy_price is not None:
-        spy_threshold = spy_ema * 0.015
-        if abs(spy_price - spy_ema) <= spy_threshold:
+        if spy_price < spy_ema:
             spy_is_down = True
-            print(f"BENCHMARK: SPY is at support (${spy_price:.2f}). Market is dipping.")
+            print(f"BENCHMARK: SPY is below 50 EMA (${spy_price:.2f}). Market is weak.")
         else:
-            print(f"BENCHMARK: SPY is healthy (${spy_price:.2f}). No general crash.")
+            print(f"BENCHMARK: SPY is healthy (${spy_price:.2f}).")
     else:
         print("Warning: Could not fetch SPY data.")
 
@@ -121,33 +123,36 @@ def check_market():
 
     # 2. CHECK YOUR STOCKS
     for ticker in TICKERS:
-        price, ema, rsi = get_data(ticker)
+        price, ema, ema200, rsi = get_data(ticker)
 
         if price is None:
             continue
 
-        threshold = ema * 0.02
         rsi_limit = 55
-
-        is_near_ema = abs(price - ema) <= threshold
-        is_cool_rsi = rsi < rsi_limit
-
-        print(f"Checking {ticker}: ${price:.2f} | EMA: ${ema:.2f} | RSI: {rsi:.1f}")
-
-        if is_near_ema and is_cool_rsi:
-            print(f"!!! MATCH FOUND: {ticker} !!!")
-            
-            alert_note = "✅ Price is at support and RSI is cool."
+        
+        # --- NEW LOGIC START ---
+        
+        # Scenario 1: Standard Swing (Price bouncing off 50 EMA)
+        # Logic: Price is close to 50 EMA (+/- 2%) AND Price is ABOVE 50 EMA
+        if abs(price - ema) <= (ema * 0.02) and price > ema and rsi < rsi_limit:
+            print(f"!!! MATCH: {ticker} at 50 EMA !!!")
+            alert_note = "✅ **Standard Buy:** Bouncing off 50 EMA support."
             alert_color = 5814783  # Green
-            
-            if ticker == "VFV.TO":
-                if spy_is_down:
-                    alert_note = "✅ **STRONG BUY:** US Market (SPY) confirms this dip."
-                else:
-                    alert_note = "⚠️ **CAUTION:** VFV is down, but SPY is not. Likely CAD currency noise."
-                    alert_color = 16753920 # Orange
+            send_discord_alert(ticker, price, ema, ema200, rsi, alert_note, alert_color)
 
-            send_discord_alert(ticker, price, ema, rsi, alert_note, alert_color)
+        # Scenario 2: Deep Value (Price crashed to 200 EMA)
+        # Logic: Price is close to 200 EMA (+/- 2%)
+        elif abs(price - ema200) <= (ema200 * 0.02) and rsi < 40: # Stricter RSI for deep dips
+            print(f"!!! MATCH: {ticker} at 200 EMA !!!")
+            alert_note = "💰 **DEEP VALUE:** Stock crashed to 200 EMA support!"
+            alert_color = 16776960 # Gold
+            send_discord_alert(ticker, price, ema, ema200, rsi, alert_note, alert_color)
+            
+        # Scenario 3: Broken Trend (No Alert)
+        else:
+            print(f"Checking {ticker}: ${price:.2f} | 50 EMA: ${ema:.2f} | 200 EMA: ${ema200:.2f}")
+            if price < ema and price > ema200:
+                print(f"   -> Status: In 'No Man's Land' (Falling Knife). Waiting.")
             
     print("--- ✅ RUN COMPLETE ---")
 
