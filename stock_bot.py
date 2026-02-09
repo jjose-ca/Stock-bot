@@ -6,40 +6,63 @@ import pandas as pd
 
 # --- CONFIGURATION ---
 TICKERS = [
-    # --- The Safe Foundation ---
-    'VFV.TO',   # Vanguard S&P 500 (Canadian)
-
-    # --- Sector ETFs ---
-    'SOXQ',     # Semiconductors (Nvidia/AMD)
-    'XLY',      # Consumer Discretionary (Amazon/Tesla)
-
-    # --- High Volatility / CAD Hedged ---
+    'VFV.TO',   # Safe Base
+    'SOXQ',     # Semiconductors (Growth)
+    'XLY',      # Consumer Discretionary
     'NVDA.NE',  # Nvidia (CAD Hedged)
     'TSLA.NE',  # Tesla (CAD Hedged)
-    'HUT.TO',   # Hut 8 Mining (Crypto)
-
-    # --- US Aggressive Swings ---
-    'PLTR',     # Palantir (AI)
-    'SOFI',     # SoFi (Fintech)
-    'CCL'       # Carnival Cruise (Recovery)
+    'HUT.TO',   # Crypto Mining
+    'PLTR',     # Aggressive Swing
+    'SOFI',     # Fintech
+    'CCL'       # Recovery Play
 ]
 
 BENCHMARK_TICKER = "SPY"
-
-# WEBHOOK: Get this from your GitHub Secrets
 WEBHOOK_URL = os.getenv('DISCORD_URL')
 
+# --- 1. NEW: CONFIDENCE SCORING FUNCTION ---
+def calculate_confidence(price, ema_50, ema_200, rsi):
+    """Calculates a score from 0-10 based on Trend, Setup, and Value"""
+    score = 0
+    reasons = []
+
+    # Criterion A: The Trend (Are we in a Bull Market?)
+    if price > ema_200:
+        score += 3
+        reasons.append("✅ **Trend:** Bullish (Above 200 EMA)")
+    else:
+        reasons.append("⚠️ **Trend:** Bearish (Below 200 EMA)")
+
+    # Criterion B: The Setup (How close to the support line?)
+    distance = abs(price - ema_50) / price
+    if distance < 0.005: # Less than 0.5% away (Touching it)
+        score += 3
+        reasons.append("🎯 **Precision:** Perfect Bounce (<0.5% dist)")
+    elif distance < 0.015: # Less than 1.5% away
+        score += 1
+        reasons.append("👌 **Precision:** Close Enough (~1.5% dist)")
+
+    # Criterion C: The RSI (Is it cheap?)
+    if rsi < 35:
+        score += 4
+        reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
+    elif rsi < 45:
+        score += 2
+        reasons.append("📉 **Value:** Oversold (RSI < 45)")
+    elif rsi > 60:
+        score -= 2
+        reasons.append("🛑 **Risk:** Overbought (RSI > 60)")
+    
+    return score, reasons
+
 def get_data(ticker):
-    """Downloads data and calculates 50 EMA, 200 EMA, and RSI"""
+    """Downloads data and calculates indicators"""
     try:
-        # Download data
-        # Note: We need more history (1y) to calculate the 200 EMA correctly
         df = yf.download(ticker, period="1y", interval="1d", progress=False)
         
         if df.empty:
             return None, None, None, None
 
-        # --- THE FIX: FLATTEN WEIRD COLUMNS ---
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
@@ -47,24 +70,20 @@ def get_data(ticker):
         if isinstance(close_data, pd.DataFrame):
             close_data = close_data.iloc[:, 0]
 
-        # --- CALCULATE INDICATORS ---
         df['EMA_50'] = ta.ema(close_data, length=50)
-        df['EMA_200'] = ta.ema(close_data, length=200) # <--- NEW: 200 EMA
+        df['EMA_200'] = ta.ema(close_data, length=200)
         df['RSI'] = ta.rsi(close_data, length=14)
 
-        # --- SAFE EXTRACT ---
         def get_scalar(series):
             val = series.iloc[-1]
             if isinstance(val, pd.Series):
                 val = val.iloc[0]
             return float(val)
 
-        current_price = get_scalar(close_data)
-        current_ema = get_scalar(df['EMA_50'])
-        current_ema200 = get_scalar(df['EMA_200']) # <--- NEW
-        current_rsi = get_scalar(df['RSI'])
-        
-        return current_price, current_ema, current_ema200, current_rsi
+        return (get_scalar(close_data), 
+                get_scalar(df['EMA_50']), 
+                get_scalar(df['EMA_200']), 
+                get_scalar(df['RSI']))
 
     except Exception as e:
         print(f"Error fetching {ticker}: {e}")
@@ -72,83 +91,46 @@ def get_data(ticker):
 
 def send_discord_alert(ticker, price, ema, ema200, rsi, note, color):
     if not WEBHOOK_URL:
-        print("Error: No Webhook URL found.")
         return
 
-    currency = "CAD" if ".TO" in ticker or ".NE" in ticker else "USD"
+    # Create Wealthsimple Buy Link
+    clean_ticker = ticker.replace('.TO', '').replace('.NE', '')
+    trade_link = f"https://my.wealthsimple.com/app/search?query={clean_ticker}"
     news_link = f"https://finance.yahoo.com/quote/{ticker}/news"
     
-    data = {
-        "content": f"🚨 **SWING ALERT: {ticker}**",
-        "embeds": [
-            {
-                "title": f"Action Signal: {ticker}",
-                "description": f"**Status:** {note}\n{ticker} has hit a key support level.",
-                "color": color, 
-                "fields": [
-                    {"name": "Current Price", "value": f"${price:.2f} {currency}", "inline": True},
-                    {"name": "50 EMA (Trend)", "value": f"${ema:.2f}", "inline": True},
-                    {"name": "200 EMA (Floor)", "value": f"${ema200:.2f}", "inline": True},
-                    {"name": "RSI Strength", "value": f"{rsi:.1f}", "inline": True},
-                    {"name": "Action", "value": f"[Check News on Yahoo]({news_link})"}
-                ],
-                "footer": {"text": "Bot running via GitHub Actions"}
-            }
-        ]
+    currency = "CAD" if ".TO" in ticker or ".NE" in ticker else "USD"
+    
+    embed = {
+        "title": f"🚨 ACTION SIGNAL: {ticker}",
+        "description": f"{note}",
+        "color": color, 
+        "fields": [
+            {"name": "Price", "value": f"${price:.2f} {currency}", "inline": True},
+            {"name": "Score", "value": "See Description ⬆️", "inline": True},
+            {"name": "RSI", "value": f"{rsi:.1f}", "inline": True},
+            {"name": "50 EMA", "value": f"${ema:.2f}", "inline": True},
+            {"name": "200 EMA", "value": f"${ema200:.2f}", "inline": True},
+            {"name": "⚡ EXECUTE", "value": f"[**>> CLICK TO BUY ON WEALTHSIMPLE <<**]({trade_link})", "inline": False}
+        ],
+        "footer": {"text": "Bot running via GitHub Actions"}
     }
     
     try:
-        requests.post(WEBHOOK_URL, json=data)
+        requests.post(WEBHOOK_URL, json={"content": f"**{ticker} ALERT**", "embeds": [embed]})
         print(f"--> Alert sent for {ticker}!")
     except Exception as e:
         print(f"Failed to send alert: {e}")
 
-def calculate_confidence(price, ema_50, ema_200, rsi):
-    score = 0
-    reasons = []
-
-    # Criterion 1: The Trend (Is it in a long-term bull market?)
-    if price > ema_200:
-        score += 3
-        reasons.append("✅ Above 200 EMA (Bull Trend)")
-    else:
-        reasons.append("⚠️ Below 200 EMA (Bear Trend)")
-
-    # Criterion 2: The Setup Quality (How close to the line?)
-    # If it's literally touching the line (within 0.5%), that's better than being 2% away
-    distance = abs(price - ema_50) / price
-    if distance < 0.005: # Less than 0.5% away
-        score += 3
-        reasons.append("🎯 Perfect Touch (<0.5% dist)")
-    elif distance < 0.015:
-        score += 1
-        reasons.append("OK Proximity (~1.5% dist)")
-
-    # Criterion 3: The RSI (How cheap is it?)
-    if rsi < 35:
-        score += 4
-        reasons.append("💎 Deeply Oversold (RSI < 35)")
-    elif rsi < 45:
-        score += 2
-        reasons.append("📉 Oversold (RSI < 45)")
-    
-    return score, reasons
-
 def check_market():
     print("--- 🚀 STARTING BOT RUN 🚀 ---")
     
-    # 1. CHECK BENCHMARK (SPY)
+    # 1. CHECK SPY (Context)
     spy_price, spy_ema, spy_ema200, spy_rsi = get_data(BENCHMARK_TICKER)
-    spy_is_down = False
-    
-    if spy_price is not None:
-        if spy_price < spy_ema:
-            spy_is_down = True
-            print(f"BENCHMARK: SPY is below 50 EMA (${spy_price:.2f}). Market is weak.")
+    if spy_price:
+        if spy_price > spy_ema:
+            print(f"MARKET STATUS: Bullish (SPY > 50 EMA)")
         else:
-            print(f"BENCHMARK: SPY is healthy (${spy_price:.2f}).")
-    else:
-        print("Warning: Could not fetch SPY data.")
+            print(f"MARKET STATUS: Caution (SPY < 50 EMA)")
 
     print("-" * 30)
 
@@ -159,32 +141,36 @@ def check_market():
         if price is None:
             continue
 
-        rsi_limit = 55
-        
-        # --- NEW LOGIC START ---
-        
-        # Scenario 1: Standard Swing (Price bouncing off 50 EMA)
-        # Logic: Price is close to 50 EMA (+/- 2%) AND Price is ABOVE 50 EMA
-        if abs(price - ema) <= (ema * 0.02) and price > ema and rsi < rsi_limit:
-            print(f"!!! MATCH: {ticker} at 50 EMA !!!")
-            alert_note = "✅ **Standard Buy:** Bouncing off 50 EMA support."
-            alert_color = 5814783  # Green
-            send_discord_alert(ticker, price, ema, ema200, rsi, alert_note, alert_color)
+        # --- 2. NEW: CALCULATE SCORE ---
+        confidence, reasons = calculate_confidence(price, ema, ema200, rsi)
+        reason_str = "\n".join(reasons)
+        full_note = f"**Confidence Score: {confidence}/10**\n{reason_str}"
 
-        # Scenario 2: Deep Value (Price crashed to 200 EMA)
-        # Logic: Price is close to 200 EMA (+/- 2%)
-        elif abs(price - ema200) <= (ema200 * 0.02) and rsi < 40: # Stricter RSI for deep dips
-            print(f"!!! MATCH: {ticker} at 200 EMA !!!")
-            alert_note = "💰 **DEEP VALUE:** Stock crashed to 200 EMA support!"
-            alert_color = 16776960 # Gold
-            send_discord_alert(ticker, price, ema, ema200, rsi, alert_note, alert_color)
+        # --- DECISION LOGIC ---
+        
+        # Trigger A: Standard Bounce (Near 50 EMA)
+        if abs(price - ema) <= (ema * 0.02):
+            print(f"!!! MATCH: {ticker} (Score: {confidence}) !!!")
             
-        # Scenario 3: Broken Trend (No Alert)
+            # Color code based on confidence
+            if confidence >= 7:
+                color = 5763719   # Green (High Conviction)
+            elif confidence >= 5:
+                color = 16776960  # Yellow (Medium)
+            else:
+                color = 15158332  # Red (Low Quality - probably ignore)
+                
+            send_discord_alert(ticker, price, ema, ema200, rsi, full_note, color)
+
+        # Trigger B: Deep Value (Near 200 EMA)
+        elif abs(price - ema200) <= (ema200 * 0.02):
+            print(f"!!! DEEP VALUE MATCH: {ticker} !!!")
+            deep_note = f"**💰 DEEP VALUE PLAY**\nStock is at the 200 EMA Floor!\n{reason_str}"
+            send_discord_alert(ticker, price, ema, ema200, rsi, deep_note, 10181046) # Purple
+
         else:
-            print(f"Checking {ticker}: ${price:.2f} | 50 EMA: ${ema:.2f} | 200 EMA: ${ema200:.2f}")
-            if price < ema and price > ema200:
-                print(f"   -> Status: In 'No Man's Land' (Falling Knife). Waiting.")
-            
+            print(f"{ticker}: ${price:.2f} (Score: {confidence}/10) - No Setup")
+
     print("--- ✅ RUN COMPLETE ---")
 
 if __name__ == "__main__":
