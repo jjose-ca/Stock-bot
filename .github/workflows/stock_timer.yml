@@ -27,3 +27,4 @@ jobs:
           # This connects to the Secret you made earlier
           DISCORD_URL: ${{ secrets.DISCORD_URL }}
         run: python stock_bot.py
+
