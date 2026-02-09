@@ -2,9 +2,10 @@ name: Run Stock Bot
 
 on:
   schedule:
-    # Runs at minute 0 past every hour from 9am to 5pm ET (Mon-Fri)
-    # (13:00 UTC to 21:00 UTC)
-    - cron: '0 13-21 * * 1-5'
+    # Runs hourly from 9:00 AM to 4:00 PM EST (Mon-Fri)
+    # 14:00 UTC = 9:00 AM EST
+    # 21:00 UTC = 4:00 PM EST (Alert arrives ~4:02 PM)
+    - cron: '0 14-21 * * 1-5'
   workflow_dispatch: # Allows you to click a button to run it manually
 
 jobs:
