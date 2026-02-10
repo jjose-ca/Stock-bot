@@ -2,11 +2,10 @@ name: Run Stock Bot
 
 on:
   schedule:
-    # Runs hourly from 9:00 AM to 4:00 PM EST (Mon-Fri)
-    # 14:00 UTC = 9:00 AM EST
-    # 21:00 UTC = 4:00 PM EST (Alert arrives ~4:02 PM)
+    # Changed '0' to '15' to avoid GitHub server delays
+    # Runs at 9:15 AM, 10:15 AM... until 4:15 PM EST
     - cron: '11 14-21 * * 1-5'
-  workflow_dispatch: # Allows you to click a button to run it manually
+  workflow_dispatch:
 
 jobs:
   build:
@@ -25,7 +24,5 @@ jobs:
 
       - name: Run bot
         env:
-          # This connects to the Secret you made earlier
           DISCORD_URL: ${{ secrets.DISCORD_URL }}
         run: python stock_bot.py
-
