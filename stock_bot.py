@@ -92,8 +92,6 @@ def check_market():
                 continue
 
             # --- THE FIX: FLATTEN MULTI-LEVEL COLUMNS ---
-            # Yahoo sometimes returns columns like ('Close', 'VFV.TO')
-            # This forces them to just be 'Close'
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
@@ -101,10 +99,8 @@ def check_market():
             df['EMA_50'] = ta.ema(df['Close'], length=50)
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # Use .iloc[-1] to grab the last row, then force it to be a single float
+            # Use .iloc[-1] to grab the last row
             try:
-                # We access the column, take the last value, and convert to float
-                # This kills the "Series" error
                 price = float(df['Close'].iloc[-1])
                 ema_50 = float(df['EMA_50'].iloc[-1])
                 rsi = float(df['RSI'].iloc[-1])
@@ -119,15 +115,19 @@ def check_market():
             threshold = ema_50 * 0.02
             is_near_support = diff <= threshold
             
-            # 2. RSI is healthy (Below 60)
-            is_good_rsi = rsi < 60
+            # 2. RSI is healthy (Below 55)
+            is_good_rsi = rsi < 55
 
+            # --- INDENTATION FIXED HERE ---
             if is_near_support and is_good_rsi:
                 score, reasons = calculate_confidence(rsi)
-                print(f"!!! TRIGGER: {ticker} | Price: {price:.2f} | RSI: {rsi:.1f}")
-                send_discord_alert(ticker, price, ema_50, rsi, score, reasons)
-            else:
-                print(f"{ticker}: ${price:.2f} | RSI: {rsi:.1f} (No setup)")
+                
+                # --- FILTER OUT WEAK SCORES ---
+                if score >= 6: 
+                    print(f"!!! TRIGGER: {ticker} | Price: {price:.2f} | RSI: {rsi:.1f}")
+                    send_discord_alert(ticker, price, ema_50, rsi, score, reasons)
+                else:
+                    print(f"Skipping {ticker}: Score too low ({score}/10)")
 
         except Exception as e:
             print(f"Error checking {ticker}: {e}")
