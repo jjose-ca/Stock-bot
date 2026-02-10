@@ -12,8 +12,7 @@ TICKERS = [
     
     # --- SECTOR ETFS ---
     'SOXQ', 'XLY',        # Semis & Consumer
-    'TLT',                # Bonds (Hedge)
-
+   
     # --- CANADIAN GROWTH ---
     'NVDA.NE', 'TSLA.NE', # Nvidia & Tesla (CAD Hedged)
     'HUT.TO',             # Crypto Miner
