@@ -4,7 +4,7 @@ on:
   schedule:
     # Changed '0' to '15' to avoid GitHub server delays
     # Runs at 9:15 AM, 10:15 AM... until 4:15 PM EST
-    - cron: '11 14-21 * * 1-5'
+    - cron: '18 14-21 * * 1-5'
   workflow_dispatch:
 
 jobs:
