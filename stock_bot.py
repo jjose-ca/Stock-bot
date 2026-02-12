@@ -84,7 +84,7 @@ def get_relative_volume(ticker):
         return 1.0
 
 # --- 1. ENHANCED SCORING ENGINE ---
-def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_h, rel_vol):
+def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes):
     score = 0
     reasons = []
 
@@ -118,16 +118,29 @@ def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_
         score += 1
         reasons.append("🔄 **Momentum:** Improving (Selling Slowing Down)")
 
-    # D. VOLUME: Relative Volume Check
-    is_green_candle = price >= open_price
-    
-    # If volume is 1.5x (150%) of normal for this time of day
-    if rel_vol > 1.5 and is_green_candle:
-        score += 2
-        reasons.append(f"📊 **Volume:** Surge ({rel_vol:.1f}x normal for this time)")
-    elif rel_vol > 1.2 and is_green_candle:
-        score += 1
-        reasons.append(f"📊 **Volume:** Above Average ({rel_vol:.1f}x)")
+    # D. VOLUME: HYBRID DIRECTION CHECK
+    # 1. Determine "Bullish" status based on time of day
+    if elapsed_minutes < 30:
+        # MORNING RULE: Just check if candle is Green (Price > Open)
+        # The daily range is too small to be useful yet.
+        is_bullish = price > open_price
+        method = "Green Candle"
+    else:
+        # AFTERNOON RULE: Check if price is in upper half of daily range
+        # This confirms we are holding gains, not just popping and dropping.
+        midpoint = (day_high + day_low) / 2
+        is_bullish = price >= midpoint
+        method = "Upper Range"
+
+    # 2. Score the Volume based on Direction
+    if rel_vol > 1.2:
+        if is_bullish:
+            score += 1
+            if rel_vol > 2.0: score += 1 # Bonus for massive surge
+            reasons.append(f"🟢 **Vol:** Buying Pressure ({rel_vol:.1f}x via {method})")
+        else:
+            # High Volume + Bearish Action = Selling Pressure (No points)
+            reasons.append(f"🔴 **Vol:** Selling Pressure ({rel_vol:.1f}x via {method})")
 
     return score, reasons
 
@@ -177,7 +190,6 @@ def check_market():
     print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
     
     # --- 1. BULK DOWNLOAD ---
-    # Downloads 6mo of data for ALL tickers in ONE request.
     try:
         bulk_data = yf.download(TICKERS, period="6mo", interval="1d", group_by='ticker', progress=False)
     except Exception as e:
@@ -226,6 +238,9 @@ def check_market():
 
             price = float(last['Close'])
             open_price = float(last['Open']) 
+            day_high = float(last['High'])
+            day_low = float(last['Low'])
+
             rsi = float(last['RSI'])
             ema_50 = float(last['EMA_50'])
             bbl = float(last['BBL'])
@@ -246,8 +261,8 @@ def check_market():
                 stop_loss = price - (atr * 1.5)
                 take_profit = price + (atr * 2.0) 
                 
-                # Calculate Score
-                score, reasons = calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_h, rel_vol)
+                # Calculate Score - Passing new params (day_high/low, elapsed_minutes)
+                score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
                 
                 # --- TIME & FRIDAY THRESHOLD LOGIC ---
                 min_score_needed = 5 
