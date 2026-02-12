@@ -3,6 +3,7 @@ import pandas_ta as ta
 import requests
 import os
 import pandas as pd
+import numpy as np
 
 # --- CONFIGURATION ---
 TICKERS = [
@@ -17,46 +18,64 @@ TICKERS = [
     'HUT.TO',             # Crypto Miner
     
     # --- US SWINGS ---
-    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA', 'AAPL', 'MSFT', 'NFLX', 'ORCL', 'MARA', 'AMD', 
+    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA', 'AAPL', 'MSFT', 'NFLX', 'ORCL', 'MARA'
 ]
 
 WEBHOOK_URL = os.getenv('DISCORD_URL')
 
-# --- 1. CONFIDENCE SCORING (RSI ONLY) ---
-def calculate_confidence(rsi):
+# --- 1. ENHANCED SCORING ENGINE ---
+def calculate_confidence(rsi, price, bbl, macd_h, volume, vol_avg):
     score = 0
     reasons = []
 
-    if rsi < 35:
-        score = 10
-        reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
+    # A. RSI (Value) - Max 4 pts
+    if rsi < 30:
+        score += 4
+        reasons.append("💎 **Value:** Deeply Oversold (RSI < 30)")
     elif rsi < 45:
-        score = 8
+        score += 2
         reasons.append("📉 **Value:** Oversold (RSI < 45)")
-    elif rsi < 55:
-        score = 6
-        reasons.append("🌊 **Value:** Momentum Dip (RSI < 55)")
-    elif rsi >= 55:
-        score = 4
-        reasons.append("⚠️ **Value:** Neutral/High (RSI > 55)")
+
+    # B. Bollinger Bands (Support) - Max 3 pts
+    # If price is within 1% of Lower Band
+    if price <= bbl * 1.01: 
+        score += 3
+        reasons.append("🛡️ **Support:** Touching Lower Bollinger Band")
+    
+    # C. MACD (Momentum) - Max 2 pts
+    # If Histogram is positive or turning up
+    if macd_h > 0:
+        score += 2
+        reasons.append("🚀 **Momentum:** MACD Histogram Positive")
+    elif macd_h > -0.1: # Almost turning positive
+        score += 1
+        reasons.append("🔄 **Momentum:** MACD Turning Up")
+
+    # D. Volume (Conviction) - Max 1 pt
+    if volume > vol_avg:
+        score += 1
+        reasons.append("📊 **Volume:** High Buying Interest")
 
     return score, reasons
 
 # --- 2. ALERT FUNCTION ---
-def send_discord_alert(ticker, price, ema_50, rsi, score, reasons):
+def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons):
     if score >= 8:
-        color = 5814783  # Green
+        color = 5763719  # Green (Strong)
         rating = "🔥 STRONG BUY"
-    elif score >= 6:
-        color = 16776960 # Yellow
-        rating = "⚠️ MODERATE BUY"
+    elif score >= 5:
+        color = 16776960 # Yellow (Moderate)
+        rating = "⚠️ MODERATE WATCH"
     else:
-        color = 15158332 # Red
-        rating = "🚫 WEAK SETUP"
+        return # Don't spam discord with weak signals
 
-    news_link = f"https://finance.yahoo.com/quote/{ticker}/news"
     reasons_text = "\n".join(reasons)
     
+    # Calculate Risk/Reward Ratio
+    risk = price - stop_loss
+    reward = take_profit - price
+    rr_ratio = reward / risk if risk > 0 else 0
+
     data = {
         "content": f"🚨 **SWING ALERT: {ticker}**",
         "embeds": [
@@ -65,16 +84,24 @@ def send_discord_alert(ticker, price, ema_50, rsi, score, reasons):
                 "description": f"**Analysis:**\n{reasons_text}",
                 "color": color,
                 "fields": [
-                    {"name": "Current Price", "value": f"**${price:.2f}**", "inline": True},
-                    {"name": "50 EMA Target", "value": f"${ema_50:.2f}", "inline": True},
-                    {"name": "RSI Level", "value": f"**{rsi:.1f}**", "inline": True},
-                    {"name": "Action", "value": f"👉 [**Check News**]({news_link})", "inline": False}
+                    {"name": "Entry Price", "value": f"**${price:.2f}**", "inline": True},
+                    {"name": "RSI", "value": f"{rsi:.1f}", "inline": True},
+                    {"name": "RR Ratio", "value": f"1:{rr_ratio:.1f}", "inline": True},
+                    
+                    {"name": "🛑 Stop Loss", "value": f"${stop_loss:.2f}", "inline": True},
+                    {"name": "🎯 Take Profit", "value": f"${take_profit:.2f}", "inline": True},
+                    {"name": "Vol Status", "value": "Normal" if "Volume" not in reasons_text else "High", "inline": True},
+                    
+                    {"name": "Links", "value": f"[Yahoo](https://finance.yahoo.com/quote/{ticker}) | [TradingView](https://www.tradingview.com/symbols/{ticker})", "inline": False}
                 ],
                 "footer": {"text": "Bot running via GitHub Actions"}
             }
         ]
     }
-    requests.post(WEBHOOK_URL, json=data)
+    try:
+        requests.post(WEBHOOK_URL, json=data)
+    except Exception as e:
+        print(f"Failed to send Discord alert: {e}")
 
 # --- 3. MAIN LOOP ---
 def check_market():
@@ -82,50 +109,66 @@ def check_market():
     
     for ticker in TICKERS:
         try:
-            # Download data
-            df = yf.download(ticker, period="1y", interval="1d", progress=False)
+            # Download Data
+            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
             
-            if df.empty:
-                print(f"Skipping {ticker}: No data found.")
-                continue
+            if df.empty: continue
 
-            # --- THE FIX: FLATTEN MULTI-LEVEL COLUMNS ---
+            # Fix Multi-Index Columns (YFinance Update Fix)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
-            # Calculate Indicators
+            # --- CALCULATE INDICATORS ---
+            # 1. EMAs
             df['EMA_50'] = ta.ema(df['Close'], length=50)
+            
+            # 2. RSI
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # Use .iloc[-1] to grab the last row
-            try:
-                price = float(df['Close'].iloc[-1])
-                ema_50 = float(df['EMA_50'].iloc[-1])
-                rsi = float(df['RSI'].iloc[-1])
-            except (IndexError, ValueError):
-                print(f"Skipping {ticker}: Data error.")
-                continue
+            # 3. MACD (12, 26, 9)
+            macd = ta.macd(df['Close'])
+            df['MACD_H'] = macd['MACDh_12_26_9'] # Histogram
+            
+            # 4. Bollinger Bands (20, 2)
+            bb = ta.bbands(df['Close'], length=20, std=2)
+            df['BBL'] = bb['BBL_20_2.0'] # Lower Band
+            
+            # 5. Volume SMA (20)
+            df['VOL_AVG'] = ta.sma(df['Volume'], length=20)
+            
+            # 6. ATR (For Stop Loss)
+            df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+
+            # Get Latest Data Point
+            last = df.iloc[-1]
+            price = float(last['Close'])
+            rsi = float(last['RSI'])
+            ema_50 = float(last['EMA_50'])
+            bbl = float(last['BBL'])
+            macd_h = float(last['MACD_H'])
+            volume = float(last['Volume'])
+            vol_avg = float(last['VOL_AVG'])
+            atr = float(last['ATR'])
 
             # --- TRIGGER LOGIC ---
+            # We want EITHER:
+            # A) Price is near 50 EMA (Trend Pullback)
+            # B) Price is near Lower Bollinger Band (Mean Reversion)
             
-            # 1. Price is within 2% of the 50 EMA
-            diff = abs(price - ema_50)
-            threshold = ema_50 * 0.02
-            is_near_support = diff <= threshold
+            near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
+            near_bb = abs(price - bbl) <= (bbl * 0.015)
             
-            # 2. RSI is healthy (Below 55)
-            is_good_rsi = rsi < 55
-
-            # --- INDENTATION FIXED HERE ---
-            if is_near_support and is_good_rsi:
-                score, reasons = calculate_confidence(rsi)
+            if (near_ema or near_bb) and rsi < 60:
                 
-                # --- FILTER OUT WEAK SCORES ---
-                if score >= 6: 
-                    print(f"!!! TRIGGER: {ticker} | Price: {price:.2f} | RSI: {rsi:.1f}")
-                    send_discord_alert(ticker, price, ema_50, rsi, score, reasons)
-                else:
-                    print(f"Skipping {ticker}: Score too low ({score}/10)")
+                # Calculate Suggested Trade Parameters
+                stop_loss = price - (atr * 1.5) # Standard 1.5x ATR Stop
+                take_profit = price + (atr * 3.0) # 2:1 Reward Target
+                
+                # Get Score
+                score, reasons = calculate_confidence(rsi, price, bbl, macd_h, volume, vol_avg)
+                
+                print(f"Checking {ticker}: Score {score}/10")
+                send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons)
 
         except Exception as e:
             print(f"Error checking {ticker}: {e}")
