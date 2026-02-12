@@ -122,4 +122,105 @@ def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reason
 
 # --- 3. MAIN LOOP ---
 def check_market():
-    print(f"Checking {len(T
+    print(f"Checking {len(TICKERS)} tickers...")
+    elapsed_minutes = get_market_minutes_elapsed()
+    print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
+    
+    for ticker in TICKERS:
+        try:
+            # 1. Download Data
+            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+            
+            if df.empty: 
+                print(f"Skipping {ticker}: Empty Data")
+                continue
+
+            # 2. Fix Multi-Index (Critical for yfinance)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+
+            # 3. Calculate Indicators
+            df['EMA_50'] = ta.ema(df['Close'], length=50)
+            df['RSI'] = ta.rsi(df['Close'], length=14)
+            
+            # MACD (Fix: Use iloc to avoid KeyErrors)
+            macd = ta.macd(df['Close'])
+            if macd is not None:
+                df['MACD_H'] = macd.iloc[:, 1]
+            else:
+                continue
+
+            # Bollinger Bands (Fix: Use iloc to avoid KeyErrors)
+            bb = ta.bbands(df['Close'], length=20, std=2)
+            if bb is not None and not bb.empty:
+                df['BBL'] = bb.iloc[:, 0]
+            else:
+                df['BBL'] = pd.NA
+            
+            df['VOL_AVG'] = ta.sma(df['Volume'], length=20)
+            df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+
+            # 4. Get Latest Values
+            if len(df) < 2: continue
+            
+            last = df.iloc[-1]
+            prev = df.iloc[-2]
+
+            if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
+
+            price = float(last['Close'])
+            open_price = float(last['Open']) 
+            rsi = float(last['RSI'])
+            ema_50 = float(last['EMA_50'])
+            bbl = float(last['BBL'])
+            
+            macd_h = float(last['MACD_H'])
+            prev_macd_h = float(prev['MACD_H'])
+            
+            volume = float(last['Volume'])
+            vol_avg = float(last['VOL_AVG'])
+            atr = float(last['ATR'])
+
+            # 5. Volume Projection
+            if elapsed_minutes > 15 and elapsed_minutes < 390:
+                proj_volume = (volume / elapsed_minutes) * 390
+            else:
+                proj_volume = volume
+
+            # 6. Trigger Logic
+            near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
+            near_bb = abs(price - bbl) <= (bbl * 0.015)
+            
+            if (near_ema or near_bb) and rsi < 55:
+                
+                stop_loss = price - (atr * 1.5)
+                take_profit = price + (atr * 3.0) 
+                
+                # Calculate Score
+                score, reasons = calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_volume, vol_avg)
+                
+                # --- TIME & FRIDAY THRESHOLD LOGIC ---
+                min_score_needed = 5 # Default
+                
+                # Rule 1: Morning Protection (First 60 mins)
+                if elapsed_minutes < 60:
+                    min_score_needed = 7 
+                
+                # Rule 2: Friday Afternoon Protection (Avoid holding over weekend)
+                # Check if it is Friday (4) and after 2:00 PM (270 mins)
+                tz = pytz.timezone('US/Eastern')
+                is_friday = datetime.now(tz).weekday() == 4
+                if is_friday and elapsed_minutes > 270:
+                    min_score_needed += 1
+
+                # Final Decision
+                print(f"Checking {ticker}: Score {score}/10 (Threshold: {min_score_needed})")
+                
+                if score >= min_score_needed:
+                    send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons, min_score_needed)
+
+        except Exception as e:
+            print(f"Error checking {ticker}: {e}")
+
+if __name__ == "__main__":
+    check_market()
