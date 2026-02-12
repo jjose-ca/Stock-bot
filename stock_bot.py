@@ -4,21 +4,17 @@ import requests
 import os
 import pandas as pd
 import numpy as np
-from datetime import datetime, time
+from datetime import datetime
 import pytz
 
 # --- CONFIGURATION ---
 TICKERS = [
     # --- SAFE FOUNDATION ---
-    'VFV.TO', 'ZSP.TO', 'XEF.TO',   # Canada S&P 500
-    'VTI',  # US S&P 500
-    
+    'VFV.TO', 'ZSP.TO', 'XEF.TO', 'VTI',
     # --- SECTOR ETFS ---
-    'SOXQ', 'XLY',        # Semis & Consumer
-   
+    'SOXQ', 'XLY',
     # --- CANADIAN GROWTH ---
-    'HUT.TO',             # Crypto Miner
-    
+    'HUT.TO',
     # --- US SWINGS ---
     'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA', 'AAPL', 'MSFT', 'NFLX', 'ORCL', 'MARA'
 ]
@@ -47,7 +43,7 @@ def calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_
     score = 0
     reasons = []
 
-    # A. RSI (Value) - UPDATED TO < 35
+    # A. RSI (Value) - Gradient Scoring
     if rsi < 35:
         score += 4
         reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
@@ -58,7 +54,7 @@ def calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_
         score += 2
         reasons.append("🌊 **Trend:** Momentum Reset (RSI < 55)")
 
-    # B. Bollinger Bands (Support)
+    # B. BOLLINGER BANDS (Support)
     if price <= bbl * 1.01: 
         score += 3
         reasons.append("🛡️ **Support:** Touching Lower Bollinger Band")
@@ -71,15 +67,12 @@ def calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_
         score += 1
         reasons.append("🔄 **Momentum:** Improving (Selling Slowing Down)")
 
-    # D. VOLUME FIX: Projection + Candle Color Check
+    # D. VOLUME: Green Candle Check
     is_green_candle = price >= open_price
     
     if proj_volume > vol_avg and is_green_candle:
         score += 1
         reasons.append("📊 **Volume:** High Buying Interest (Green Candle)")
-    elif proj_volume > vol_avg and not is_green_candle:
-        # Penalize or ignore high volume on red days (Panic Selling)
-        pass 
 
     return score, reasons
 
@@ -108,14 +101,13 @@ def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reason
                 "description": f"**Analysis:**\n{reasons_text}",
                 "color": color,
                 "fields": [
-                    {"name": "Status", "value": f"Passed Morning Threshold ({threshold}+)", "inline": False},
+                    {"name": "Status", "value": f"Passed Threshold ({threshold}+)", "inline": False},
                     {"name": "Entry Price", "value": f"**${price:.2f}**", "inline": True},
                     {"name": "RSI", "value": f"{rsi:.1f}", "inline": True},
                     {"name": "RR Ratio", "value": f"1:{rr_ratio:.1f}", "inline": True},
                     
                     {"name": "🛑 Stop Loss", "value": f"${stop_loss:.2f}", "inline": True},
                     {"name": "🎯 Take Profit", "value": f"${take_profit:.2f}", "inline": True},
-                    {"name": "Vol Status", "value": "Normal" if "Volume" not in reasons_text else "High", "inline": True},
                     
                     {"name": "Links", "value": f"[Yahoo](https://finance.yahoo.com/quote/{ticker}) | [TradingView](https://www.tradingview.com/symbols/{ticker})", "inline": False}
                 ],
@@ -136,9 +128,5 @@ def check_market():
     
     for ticker in TICKERS:
         try:
-            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-            
-            if df.empty: continue
-
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns
+            # 1. Download Data
+            df = yf.download(ticker, period="6mo", interval="1d
