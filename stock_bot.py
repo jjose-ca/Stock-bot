@@ -185,39 +185,72 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
     target_pct = ((take_profit - price) / price) * 100
     risk_reward = abs(target_pct / stop_pct)
 
-    # 3. Format the Description (Earnings + Analysis)
-    description = ""
-    if earnings_msg:
-        description += f"**{earnings_msg}**\n\n"
-    
-    description += "**🔎 Analysis:**\n" + "\n".join(reasons)
+    # 3. BUILD TECHNICALS SECTION
+    # RSI Status
+    if rsi < 30: rsi_stat = "Deep Oversold"
+    elif rsi < 35: rsi_stat = "Oversold"
+    elif rsi < 45: rsi_stat = "Weak"
+    else: rsi_stat = "Neutral"
 
-    # 4. Construct the Payload
+    # Trend Status
+    if price > ema_50: trend_stat = "Above"
+    else: trend_stat = "Below"
+
+    # Volume Status (Infer direction from reasons)
+    vol_dir = "Neutral"
+    for r in reasons:
+        if "Buying" in r: vol_dir = "Buying"
+        elif "Selling" in r: vol_dir = "Selling"
+    
+    if rel_vol > 2.0: vol_stat = f"Heavy {vol_dir}"
+    elif rel_vol > 1.2: vol_stat = f"Strong {vol_dir}"
+    else: vol_stat = "Normal"
+
+    technicals_block = (
+        f"📉 **Technicals**\n"
+        f"• **RSI:** {rsi:.1f} ({rsi_stat})\n"
+        f"• **Trend:** {trend_stat} 50 EMA ( ${ema_50:.2f} )\n"
+        f"• **Volume:** {rel_vol:.1f}x ({vol_stat})"
+    )
+
+    # 4. BUILD ANALYSIS SECTION
+    # Ensure all reasons have bullet points
+    formatted_reasons = []
+    for r in reasons:
+        # Strip existing bullet if present to avoid double bullets
+        clean_r = r.replace("•", "").strip()
+        formatted_reasons.append(f"• {clean_r}")
+        
+    analysis_block = "📝 **Analysis**\n" + "\n".join(formatted_reasons)
+
+    # 5. Format the Final Description
+    description_parts = []
+    if earnings_msg:
+        description_parts.append(f"**{earnings_msg}**")
+    
+    description_parts.append(technicals_block)
+    description_parts.append(analysis_block)
+    
+    full_description = "\n\n".join(description_parts)
+
+    # 6. Construct the Payload
     data = {
         "content": f"🚨 **SWING ALERT:** {ticker} (Score: {score})", 
         "embeds": [
             {
                 "title": f"{rating}: {ticker}",
-                "description": description,
+                "description": full_description,
                 "color": color,
                 "fields": [
-                    # --- ROW 1: THE TRADE PLAN ---
                     {
                         "name": "📉 Trade Setup", 
                         "value": f"**Entry:** ${price:.2f}\n**Target:** ${take_profit:.2f} (+{target_pct:.1f}%)\n**Stop:** ${stop_loss:.2f} ({stop_pct:.1f}%)", 
                         "inline": True
                     },
-                    # --- ROW 2: THE TECHNICALS ---
-                    {
-                        "name": "📊 Key Levels", 
-                        "value": f"**RSI:** {rsi:.1f}\n**50 EMA:** ${ema_50:.2f}\n**Vol:** {rel_vol:.1f}x Avg", 
-                        "inline": True
-                    },
-                    # --- ROW 3: METADATA ---
                     {
                         "name": "Risk Profile",
-                        "value": f"RR Ratio: **1:{risk_reward:.1f}**\nFilter Strength: {threshold}+",
-                        "inline": False
+                        "value": f"RR Ratio: **1:{risk_reward:.1f}**\nThreshold: {threshold}+",
+                        "inline": True
                     },
                     {
                         "name": "🔗 Quick Links", 
