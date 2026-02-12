@@ -58,21 +58,27 @@ def get_relative_volume(ticker):
 
         # HISTORICAL TIME ALIGNMENT
         df['time_slot'] = df.index.time
+        df['date'] = df.index.date  # Create date column for filtering
 
         # --- THE FIX: USE LAST COMPLETED CANDLE ---
         # We use iloc[-2] because iloc[-1] is the current "forming" candle (incomplete volume).
         last_completed_bar = df.iloc[-2]
         check_time = last_completed_bar.name.time()
+        check_date = last_completed_bar.name.date() # Capture the date of the candle we are checking
         check_vol = float(last_completed_bar['Volume'])
 
-        # Filter for historical bars at this exact time
-        # We exclude the last 2 rows (Current Forming + Last Completed) to get pure history
-        historical_at_time = df[df['time_slot'] == check_time].iloc[:-2]
+        # 1. Filter for historical bars at this exact time (e.g., all 10:00 AM bars)
+        historical_at_time = df[df['time_slot'] == check_time]
 
-        if historical_at_time.empty:
+        # 2. THE LOGIC FIX: Filter by DATE, not blind slicing
+        # We keep all rows where the date is NOT the check_date.
+        # This preserves Yesterday's data while removing the current bar.
+        history_only = historical_at_time[historical_at_time['date'] != check_date]
+
+        if history_only.empty:
             return 1.0
 
-        avg_vol = historical_at_time['Volume'].mean()
+        avg_vol = history_only['Volume'].mean()
 
         if avg_vol == 0 or pd.isna(avg_vol):
             return 1.0
@@ -122,12 +128,10 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
     # 1. Determine "Bullish" status based on time of day
     if elapsed_minutes < 30:
         # MORNING RULE: Just check if candle is Green (Price > Open)
-        # The daily range is too small to be useful yet.
         is_bullish = price > open_price
         method = "Green Candle"
     else:
         # AFTERNOON RULE: Check if price is in upper half of daily range
-        # This confirms we are holding gains, not just popping and dropping.
         midpoint = (day_high + day_low) / 2
         is_bullish = price >= midpoint
         method = "Upper Range"
@@ -139,7 +143,6 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
             if rel_vol > 2.0: score += 1 # Bonus for massive surge
             reasons.append(f"🟢 **Vol:** Buying Pressure ({rel_vol:.1f}x via {method})")
         else:
-            # High Volume + Bearish Action = Selling Pressure (No points)
             reasons.append(f"🔴 **Vol:** Selling Pressure ({rel_vol:.1f}x via {method})")
 
     return score, reasons
@@ -232,6 +235,15 @@ def check_market():
             if len(df) < 50: continue 
             
             last = df.iloc[-1]
+            
+            # --- 🛡️ GHOST CANDLE FIX 🛡️ ---
+            tz = pytz.timezone('US/Eastern')
+            today_date = datetime.now(tz).date()
+            candle_date = last.name.date()
+            
+            if elapsed_minutes > 20 and candle_date != today_date:
+                continue
+
             prev = df.iloc[-2]
 
             if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
@@ -261,7 +273,7 @@ def check_market():
                 stop_loss = price - (atr * 1.5)
                 take_profit = price + (atr * 2.0) 
                 
-                # Calculate Score - Passing new params (day_high/low, elapsed_minutes)
+                # Calculate Score
                 score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
                 
                 # --- TIME & FRIDAY THRESHOLD LOGIC ---
