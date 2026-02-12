@@ -60,7 +60,7 @@ def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_
         score += 3
         reasons.append("🛡️ **Support:** Touching Lower Bollinger Band")
     
-    # 2. 50 EMA (Trend Support) - NEW CHECK
+    # 2. 50 EMA (Trend Support)
     # We give points if price is within 2% of the 50 EMA
     elif abs(price - ema_50) <= (ema_50 * 0.02):
         score += 2
@@ -84,7 +84,7 @@ def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_
     return score, reasons
 
 # --- 2. ALERT FUNCTION ---
-def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons, threshold):
+def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, threshold):
     if score >= 8:
         color = 5763719  # Green (Strong)
         rating = "🔥 STRONG BUY"
@@ -96,10 +96,6 @@ def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reason
 
     reasons_text = "\n".join(reasons)
     
-    risk = price - stop_loss
-    reward = take_profit - price
-    rr_ratio = reward / risk if risk > 0 else 0
-
     data = {
         "content": f"🚨 **SWING ALERT: {ticker}**",
         "embeds": [
@@ -111,7 +107,9 @@ def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reason
                     {"name": "Status", "value": f"Passed Threshold ({threshold}+)", "inline": False},
                     {"name": "Entry Price", "value": f"**${price:.2f}**", "inline": True},
                     {"name": "RSI", "value": f"{rsi:.1f}", "inline": True},
-                    {"name": "RR Ratio", "value": f"1:{rr_ratio:.1f}", "inline": True},
+                    
+                    # --- REPLACED RR RATIO WITH 50 EMA ---
+                    {"name": "50 EMA", "value": f"${ema_50:.2f}", "inline": True},
                     
                     {"name": "🛑 Stop Loss", "value": f"${stop_loss:.2f}", "inline": True},
                     {"name": "🎯 Take Profit", "value": f"${take_profit:.2f}", "inline": True},
@@ -201,9 +199,10 @@ def check_market():
             if (near_ema or near_bb) and rsi < 55:
                 
                 stop_loss = price - (atr * 1.5)
-                take_profit = price + (atr * 3.0) 
+                # Lowered Target to 2.0x ATR
+                take_profit = price + (atr * 2.0) 
                 
-                # Calculate Score (ADDED EMA_50 HERE)
+                # Calculate Score
                 score, reasons = calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_h, proj_volume, vol_avg)
                 
                 # --- TIME & FRIDAY THRESHOLD LOGIC ---
@@ -223,7 +222,8 @@ def check_market():
                 print(f"Checking {ticker}: Score {score}/10 (Threshold: {min_score_needed})")
                 
                 if score >= min_score_needed:
-                    send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons, min_score_needed)
+                    # Pass EMA_50 to the alert function now
+                    send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed)
 
         except Exception as e:
             print(f"Error checking {ticker}: {e}")
