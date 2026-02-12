@@ -1,3 +1,4 @@
 yfinance
 pandas-ta
 requests
+numpy
