@@ -110,12 +110,11 @@ def get_earnings_warning(ticker):
         
         # Risk Window: 0 to 7 days
         if 0 <= days_until <= 7:
-            return True, f"⚠️ **RISK:** Earnings in {days_until} days ({earnings_date})"
+            return True, f"⚠️ **EARNINGS WARNING:** Report in {days_until} days ({earnings_date})"
         
         return False, ""
 
     except Exception as e:
-        # print(f"Earnings check failed/unavailable for {ticker}: {e}")
         return False, ""
 
 # --- 1. ENHANCED SCORING ENGINE ---
@@ -169,40 +168,68 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
 
     return score, reasons
 
-# --- 2. ALERT FUNCTION ---
-def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol):
+# --- 2. ALERT FUNCTION (VISUAL POLISH UPGRADE) ---
+def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol, earnings_msg):
+    # 1. Determine Color & Rating
     if score >= 8:
-        color = 5763719  # Green (Strong)
+        color = 5763719  # Green (Strong Buy)
         rating = "🔥 STRONG BUY"
     elif score >= 5:
-        color = 16776960 # Yellow (Moderate)
+        color = 16776960 # Yellow (Moderate Watch)
         rating = "⚠️ MODERATE WATCH"
     else:
         return 
 
-    reasons_text = "\n".join(reasons)
+    # 2. Calculate Percentages for Trade Plan
+    stop_pct = ((stop_loss - price) / price) * 100
+    target_pct = ((take_profit - price) / price) * 100
+    risk_reward = abs(target_pct / stop_pct)
+
+    # 3. Format the Description (Earnings + Analysis)
+    description = ""
+    if earnings_msg:
+        description += f"**{earnings_msg}**\n\n"
     
+    description += "**🔎 Analysis:**\n" + "\n".join(reasons)
+
+    # 4. Construct the Payload
     data = {
-        "content": f"🚨 **SWING ALERT: {ticker}**",
+        "content": f"🚨 **SWING ALERT:** {ticker} (Score: {score})", 
         "embeds": [
             {
-                "title": f"{ticker}: {rating} (Score: {score}/10)",
-                "description": f"**Analysis:**\n{reasons_text}",
+                "title": f"{rating}: {ticker}",
+                "description": description,
                 "color": color,
                 "fields": [
-                    {"name": "Status", "value": f"Passed Threshold ({threshold}+)", "inline": False},
-                    {"name": "Entry Price", "value": f"**${price:.2f}**", "inline": True},
-                    {"name": "RSI", "value": f"{rsi:.1f}", "inline": True},
-                    {"name": "50 EMA", "value": f"${ema_50:.2f}", "inline": True},
-                    {"name": "Vol Strength", "value": f"{rel_vol:.1f}x", "inline": True},
-                    {"name": "🛑 Stop Loss", "value": f"${stop_loss:.2f}", "inline": True},
-                    {"name": "🎯 Take Profit", "value": f"${take_profit:.2f}", "inline": True},
-                    {"name": "Links", "value": f"[Yahoo](https://finance.yahoo.com/quote/{ticker}) | [TradingView](https://www.tradingview.com/symbols/{ticker})", "inline": False}
+                    # --- ROW 1: THE TRADE PLAN ---
+                    {
+                        "name": "📉 Trade Setup", 
+                        "value": f"**Entry:** ${price:.2f}\n**Target:** ${take_profit:.2f} (+{target_pct:.1f}%)\n**Stop:** ${stop_loss:.2f} ({stop_pct:.1f}%)", 
+                        "inline": True
+                    },
+                    # --- ROW 2: THE TECHNICALS ---
+                    {
+                        "name": "📊 Key Levels", 
+                        "value": f"**RSI:** {rsi:.1f}\n**50 EMA:** ${ema_50:.2f}\n**Vol:** {rel_vol:.1f}x Avg", 
+                        "inline": True
+                    },
+                    # --- ROW 3: METADATA ---
+                    {
+                        "name": "Risk Profile",
+                        "value": f"RR Ratio: **1:{risk_reward:.1f}**\nFilter Strength: {threshold}+",
+                        "inline": False
+                    },
+                    {
+                        "name": "🔗 Quick Links", 
+                        "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker}) | [TradingView](https://www.tradingview.com/symbols/{ticker})", 
+                        "inline": False
+                    }
                 ],
-                "footer": {"text": "Bot running via GitHub Actions"}
+                "footer": {"text": f"Bot Triggered via GitHub Actions"}
             }
         ]
     }
+    
     try:
         requests.post(WEBHOOK_URL, json=data)
     except Exception as e:
@@ -299,6 +326,9 @@ def check_market():
                 # 4. Apply Earnings Penalty
                 if has_earnings_risk:
                     score -= 2 # Penalize risky setups
+                    # Note: We pass earnings_msg explicitly to the alert function now, 
+                    # so we don't necessarily need to append it to 'reasons', 
+                    # but doing so acts as a backup in the analysis list.
                     reasons.append(earnings_msg)
 
                 # --- TIME & FRIDAY THRESHOLD ---
@@ -311,7 +341,8 @@ def check_market():
                 print(f"🔎 Checking {ticker}: Score {score}/10 (RVAT: {rel_vol:.2f}x)")
                 
                 if score >= min_score_needed:
-                    send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol)
+                    # UPDATED CALL: Passing 'earnings_msg' to the new visual alert function
+                    send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg)
 
         except Exception as e:
             print(f"Error processing {ticker}: {e}")
