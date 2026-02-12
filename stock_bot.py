@@ -17,7 +17,7 @@ TICKERS = [
     'HUT.TO',             # Crypto Miner
     
     # --- US SWINGS ---
-    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA', 'AAPL', 'MSFT', 'NFLX', 'ORCL', 'MARA', 
+    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA', 'AAPL', 'MSFT', 'NFLX', 'ORCL', 'MARA', 'AMD', 
 ]
 
 WEBHOOK_URL = os.getenv('DISCORD_URL')
