@@ -39,7 +39,7 @@ def get_market_minutes_elapsed():
     return min(diff, 390)
 
 # --- 1. ENHANCED SCORING ENGINE ---
-def calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_volume, vol_avg):
+def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_h, proj_volume, vol_avg):
     score = 0
     reasons = []
 
@@ -54,11 +54,18 @@ def calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_
         score += 2
         reasons.append("🌊 **Trend:** Momentum Reset (RSI < 55)")
 
-    # B. BOLLINGER BANDS (Support)
+    # B. SUPPORT LEVELS (Check Both)
+    # 1. Bollinger Band (Deep Support)
     if price <= bbl * 1.01: 
         score += 3
         reasons.append("🛡️ **Support:** Touching Lower Bollinger Band")
     
+    # 2. 50 EMA (Trend Support) - NEW CHECK
+    # We give points if price is within 2% of the 50 EMA
+    elif abs(price - ema_50) <= (ema_50 * 0.02):
+        score += 2
+        reasons.append("📈 **Support:** Riding 50-Day Trendline")
+
     # C. MACD (Momentum)
     if macd_h > 0:
         score += 2
@@ -143,14 +150,14 @@ def check_market():
             df['EMA_50'] = ta.ema(df['Close'], length=50)
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # MACD (Fix: Use iloc to avoid KeyErrors)
+            # MACD
             macd = ta.macd(df['Close'])
             if macd is not None:
                 df['MACD_H'] = macd.iloc[:, 1]
             else:
                 continue
 
-            # Bollinger Bands (Fix: Use iloc to avoid KeyErrors)
+            # Bollinger Bands
             bb = ta.bbands(df['Close'], length=20, std=2)
             if bb is not None and not bb.empty:
                 df['BBL'] = bb.iloc[:, 0]
@@ -196,8 +203,8 @@ def check_market():
                 stop_loss = price - (atr * 1.5)
                 take_profit = price + (atr * 3.0) 
                 
-                # Calculate Score
-                score, reasons = calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_volume, vol_avg)
+                # Calculate Score (ADDED EMA_50 HERE)
+                score, reasons = calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_h, proj_volume, vol_avg)
                 
                 # --- TIME & FRIDAY THRESHOLD LOGIC ---
                 min_score_needed = 5 # Default
@@ -206,8 +213,7 @@ def check_market():
                 if elapsed_minutes < 60:
                     min_score_needed = 7 
                 
-                # Rule 2: Friday Afternoon Protection (Avoid holding over weekend)
-                # Check if it is Friday (4) and after 2:00 PM (270 mins)
+                # Rule 2: Friday Afternoon Protection
                 tz = pytz.timezone('US/Eastern')
                 is_friday = datetime.now(tz).weekday() == 4
                 if is_friday and elapsed_minutes > 270:
