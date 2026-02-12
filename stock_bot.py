@@ -42,27 +42,33 @@ def get_relative_volume(ticker):
     same 5-min time slot over the last 5 days.
     """
     try:
-        # Fetch 5 days of 5-minute data (Single request, only called if trigger met)
+        # Fetch 5 days of 5-minute data
         df = yf.download(ticker, period="5d", interval="5m", progress=False)
         
         if df.empty or len(df) < 10:
-            return 1.0 # Default to neutral if no data
+            return 1.0 
 
-        # Handle MultiIndex if present
+        # ROBUST MULTIINDEX HANDLING
+        # Fixes issues where yfinance returns (Price, Ticker) tuples as columns
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # Add time column for grouping
-        df['time'] = df.index.time
+        # Ensure Volume is numeric and drop NaNs (Crucial for calculations)
+        df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce')
+        df.dropna(subset=['Volume'], inplace=True)
 
-        # Get current bar details
+        # HISTORICAL TIME ALIGNMENT
+        # We extract just the time component (e.g., 14:30:00) to align days
+        df['time_slot'] = df.index.time
+
+        # Get the current (latest) bar details
         current_bar = df.iloc[-1]
         current_time = current_bar.name.time()
         current_vol = float(current_bar['Volume'])
 
-        # Filter for historical bars at this exact time
-        # We exclude the very last row (current bar) to get the historical average
-        historical_at_time = df[df['time'] == current_time].iloc[:-1]
+        # Filter for all historical bars that share this exact time slot
+        # We exclude the very last row (current bar) to ensure we compare against history
+        historical_at_time = df[df['time_slot'] == current_time].iloc[:-1]
 
         if historical_at_time.empty:
             return 1.0
