@@ -42,7 +42,7 @@ def get_relative_volume(ticker):
     same 5-min time slot over the last 5 days.
     """
     try:
-        # Fetch 5 days of 5-minute data
+        # Fetch 5 days of 5-minute data (Single request, only called if trigger met)
         df = yf.download(ticker, period="5d", interval="5m", progress=False)
         
         if df.empty or len(df) < 10:
@@ -94,13 +94,13 @@ def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_
         score += 2
         reasons.append("🌊 **Trend:** Momentum Reset (RSI < 55)")
 
-    # B. SUPPORT LEVELS (Check Both - Fixed Logic Bug)
+    # B. SUPPORT LEVELS (Confluence Check)
     # 1. Bollinger Band (Deep Support)
     if price <= bbl * 1.01: 
         score += 3
         reasons.append("🛡️ **Support:** Touching Lower Bollinger Band")
     
-    # 2. 50 EMA (Trend Support) - Changed elif to if for Confluence
+    # 2. 50 EMA (Trend Support)
     if abs(price - ema_50) <= (ema_50 * 0.02):
         score += 2
         reasons.append("📈 **Support:** Riding 50-Day Trendline")
@@ -167,24 +167,39 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
 
 # --- 3. MAIN LOOP ---
 def check_market():
-    print(f"Checking {len(TICKERS)} tickers...")
+    print(f"Checking {len(TICKERS)} tickers via Bulk Download...")
     elapsed_minutes = get_market_minutes_elapsed()
     print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
     
+    # --- 1. BULK DOWNLOAD ---
+    # Downloads 6mo of data for ALL tickers in ONE request.
+    # group_by='ticker' makes it easy to access data via data['AAPL']
+    try:
+        bulk_data = yf.download(TICKERS, period="6mo", interval="1d", group_by='ticker', progress=False)
+    except Exception as e:
+        print(f"Critical Error: Bulk download failed - {e}")
+        return
+
     for ticker in TICKERS:
         try:
-            # 1. Download Daily Data (For Indicators)
-            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-            
-            if df.empty: 
-                print(f"Skipping {ticker}: Empty Data")
+            # --- 2. EXTRACT DATA ---
+            # We copy the dataframe to avoid SettingWithCopy warnings
+            # If only 1 ticker is in list, yf structure is different, but for list > 1 it works like this:
+            try:
+                df = bulk_data[ticker].copy()
+            except KeyError:
+                # Handle case where ticker failed to download
+                print(f"⚠️ No data found for {ticker}")
                 continue
 
-            # Fix Multi-Index
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+            # Check for empty data (NaNs) which happens if a ticker is delisted or errored
+            if df['Close'].isnull().all():
+                continue
+            
+            # Drop NaN rows (e.g., holidays where some markets were open and others closed)
+            df.dropna(subset=['Close'], inplace=True)
 
-            # 2. Calculate Indicators
+            # --- 3. CALCULATE INDICATORS ---
             df['EMA_50'] = ta.ema(df['Close'], length=50)
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
@@ -202,8 +217,8 @@ def check_market():
             
             df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
-            # 3. Get Latest Daily Values
-            if len(df) < 2: continue
+            # --- 4. GET LATEST VALUES ---
+            if len(df) < 50: continue # Ensure enough data for EMA
             
             last = df.iloc[-1]
             prev = df.iloc[-2]
@@ -220,13 +235,15 @@ def check_market():
             prev_macd_h = float(prev['MACD_H'])
             atr = float(last['ATR'])
 
-            # 4. Trigger Logic (Pre-filter)
+            # --- 5. TRIGGER LOGIC (PRE-FILTER) ---
+            # We check Price Structure FIRST to avoid wasting API calls on Volume checks
             near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
             near_bb = abs(price - bbl) <= (bbl * 0.015)
             
             if (near_ema or near_bb) and rsi < 55:
                 
-                # 5. NEW: Calculate Relative Volume (Only if trigger met to save API calls)
+                # --- 6. DEEP DIVE: RELATIVE VOLUME ---
+                # Only now do we make a specific API call for this ticker
                 rel_vol = get_relative_volume(ticker)
 
                 stop_loss = price - (atr * 1.5)
@@ -246,13 +263,13 @@ def check_market():
                 if is_friday and elapsed_minutes > 270:
                     min_score_needed += 1
 
-                print(f"Checking {ticker}: Score {score}/10 (RVAT: {rel_vol:.2f}x)")
+                print(f"🔎 Checking {ticker}: Score {score}/10 (RVAT: {rel_vol:.2f}x)")
                 
                 if score >= min_score_needed:
                     send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol)
 
         except Exception as e:
-            print(f"Error checking {ticker}: {e}")
+            print(f"Error processing {ticker}: {e}")
 
 if __name__ == "__main__":
     check_market()
