@@ -118,7 +118,8 @@ def check_market():
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
-            # --- CALCULATE INDICATORS ---
+            # --- CALCULATE INDICATORS (FIXED SECTION) ---
+            
             # 1. EMAs
             df['EMA_50'] = ta.ema(df['Close'], length=50)
             
@@ -127,11 +128,16 @@ def check_market():
             
             # 3. MACD (12, 26, 9)
             macd = ta.macd(df['Close'])
-            df['MACD_H'] = macd['MACDh_12_26_9'] # Histogram
+            # FIX: Use iloc[:, 1] to grab the histogram regardless of column name
+            df['MACD_H'] = macd.iloc[:, 1] 
             
             # 4. Bollinger Bands (20, 2)
             bb = ta.bbands(df['Close'], length=20, std=2)
-            df['BBL'] = bb['BBL_20_2.0'] # Lower Band
+            # FIX: Use iloc[:, 0] to grab the Lower Band regardless of column name
+            if bb is not None and not bb.empty:
+                df['BBL'] = bb.iloc[:, 0] 
+            else:
+                df['BBL'] = pd.NA
             
             # 5. Volume SMA (20)
             df['VOL_AVG'] = ta.sma(df['Volume'], length=20)
@@ -139,8 +145,13 @@ def check_market():
             # 6. ATR (For Stop Loss)
             df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
-            # Get Latest Data Point
+            # --- GET LATEST VALUES ---
             last = df.iloc[-1]
+            
+            # Check for NaN values before converting
+            if pd.isna(last['BBL']) or pd.isna(last['EMA_50']):
+                continue
+
             price = float(last['Close'])
             rsi = float(last['RSI'])
             ema_50 = float(last['EMA_50'])
