@@ -24,34 +24,33 @@ TICKERS = [
 WEBHOOK_URL = os.getenv('DISCORD_URL')
 
 # --- 1. ENHANCED SCORING ENGINE ---
-def calculate_confidence(rsi, price, bbl, macd_h, volume, vol_avg):
+def calculate_confidence(rsi, price, bbl, macd_h, prev_macd_h, volume, vol_avg):
     score = 0
     reasons = []
 
-    # A. RSI (Value) - Max 4 pts
-    if rsi < 30:
+    # A. RSI (Value) - UPDATED TO < 35
+    if rsi < 35:
         score += 4
-        reasons.append("💎 **Value:** Deeply Oversold (RSI < 30)")
-    elif rsi < 45:
+        reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
+    elif rsi < 50: # Relaxed slightly to < 50 for the secondary tier
         score += 2
-        reasons.append("📉 **Value:** Oversold (RSI < 45)")
+        reasons.append("📉 **Value:** Oversold (RSI < 50)")
 
-    # B. Bollinger Bands (Support) - Max 3 pts
-    # If price is within 1% of Lower Band
+    # B. Bollinger Bands (Support)
     if price <= bbl * 1.01: 
         score += 3
         reasons.append("🛡️ **Support:** Touching Lower Bollinger Band")
     
-    # C. MACD (Momentum) - Max 2 pts
-    # If Histogram is positive or turning up
+    # C. MACD (Momentum) - UPDATED LOGIC
     if macd_h > 0:
         score += 2
-        reasons.append("🚀 **Momentum:** MACD Histogram Positive")
-    elif macd_h > -0.1: # Almost turning positive
+        reasons.append("🚀 **Momentum:** Positive (Green Histogram)")
+    elif macd_h > prev_macd_h: 
+        # "Less Strict" -> We give points if momentum is just improving (slowing down)
         score += 1
-        reasons.append("🔄 **Momentum:** MACD Turning Up")
+        reasons.append("🔄 **Momentum:** Improving (Selling Slowing Down)")
 
-    # D. Volume (Conviction) - Max 1 pt
+    # D. Volume (Conviction)
     if volume > vol_avg:
         score += 1
         reasons.append("📊 **Volume:** High Buying Interest")
@@ -67,11 +66,10 @@ def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reason
         color = 16776960 # Yellow (Moderate)
         rating = "⚠️ MODERATE WATCH"
     else:
-        return # Don't spam discord with weak signals
+        return 
 
     reasons_text = "\n".join(reasons)
     
-    # Calculate Risk/Reward Ratio
     risk = price - stop_loss
     reward = take_profit - price
     rr_ratio = reward / risk if risk > 0 else 0
@@ -109,74 +107,65 @@ def check_market():
     
     for ticker in TICKERS:
         try:
-            # Download Data
             df = yf.download(ticker, period="6mo", interval="1d", progress=False)
             
             if df.empty: continue
 
-            # Fix Multi-Index Columns (YFinance Update Fix)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
-            # --- CALCULATE INDICATORS (FIXED SECTION) ---
-            
-            # 1. EMAs
+            # --- CALCULATE INDICATORS ---
             df['EMA_50'] = ta.ema(df['Close'], length=50)
-            
-            # 2. RSI
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # 3. MACD (12, 26, 9)
+            # MACD
             macd = ta.macd(df['Close'])
-            # FIX: Use iloc[:, 1] to grab the histogram regardless of column name
             df['MACD_H'] = macd.iloc[:, 1] 
             
-            # 4. Bollinger Bands (20, 2)
+            # Bollinger Bands
             bb = ta.bbands(df['Close'], length=20, std=2)
-            # FIX: Use iloc[:, 0] to grab the Lower Band regardless of column name
             if bb is not None and not bb.empty:
                 df['BBL'] = bb.iloc[:, 0] 
             else:
                 df['BBL'] = pd.NA
             
-            # 5. Volume SMA (20)
             df['VOL_AVG'] = ta.sma(df['Volume'], length=20)
-            
-            # 6. ATR (For Stop Loss)
             df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
             # --- GET LATEST VALUES ---
-            last = df.iloc[-1]
+            # We need the last 2 rows to check momentum change
+            if len(df) < 2: continue
             
-            # Check for NaN values before converting
-            if pd.isna(last['BBL']) or pd.isna(last['EMA_50']):
-                continue
+            last = df.iloc[-1]
+            prev = df.iloc[-2] # Previous candle
+
+            if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
 
             price = float(last['Close'])
             rsi = float(last['RSI'])
             ema_50 = float(last['EMA_50'])
             bbl = float(last['BBL'])
+            
+            # Current vs Previous MACD Histogram
             macd_h = float(last['MACD_H'])
+            prev_macd_h = float(prev['MACD_H'])
+            
             volume = float(last['Volume'])
             vol_avg = float(last['VOL_AVG'])
             atr = float(last['ATR'])
 
             # --- TRIGGER LOGIC ---
-            # We want EITHER:
-            # A) Price is near 50 EMA (Trend Pullback)
-            # B) Price is near Lower Bollinger Band (Mean Reversion)
-            
             near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
             near_bb = abs(price - bbl) <= (bbl * 0.015)
             
-            if (near_ema or near_bb) and rsi < 60:
+            # Using RSI < 55 as the broad filter
+            if (near_ema or near_bb) and rsi < 55:
                 
-                # Calculate Suggested Trade Parameters
-                stop_loss = price - (atr * 1.5) # Standard 1.5x ATR Stop
-                take_profit = price + (atr * 3.0) # 2:1 Reward Target
+                stop_loss = price - (atr * 1.5)
+                take_profit = price + (atr * 3.0) 
                 
-                # Get Score
-                score, reasons = calculate_confidence(rsi, price, bbl, macd_h, volume, vol_avg)
+                # Pass prev_macd_h to the scoring function
+                score, reasons = calculate_confidence(rsi, price, bbl, macd_h, prev_macd_h, volume, vol_avg)
                 
                 print(f"Checking {ticker}: Score {score}/10")
                 send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons)
