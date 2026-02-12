@@ -110,7 +110,9 @@ def get_earnings_warning(ticker):
         
         # Risk Window: 0 to 7 days
         if 0 <= days_until <= 7:
-            return True, f"⚠️ **EARNINGS WARNING:** Report in {days_until} days ({earnings_date})"
+            # Format date for cleaner display (e.g. "Feb 16")
+            date_str = earnings_date.strftime('%b %d')
+            return True, f"Report in {days_until} Days ({date_str})"
         
         return False, ""
 
@@ -125,29 +127,29 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
     # A. RSI
     if rsi < 35:
         score += 4
-        reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
+        reasons.append("💎 Deep Value (RSI < 35)")
     elif rsi < 45: 
         score += 3
-        reasons.append("📉 **Value:** Oversold (RSI < 45)")
+        reasons.append("📉 Oversold (RSI < 45)")
     elif rsi < 55:
         score += 2
-        reasons.append("🌊 **Trend:** Momentum Reset (RSI < 55)")
+        reasons.append("🌊 Momentum Reset (RSI < 55)")
 
     # B. SUPPORT LEVELS
     if price <= bbl * 1.01: 
         score += 3
-        reasons.append("🛡️ **Support:** Touching Lower Bollinger Band")
+        reasons.append("🛡️ Touching Lower Bollinger Band")
     if abs(price - ema_50) <= (ema_50 * 0.02):
         score += 2
-        reasons.append("📈 **Support:** Riding 50-Day Trendline")
+        reasons.append("📈 Riding 50-Day Trendline")
 
     # C. MACD
     if macd_h > 0:
         score += 2
-        reasons.append("🚀 **Momentum:** Positive (Green Histogram)")
+        reasons.append("🚀 Positive Momentum (Green Histogram)")
     elif macd_h > prev_macd_h: 
         score += 1
-        reasons.append("🔄 **Momentum:** Improving (Selling Slowing Down)")
+        reasons.append("🔄 Improving Momentum")
 
     # D. VOLUME HYBRID
     if elapsed_minutes < 30:
@@ -162,103 +164,87 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
         if is_bullish:
             score += 1
             if rel_vol > 2.0: score += 1
-            reasons.append(f"🟢 **Vol:** Buying Pressure ({rel_vol:.1f}x via {method})")
+            reasons.append(f"🟢 High Buying Pressure ({rel_vol:.1f}x)")
         else:
-            reasons.append(f"🔴 **Vol:** Selling Pressure ({rel_vol:.1f}x via {method})")
+            reasons.append(f"🔴 Selling Pressure ({rel_vol:.1f}x)")
 
     return score, reasons
 
-# --- 2. ALERT FUNCTION (VISUAL POLISH UPGRADE) ---
+# --- 2. ALERT FUNCTION (PRO FORMAT) ---
 def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol, earnings_msg):
     # 1. Determine Color & Rating
     if score >= 8:
         color = 5763719  # Green (Strong Buy)
-        rating = "🔥 STRONG BUY"
+        rating = "STRONG BUY"
     elif score >= 5:
         color = 16776960 # Yellow (Moderate Watch)
-        rating = "⚠️ MODERATE WATCH"
+        rating = "MODERATE WATCH"
     else:
         return 
 
-    # 2. Calculate Percentages for Trade Plan
+    # 2. Get Timestamp
+    tz = pytz.timezone('US/Eastern')
+    timestamp = datetime.now(tz).strftime('%I:%M %p EST')
+
+    # 3. Calculate Percentages for Trade Plan
     stop_pct = ((stop_loss - price) / price) * 100
     target_pct = ((take_profit - price) / price) * 100
-    risk_reward = abs(target_pct / stop_pct)
-
-    # 3. BUILD TECHNICALS SECTION
-    # RSI Status
-    if rsi < 30: rsi_stat = "Deep Oversold"
-    elif rsi < 35: rsi_stat = "Oversold"
-    elif rsi < 45: rsi_stat = "Weak"
-    else: rsi_stat = "Neutral"
-
-    # Trend Status
-    if price > ema_50: trend_stat = "Above"
-    else: trend_stat = "Below"
-
-    # Volume Status (Infer direction from reasons)
-    vol_dir = "Neutral"
-    for r in reasons:
-        if "Buying" in r: vol_dir = "Buying"
-        elif "Selling" in r: vol_dir = "Selling"
     
-    if rel_vol > 2.0: vol_stat = f"Heavy {vol_dir}"
-    elif rel_vol > 1.2: vol_stat = f"Strong {vol_dir}"
-    else: vol_stat = "Normal"
+    # 4. Determine Status Strings
+    rsi_status = "Oversold" if rsi < 35 else ("Weak" if rsi < 45 else "Neutral")
+    trend_status = "Above" if price > ema_50 else "Below"
+    
+    vol_status = "Normal"
+    if rel_vol > 2.0: vol_status = "Heavy Buying"
+    elif rel_vol > 1.2: vol_status = "Strong Buying"
 
-    technicals_block = (
-        f"📉 **Technicals**\n"
-        f"• **RSI:** {rsi:.1f} ({rsi_stat})\n"
-        f"• **Trend:** {trend_stat} 50 EMA ( ${ema_50:.2f} )\n"
-        f"• **Volume:** {rel_vol:.1f}x ({vol_stat})"
+    # 5. Format the Description
+    description = f"*Triggered at {timestamp}*\n\n"
+    
+    if earnings_msg:
+        description += f"⚠️ **EARNINGS WARNING:** {earnings_msg}\n\n"
+    
+    # Trade Plan Section
+    description += (
+        f"📊 **Trade Plan**\n"
+        f"• **Entry:** `${price:.2f}`\n"
+        f"• **Target:** `${take_profit:.2f}` (+{target_pct:.1f}%) 🎯\n"
+        f"• **Stop:** `${stop_loss:.2f}` ({stop_pct:.1f}%) 🛑\n\n"
     )
 
-    # 4. BUILD ANALYSIS SECTION
-    # Ensure all reasons have bullet points
-    formatted_reasons = []
-    for r in reasons:
-        # Strip existing bullet if present to avoid double bullets
-        clean_r = r.replace("•", "").strip()
-        formatted_reasons.append(f"• {clean_r}")
-        
-    analysis_block = "📝 **Analysis**\n" + "\n".join(formatted_reasons)
+    # Technicals Section
+    description += (
+        f"📉 **Technicals**\n"
+        f"• **RSI:** `{rsi:.1f}` ({rsi_status})\n"
+        f"• **Trend:** {trend_status} 50 EMA ( `${ema_50:.2f}` )\n"
+        f"• **Volume:** `{rel_vol:.1f}x` ({vol_status})\n\n"
+    )
 
-    # 5. Format the Final Description
-    description_parts = []
-    if earnings_msg:
-        description_parts.append(f"**{earnings_msg}**")
-    
-    description_parts.append(technicals_block)
-    description_parts.append(analysis_block)
-    
-    full_description = "\n\n".join(description_parts)
+    # Analysis Section (Clean Bullets)
+    description += "📝 **Analysis**\n"
+    for r in reasons:
+        # Check if emoji exists, if not add a default bullet
+        if not any(char in r for char in ["💎", "📉", "🌊", "🛡️", "📈", "🚀", "🔄", "🟢", "🔴"]):
+            description += f"• {r}\n"
+        else:
+            description += f"• {r}\n"
 
     # 6. Construct the Payload
     data = {
-        "content": f"🚨 **SWING ALERT:** {ticker} (Score: {score})", 
+        "content": f"🚨 **SWING ALERT: {ticker}** <@YourID>", # Replace <@YourID> with actual ID if needed
         "embeds": [
             {
-                "title": f"{rating}: {ticker}",
-                "description": full_description,
+                "title": f"🔥 {rating}: {ticker} (Score: {score}/10)",
+                "description": description,
                 "color": color,
                 "fields": [
                     {
-                        "name": "📉 Trade Setup", 
-                        "value": f"**Entry:** ${price:.2f}\n**Target:** ${take_profit:.2f} (+{target_pct:.1f}%)\n**Stop:** ${stop_loss:.2f} ({stop_pct:.1f}%)", 
-                        "inline": True
-                    },
-                    {
-                        "name": "Risk Profile",
-                        "value": f"RR Ratio: **1:{risk_reward:.1f}**\nThreshold: {threshold}+",
-                        "inline": True
-                    },
-                    {
-                        "name": "🔗 Quick Links", 
-                        "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker}) | [TradingView](https://www.tradingview.com/symbols/{ticker})", 
+                        "name": "🔗 Links", 
+                        "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})", # TradingView Removed
                         "inline": False
                     }
                 ],
-                "footer": {"text": f"Bot Triggered via GitHub Actions"}
+                "footer": {"text": "Bot Triggered via GitHub Actions"}
             }
         ]
     }
@@ -359,10 +345,7 @@ def check_market():
                 # 4. Apply Earnings Penalty
                 if has_earnings_risk:
                     score -= 2 # Penalize risky setups
-                    # Note: We pass earnings_msg explicitly to the alert function now, 
-                    # so we don't necessarily need to append it to 'reasons', 
-                    # but doing so acts as a backup in the analysis list.
-                    reasons.append(earnings_msg)
+                    # Note: We pass earnings_msg explicitly to the alert function now
 
                 # --- TIME & FRIDAY THRESHOLD ---
                 min_score_needed = 5 
