@@ -122,11 +122,4 @@ def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reason
 
 # --- 3. MAIN LOOP ---
 def check_market():
-    print(f"Checking {len(TICKERS)} tickers...")
-    elapsed_minutes = get_market_minutes_elapsed()
-    print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
-    
-    for ticker in TICKERS:
-        try:
-            # 1. Download Data
-            df = yf.download(ticker, period="6mo", interval="1d
+    print(f"Checking {len(T
