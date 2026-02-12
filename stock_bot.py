@@ -4,6 +4,8 @@ import requests
 import os
 import pandas as pd
 import numpy as np
+from datetime import datetime, time
+import pytz
 
 # --- CONFIGURATION ---
 TICKERS = [
@@ -23,8 +25,25 @@ TICKERS = [
 
 WEBHOOK_URL = os.getenv('DISCORD_URL')
 
+# --- HELPER: GET MARKET TIME ---
+def get_market_minutes_elapsed():
+    """Returns minutes elapsed since 9:30 AM EST today. Returns 390 if market is closed."""
+    tz = pytz.timezone('US/Eastern')
+    now = datetime.now(tz)
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    
+    # If before 9:30 AM, return 0
+    if now < market_open:
+        return 0
+    
+    # Calculate difference in minutes
+    diff = (now - market_open).total_seconds() / 60
+    
+    # Cap at 390 minutes (Full trading day: 6.5 hours)
+    return min(diff, 390)
+
 # --- 1. ENHANCED SCORING ENGINE ---
-def calculate_confidence(rsi, price, bbl, macd_h, prev_macd_h, volume, vol_avg):
+def calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_volume, vol_avg):
     score = 0
     reasons = []
 
@@ -32,7 +51,7 @@ def calculate_confidence(rsi, price, bbl, macd_h, prev_macd_h, volume, vol_avg):
     if rsi < 35:
         score += 4
         reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
-    elif rsi < 50: # Relaxed slightly to < 50 for the secondary tier
+    elif rsi < 50: 
         score += 2
         reasons.append("📉 **Value:** Oversold (RSI < 50)")
 
@@ -41,19 +60,24 @@ def calculate_confidence(rsi, price, bbl, macd_h, prev_macd_h, volume, vol_avg):
         score += 3
         reasons.append("🛡️ **Support:** Touching Lower Bollinger Band")
     
-    # C. MACD (Momentum) - UPDATED LOGIC
+    # C. MACD (Momentum)
     if macd_h > 0:
         score += 2
         reasons.append("🚀 **Momentum:** Positive (Green Histogram)")
     elif macd_h > prev_macd_h: 
-        # "Less Strict" -> We give points if momentum is just improving (slowing down)
         score += 1
         reasons.append("🔄 **Momentum:** Improving (Selling Slowing Down)")
 
-    # D. Volume (Conviction)
-    if volume > vol_avg:
+    # D. VOLUME FIX: Projection + Candle Color Check
+    # Only reward high volume if the candle is GREEN (Price > Open)
+    is_green_candle = price >= open_price
+    
+    if proj_volume > vol_avg and is_green_candle:
         score += 1
-        reasons.append("📊 **Volume:** High Buying Interest")
+        reasons.append("📊 **Volume:** High Buying Interest (Green Candle)")
+    elif proj_volume > vol_avg and not is_green_candle:
+        # Penalize or ignore high volume on red days (Panic Selling)
+        pass 
 
     return score, reasons
 
@@ -104,6 +128,8 @@ def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reason
 # --- 3. MAIN LOOP ---
 def check_market():
     print(f"Checking {len(TICKERS)} tickers...")
+    elapsed_minutes = get_market_minutes_elapsed()
+    print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
     
     for ticker in TICKERS:
         try:
@@ -133,20 +159,19 @@ def check_market():
             df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
             # --- GET LATEST VALUES ---
-            # We need the last 2 rows to check momentum change
             if len(df) < 2: continue
             
             last = df.iloc[-1]
-            prev = df.iloc[-2] # Previous candle
+            prev = df.iloc[-2]
 
             if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
 
             price = float(last['Close'])
+            open_price = float(last['Open']) # Needed for candle color check
             rsi = float(last['RSI'])
             ema_50 = float(last['EMA_50'])
             bbl = float(last['BBL'])
             
-            # Current vs Previous MACD Histogram
             macd_h = float(last['MACD_H'])
             prev_macd_h = float(prev['MACD_H'])
             
@@ -154,18 +179,25 @@ def check_market():
             vol_avg = float(last['VOL_AVG'])
             atr = float(last['ATR'])
 
+            # --- VOLUME PROJECTION LOGIC ---
+            if elapsed_minutes > 15 and elapsed_minutes < 390:
+                # If market is open, project what full day volume would look like
+                proj_volume = (volume / elapsed_minutes) * 390
+            else:
+                # If market closed or just started, use raw volume
+                proj_volume = volume
+
             # --- TRIGGER LOGIC ---
             near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
             near_bb = abs(price - bbl) <= (bbl * 0.015)
             
-            # Using RSI < 55 as the broad filter
             if (near_ema or near_bb) and rsi < 55:
                 
                 stop_loss = price - (atr * 1.5)
                 take_profit = price + (atr * 3.0) 
                 
-                # Pass prev_macd_h to the scoring function
-                score, reasons = calculate_confidence(rsi, price, bbl, macd_h, prev_macd_h, volume, vol_avg)
+                # Pass proj_volume and open_price to scoring
+                score, reasons = calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_volume, vol_avg)
                 
                 print(f"Checking {ticker}: Score {score}/10")
                 send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons)
