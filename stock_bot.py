@@ -38,8 +38,8 @@ def get_market_minutes_elapsed():
 def get_relative_volume(ticker):
     """
     Calculates Relative Volume at Time (RVAT).
-    Compares the current 5-min volume to the average volume of the 
-    same 5-min time slot over the last 5 days.
+    Compares the LAST COMPLETED 5-min candle volume to the average volume 
+    of that same 5-min time slot over the last 5 days.
     """
     try:
         # Fetch 5 days of 5-minute data
@@ -49,26 +49,25 @@ def get_relative_volume(ticker):
             return 1.0 
 
         # ROBUST MULTIINDEX HANDLING
-        # Fixes issues where yfinance returns (Price, Ticker) tuples as columns
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # Ensure Volume is numeric and drop NaNs (Crucial for calculations)
+        # Ensure Volume is numeric and drop NaNs
         df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce')
         df.dropna(subset=['Volume'], inplace=True)
 
         # HISTORICAL TIME ALIGNMENT
-        # We extract just the time component (e.g., 14:30:00) to align days
         df['time_slot'] = df.index.time
 
-        # Get the current (latest) bar details
-        current_bar = df.iloc[-1]
-        current_time = current_bar.name.time()
-        current_vol = float(current_bar['Volume'])
+        # --- THE FIX: USE LAST COMPLETED CANDLE ---
+        # We use iloc[-2] because iloc[-1] is the current "forming" candle (incomplete volume).
+        last_completed_bar = df.iloc[-2]
+        check_time = last_completed_bar.name.time()
+        check_vol = float(last_completed_bar['Volume'])
 
-        # Filter for all historical bars that share this exact time slot
-        # We exclude the very last row (current bar) to ensure we compare against history
-        historical_at_time = df[df['time_slot'] == current_time].iloc[:-1]
+        # Filter for historical bars at this exact time
+        # We exclude the last 2 rows (Current Forming + Last Completed) to get pure history
+        historical_at_time = df[df['time_slot'] == check_time].iloc[:-2]
 
         if historical_at_time.empty:
             return 1.0
@@ -78,7 +77,7 @@ def get_relative_volume(ticker):
         if avg_vol == 0 or pd.isna(avg_vol):
             return 1.0
 
-        return current_vol / avg_vol
+        return check_vol / avg_vol
 
     except Exception as e:
         print(f"⚠️ Volume calc failed for {ticker}: {e}")
@@ -179,7 +178,6 @@ def check_market():
     
     # --- 1. BULK DOWNLOAD ---
     # Downloads 6mo of data for ALL tickers in ONE request.
-    # group_by='ticker' makes it easy to access data via data['AAPL']
     try:
         bulk_data = yf.download(TICKERS, period="6mo", interval="1d", group_by='ticker', progress=False)
     except Exception as e:
@@ -189,20 +187,15 @@ def check_market():
     for ticker in TICKERS:
         try:
             # --- 2. EXTRACT DATA ---
-            # We copy the dataframe to avoid SettingWithCopy warnings
-            # If only 1 ticker is in list, yf structure is different, but for list > 1 it works like this:
             try:
                 df = bulk_data[ticker].copy()
             except KeyError:
-                # Handle case where ticker failed to download
                 print(f"⚠️ No data found for {ticker}")
                 continue
 
-            # Check for empty data (NaNs) which happens if a ticker is delisted or errored
             if df['Close'].isnull().all():
                 continue
             
-            # Drop NaN rows (e.g., holidays where some markets were open and others closed)
             df.dropna(subset=['Close'], inplace=True)
 
             # --- 3. CALCULATE INDICATORS ---
@@ -224,7 +217,7 @@ def check_market():
             df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
             # --- 4. GET LATEST VALUES ---
-            if len(df) < 50: continue # Ensure enough data for EMA
+            if len(df) < 50: continue 
             
             last = df.iloc[-1]
             prev = df.iloc[-2]
@@ -242,14 +235,12 @@ def check_market():
             atr = float(last['ATR'])
 
             # --- 5. TRIGGER LOGIC (PRE-FILTER) ---
-            # We check Price Structure FIRST to avoid wasting API calls on Volume checks
             near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
             near_bb = abs(price - bbl) <= (bbl * 0.015)
             
             if (near_ema or near_bb) and rsi < 55:
                 
                 # --- 6. DEEP DIVE: RELATIVE VOLUME ---
-                # Only now do we make a specific API call for this ticker
                 rel_vol = get_relative_volume(ticker)
 
                 stop_loss = price - (atr * 1.5)
