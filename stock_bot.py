@@ -7,18 +7,17 @@ import pandas as pd
 # --- CONFIGURATION ---
 TICKERS = [
     # --- SAFE FOUNDATION ---
-    'VFV.TO', 'ZSP.TO',   # Canada S&P 500
+    'VFV.TO', 'ZSP.TO', 'XEF.TO',   # Canada S&P 500
     'SPY', 'IVV', 'VTI',  # US S&P 500
     
     # --- SECTOR ETFS ---
     'SOXQ', 'XLY',        # Semis & Consumer
    
     # --- CANADIAN GROWTH ---
-    'NVDA.NE', 'TSLA.NE', # Nvidia & Tesla (CAD Hedged)
     'HUT.TO',             # Crypto Miner
     
     # --- US SWINGS ---
-    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'AAPL', 'MSFT', 'NFLX'
+    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA', 'AAPL', 'MSFT', 'NFLX', 
 ]
 
 WEBHOOK_URL = os.getenv('DISCORD_URL')
