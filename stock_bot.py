@@ -51,9 +51,12 @@ def calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_
     if rsi < 35:
         score += 4
         reasons.append("💎 **Value:** Deeply Oversold (RSI < 35)")
-    elif rsi < 50: 
+    elif rsi < 45: 
+        score += 3
+        reasons.append("📉 **Value:** Oversold (RSI < 45)")
+    elif rsi < 55:
         score += 2
-        reasons.append("📉 **Value:** Oversold (RSI < 50)")
+        reasons.append("🌊 **Trend:** Momentum Reset (RSI < 55)")
 
     # B. Bollinger Bands (Support)
     if price <= bbl * 1.01: 
@@ -69,7 +72,6 @@ def calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_
         reasons.append("🔄 **Momentum:** Improving (Selling Slowing Down)")
 
     # D. VOLUME FIX: Projection + Candle Color Check
-    # Only reward high volume if the candle is GREEN (Price > Open)
     is_green_candle = price >= open_price
     
     if proj_volume > vol_avg and is_green_candle:
@@ -82,7 +84,7 @@ def calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_
     return score, reasons
 
 # --- 2. ALERT FUNCTION ---
-def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons):
+def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons, threshold):
     if score >= 8:
         color = 5763719  # Green (Strong)
         rating = "🔥 STRONG BUY"
@@ -106,6 +108,7 @@ def send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reason
                 "description": f"**Analysis:**\n{reasons_text}",
                 "color": color,
                 "fields": [
+                    {"name": "Status", "value": f"Passed Morning Threshold ({threshold}+)", "inline": False},
                     {"name": "Entry Price", "value": f"**${price:.2f}**", "inline": True},
                     {"name": "RSI", "value": f"{rsi:.1f}", "inline": True},
                     {"name": "RR Ratio", "value": f"1:{rr_ratio:.1f}", "inline": True},
@@ -138,72 +141,4 @@ def check_market():
             if df.empty: continue
 
             if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-
-            # --- CALCULATE INDICATORS ---
-            df['EMA_50'] = ta.ema(df['Close'], length=50)
-            df['RSI'] = ta.rsi(df['Close'], length=14)
-            
-            # MACD
-            macd = ta.macd(df['Close'])
-            df['MACD_H'] = macd.iloc[:, 1] 
-            
-            # Bollinger Bands
-            bb = ta.bbands(df['Close'], length=20, std=2)
-            if bb is not None and not bb.empty:
-                df['BBL'] = bb.iloc[:, 0] 
-            else:
-                df['BBL'] = pd.NA
-            
-            df['VOL_AVG'] = ta.sma(df['Volume'], length=20)
-            df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-
-            # --- GET LATEST VALUES ---
-            if len(df) < 2: continue
-            
-            last = df.iloc[-1]
-            prev = df.iloc[-2]
-
-            if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
-
-            price = float(last['Close'])
-            open_price = float(last['Open']) # Needed for candle color check
-            rsi = float(last['RSI'])
-            ema_50 = float(last['EMA_50'])
-            bbl = float(last['BBL'])
-            
-            macd_h = float(last['MACD_H'])
-            prev_macd_h = float(prev['MACD_H'])
-            
-            volume = float(last['Volume'])
-            vol_avg = float(last['VOL_AVG'])
-            atr = float(last['ATR'])
-
-            # --- VOLUME PROJECTION LOGIC ---
-            if elapsed_minutes > 15 and elapsed_minutes < 390:
-                # If market is open, project what full day volume would look like
-                proj_volume = (volume / elapsed_minutes) * 390
-            else:
-                # If market closed or just started, use raw volume
-                proj_volume = volume
-
-            # --- TRIGGER LOGIC ---
-            near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
-            near_bb = abs(price - bbl) <= (bbl * 0.015)
-            
-            if (near_ema or near_bb) and rsi < 55:
-                
-                stop_loss = price - (atr * 1.5)
-                take_profit = price + (atr * 3.0) 
-                
-                # Pass proj_volume and open_price to scoring
-                score, reasons = calculate_confidence(rsi, price, open_price, bbl, macd_h, prev_macd_h, proj_volume, vol_avg)
-                
-                print(f"Checking {ticker}: Score {score}/10")
-                send_discord_alert(ticker, price, rsi, stop_loss, take_profit, score, reasons)
-
-        except Exception as e:
-            print(f"Error checking {ticker}: {e}")
-
-if __name__ == "__main__":
-    check_market()
+                df.columns
