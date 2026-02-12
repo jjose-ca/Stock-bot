@@ -28,18 +28,58 @@ def get_market_minutes_elapsed():
     now = datetime.now(tz)
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
     
-    # If before 9:30 AM, return 0
     if now < market_open:
         return 0
     
-    # Calculate difference in minutes
     diff = (now - market_open).total_seconds() / 60
-    
-    # Cap at 390 minutes (Full trading day: 6.5 hours)
     return min(diff, 390)
 
+# --- HELPER: RELATIVE VOLUME (RVAT) ---
+def get_relative_volume(ticker):
+    """
+    Calculates Relative Volume at Time (RVAT).
+    Compares the current 5-min volume to the average volume of the 
+    same 5-min time slot over the last 5 days.
+    """
+    try:
+        # Fetch 5 days of 5-minute data
+        df = yf.download(ticker, period="5d", interval="5m", progress=False)
+        
+        if df.empty or len(df) < 10:
+            return 1.0 # Default to neutral if no data
+
+        # Handle MultiIndex if present
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        # Add time column for grouping
+        df['time'] = df.index.time
+
+        # Get current bar details
+        current_bar = df.iloc[-1]
+        current_time = current_bar.name.time()
+        current_vol = float(current_bar['Volume'])
+
+        # Filter for historical bars at this exact time
+        # We exclude the very last row (current bar) to get the historical average
+        historical_at_time = df[df['time'] == current_time].iloc[:-1]
+
+        if historical_at_time.empty:
+            return 1.0
+
+        avg_vol = historical_at_time['Volume'].mean()
+
+        if avg_vol == 0 or pd.isna(avg_vol):
+            return 1.0
+
+        return current_vol / avg_vol
+
+    except Exception as e:
+        print(f"⚠️ Volume calc failed for {ticker}: {e}")
+        return 1.0
+
 # --- 1. ENHANCED SCORING ENGINE ---
-def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_h, proj_volume, vol_avg):
+def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_h, rel_vol):
     score = 0
     reasons = []
 
@@ -54,15 +94,14 @@ def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_
         score += 2
         reasons.append("🌊 **Trend:** Momentum Reset (RSI < 55)")
 
-    # B. SUPPORT LEVELS (Check Both)
+    # B. SUPPORT LEVELS (Check Both - Fixed Logic Bug)
     # 1. Bollinger Band (Deep Support)
     if price <= bbl * 1.01: 
         score += 3
         reasons.append("🛡️ **Support:** Touching Lower Bollinger Band")
     
-    # 2. 50 EMA (Trend Support)
-    # We give points if price is within 2% of the 50 EMA
-    elif abs(price - ema_50) <= (ema_50 * 0.02):
+    # 2. 50 EMA (Trend Support) - Changed elif to if for Confluence
+    if abs(price - ema_50) <= (ema_50 * 0.02):
         score += 2
         reasons.append("📈 **Support:** Riding 50-Day Trendline")
 
@@ -74,17 +113,21 @@ def calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_
         score += 1
         reasons.append("🔄 **Momentum:** Improving (Selling Slowing Down)")
 
-    # D. VOLUME: Green Candle Check
+    # D. VOLUME: Relative Volume Check
     is_green_candle = price >= open_price
     
-    if proj_volume > vol_avg and is_green_candle:
+    # If volume is 1.5x (150%) of normal for this time of day
+    if rel_vol > 1.5 and is_green_candle:
+        score += 2
+        reasons.append(f"📊 **Volume:** Surge ({rel_vol:.1f}x normal for this time)")
+    elif rel_vol > 1.2 and is_green_candle:
         score += 1
-        reasons.append("📊 **Volume:** High Buying Interest (Green Candle)")
+        reasons.append(f"📊 **Volume:** Above Average ({rel_vol:.1f}x)")
 
     return score, reasons
 
 # --- 2. ALERT FUNCTION ---
-def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, threshold):
+def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol):
     if score >= 8:
         color = 5763719  # Green (Strong)
         rating = "🔥 STRONG BUY"
@@ -107,13 +150,10 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
                     {"name": "Status", "value": f"Passed Threshold ({threshold}+)", "inline": False},
                     {"name": "Entry Price", "value": f"**${price:.2f}**", "inline": True},
                     {"name": "RSI", "value": f"{rsi:.1f}", "inline": True},
-                    
-                    # --- REPLACED RR RATIO WITH 50 EMA ---
                     {"name": "50 EMA", "value": f"${ema_50:.2f}", "inline": True},
-                    
+                    {"name": "Vol Strength", "value": f"{rel_vol:.1f}x", "inline": True},
                     {"name": "🛑 Stop Loss", "value": f"${stop_loss:.2f}", "inline": True},
                     {"name": "🎯 Take Profit", "value": f"${take_profit:.2f}", "inline": True},
-                    
                     {"name": "Links", "value": f"[Yahoo](https://finance.yahoo.com/quote/{ticker}) | [TradingView](https://www.tradingview.com/symbols/{ticker})", "inline": False}
                 ],
                 "footer": {"text": "Bot running via GitHub Actions"}
@@ -133,39 +173,36 @@ def check_market():
     
     for ticker in TICKERS:
         try:
-            # 1. Download Data
+            # 1. Download Daily Data (For Indicators)
             df = yf.download(ticker, period="6mo", interval="1d", progress=False)
             
             if df.empty: 
                 print(f"Skipping {ticker}: Empty Data")
                 continue
 
-            # 2. Fix Multi-Index (Critical for yfinance)
+            # Fix Multi-Index
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
-            # 3. Calculate Indicators
+            # 2. Calculate Indicators
             df['EMA_50'] = ta.ema(df['Close'], length=50)
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # MACD
             macd = ta.macd(df['Close'])
             if macd is not None:
                 df['MACD_H'] = macd.iloc[:, 1]
             else:
                 continue
 
-            # Bollinger Bands
             bb = ta.bbands(df['Close'], length=20, std=2)
             if bb is not None and not bb.empty:
                 df['BBL'] = bb.iloc[:, 0]
             else:
                 df['BBL'] = pd.NA
             
-            df['VOL_AVG'] = ta.sma(df['Volume'], length=20)
             df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
-            # 4. Get Latest Values
+            # 3. Get Latest Daily Values
             if len(df) < 2: continue
             
             last = df.iloc[-1]
@@ -181,49 +218,38 @@ def check_market():
             
             macd_h = float(last['MACD_H'])
             prev_macd_h = float(prev['MACD_H'])
-            
-            volume = float(last['Volume'])
-            vol_avg = float(last['VOL_AVG'])
             atr = float(last['ATR'])
 
-            # 5. Volume Projection
-            if elapsed_minutes > 15 and elapsed_minutes < 390:
-                proj_volume = (volume / elapsed_minutes) * 390
-            else:
-                proj_volume = volume
-
-            # 6. Trigger Logic
+            # 4. Trigger Logic (Pre-filter)
             near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
             near_bb = abs(price - bbl) <= (bbl * 0.015)
             
             if (near_ema or near_bb) and rsi < 55:
                 
+                # 5. NEW: Calculate Relative Volume (Only if trigger met to save API calls)
+                rel_vol = get_relative_volume(ticker)
+
                 stop_loss = price - (atr * 1.5)
-                # Lowered Target to 2.0x ATR
                 take_profit = price + (atr * 2.0) 
                 
                 # Calculate Score
-                score, reasons = calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_h, proj_volume, vol_avg)
+                score, reasons = calculate_confidence(rsi, price, open_price, bbl, ema_50, macd_h, prev_macd_h, rel_vol)
                 
                 # --- TIME & FRIDAY THRESHOLD LOGIC ---
-                min_score_needed = 5 # Default
+                min_score_needed = 5 
                 
-                # Rule 1: Morning Protection (First 60 mins)
                 if elapsed_minutes < 60:
                     min_score_needed = 7 
                 
-                # Rule 2: Friday Afternoon Protection
                 tz = pytz.timezone('US/Eastern')
                 is_friday = datetime.now(tz).weekday() == 4
                 if is_friday and elapsed_minutes > 270:
                     min_score_needed += 1
 
-                # Final Decision
-                print(f"Checking {ticker}: Score {score}/10 (Threshold: {min_score_needed})")
+                print(f"Checking {ticker}: Score {score}/10 (RVAT: {rel_vol:.2f}x)")
                 
                 if score >= min_score_needed:
-                    # Pass EMA_50 to the alert function now
-                    send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed)
+                    send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol)
 
         except Exception as e:
             print(f"Error checking {ticker}: {e}")
