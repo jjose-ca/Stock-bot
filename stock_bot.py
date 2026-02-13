@@ -385,12 +385,15 @@ def check_market():
                 # This prevents "Logic Drift" because any change to calculate_confidence() automatically updates here.
                 
                 dummy_vol = 1.0 
-                daily_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, dummy_vol, elapsed_minutes)
+                base_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, dummy_vol, elapsed_minutes)
                 
                 # Threshold check (including Market Regime penalty)
                 pre_threshold = 3 + regime_penalty
                 
-                if daily_score < pre_threshold:
+                # FIX: Optimistic Pre-Scan (Assume max volume score of +2 to prevent false negatives)
+                potential_max_score = base_score + 2
+
+                if potential_max_score < pre_threshold:
                     # Skip this ticker to save time/API calls
                     continue
 
