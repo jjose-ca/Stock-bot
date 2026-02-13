@@ -110,9 +110,7 @@ def get_earnings_warning(ticker):
         
         # Risk Window: 0 to 7 days
         if 0 <= days_until <= 7:
-            # Format date for cleaner display (e.g. "Feb 16")
-            date_str = earnings_date.strftime('%b %d')
-            return True, f"Report in {days_until} Days ({date_str})"
+            return True, f"⚠️ **EARNINGS WARNING:** Report in {days_until} days ({earnings_date})"
         
         return False, ""
 
@@ -170,15 +168,15 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
 
     return score, reasons
 
-# --- 2. ALERT FUNCTION (PRO FORMAT) ---
+# --- 2. ALERT FUNCTION (VISUAL POLISH UPGRADE) ---
 def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol, earnings_msg):
     # 1. Determine Color & Rating
     if score >= 8:
         color = 5763719  # Green (Strong Buy)
-        rating = "STRONG BUY"
+        rating = "🔥 STRONG BUY"
     elif score >= 5:
         color = 16776960 # Yellow (Moderate Watch)
-        rating = "MODERATE WATCH"
+        rating = "⚠️ MODERATE WATCH"
     else:
         return 
 
@@ -189,14 +187,26 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
     # 3. Calculate Percentages for Trade Plan
     stop_pct = ((stop_loss - price) / price) * 100
     target_pct = ((take_profit - price) / price) * 100
+    risk_reward = abs(target_pct / stop_pct)
     
     # 4. Determine Status Strings
     rsi_status = "Oversold" if rsi < 35 else ("Weak" if rsi < 45 else "Neutral")
     trend_status = "Above" if price > ema_50 else "Below"
     
+    # --- LOGIC FIX START: Detect Volume Direction ---
+    vol_dir = "Neutral"
+    for r in reasons:
+        if "Buying Pressure" in r:
+            vol_dir = "Buying"
+            break
+        elif "Selling Pressure" in r:
+            vol_dir = "Selling"
+            break
+            
     vol_status = "Normal"
-    if rel_vol > 2.0: vol_status = "Heavy Buying"
-    elif rel_vol > 1.2: vol_status = "Strong Buying"
+    if rel_vol > 2.0: vol_status = f"Heavy {vol_dir}"
+    elif rel_vol > 1.2: vol_status = f"Strong {vol_dir}"
+    # --- LOGIC FIX END ---
 
     # 5. Format the Description
     description = f"*Triggered at {timestamp}*\n\n"
