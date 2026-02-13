@@ -76,47 +76,49 @@ def get_relative_volume(ticker):
         print(f"⚠️ Volume calc failed for {ticker}: {e}")
         return 1.0
 
-# --- HELPER: EARNINGS CHECK (NEW) ---
+# --- HELPER: EARNINGS CHECK (FIXED) ---
 def get_earnings_warning(ticker):
-    """
-    Checks if earnings are within the next 7 days.
-    Returns: (is_risky: bool, message: str)
-    """
+    """Checks if earnings are within 7 days using robust timezone handling."""
     try:
-        # Note: calling yf.Ticker() is a separate request from .download()
+        time.sleep(1)  # <--- CRITICAL FIX: Prevent Rate Limiting
         stock = yf.Ticker(ticker)
         cal = stock.calendar
         
-        if cal is None:
-            return False, ""
+        if cal is None: return False, ""
             
         earnings_date = None
-        
-        # Handle different yfinance return types (dict vs dataframe)
+        # Handle Dictionary return (newer yfinance versions)
         if isinstance(cal, dict) and 'Earnings Date' in cal:
-             earnings_date = cal['Earnings Date'][0]
-        elif isinstance(cal, pd.DataFrame) and 'Earnings Date' in cal.columns:
-             earnings_date = cal.iloc[0]['Earnings Date']
-        elif isinstance(cal, pd.DataFrame) and not cal.empty:
-             # Fallback for some weird dataframe structures
-             return False, ""
+            earnings_date = cal['Earnings Date'][0]
+        # Handle DataFrame return (older versions)
+        elif isinstance(cal, pd.DataFrame):
+            if 'Earnings Date' in cal.columns:
+                earnings_date = cal.iloc[0]['Earnings Date']
+            elif not cal.empty: # Fallback for index-based dataframes
+                earnings_date = cal.iloc[0, 0] 
 
-        if earnings_date is None:
-            return False, ""
+        if earnings_date is None: return False, ""
 
-        # Convert to date object
-        earnings_date = pd.to_datetime(earnings_date).date()
-        today = datetime.now().date()
+        # Normalize to US/Eastern to match market time
+        eastern = pytz.timezone('US/Eastern')
         
+        # Parse earnings date (handle both datetime and date objects)
+        if isinstance(earnings_date, (datetime, pd.Timestamp)):
+            earnings_date = pd.to_datetime(earnings_date).replace(tzinfo=eastern).date()
+        else:
+            # If it's just a raw date object, assume it's correct
+            earnings_date = pd.to_datetime(earnings_date).date()
+
+        today = datetime.now(eastern).date()
         days_until = (earnings_date - today).days
         
-        # Risk Window: 0 to 7 days
         if 0 <= days_until <= 7:
             return True, f"⚠️ **EARNINGS WARNING:** Report in {days_until} days ({earnings_date})"
         
         return False, ""
 
     except Exception as e:
+        # print(f"Earnings check error for {ticker}: {e}") # Optional debug
         return False, ""
 
 # --- 1. ENHANCED SCORING ENGINE ---
@@ -274,8 +276,16 @@ def check_market():
     print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
     
     try:
-        # UPDATED: Download 1 year ("1y") to ensure VTI 200 SMA calculation is valid
+        # Auto-adjust: If only 1 ticker, yfinance returns flat DF. 
+        # We force it into a dict-like structure for consistency.
         bulk_data = yf.download(TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
+        
+        # FIX: Normalize structure if only 1 ticker is queried
+        if len(TICKERS) == 1:
+            # Create a dictionary mimicking the multi-ticker structure
+            single_ticker = TICKERS[0]
+            bulk_data = {single_ticker: bulk_data}
+            
     except Exception as e:
         print(f"Critical Error: Bulk download failed - {e}")
         return
