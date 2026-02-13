@@ -35,41 +35,21 @@ def get_market_minutes_elapsed():
     diff = (now - market_open).total_seconds() / 60
     return min(diff, 390)
 
-# --- HELPER: INTRADAY METRICS (RVAT + VWAP) ---
-def get_intraday_metrics(ticker):
-    """
-    Calculates Relative Volume (RVAT) and Intraday VWAP.
-    Returns: (rel_vol, vwap_val)
-    """
+# --- HELPER: RELATIVE VOLUME (RVAT) ---
+def get_relative_volume(ticker):
+    """Calculates Relative Volume at Time (RVAT)."""
     try:
         time.sleep(1) # Safety delay to avoid rate limiting
-        # Download 5 days of 5m data
         df = yf.download(ticker, period="5d", interval="5m", progress=False)
         
-        if df.empty or len(df) < 20: return 1.0, None
+        if df.empty or len(df) < 10: return 1.0 
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
         df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce')
-        df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-        df['High'] = pd.to_numeric(df['High'], errors='coerce')
-        df['Low'] = pd.to_numeric(df['Low'], errors='coerce')
-        df.dropna(subset=['Volume', 'Close'], inplace=True)
+        df.dropna(subset=['Volume'], inplace=True)
 
-        # 1. Calculate Intraday VWAP (Manual Calc for current day)
-        current_date = df.index[-1].date()
-        today_df = df[df.index.date == current_date].copy()
-        
-        if not today_df.empty:
-            today_df['TP'] = (today_df['High'] + today_df['Low'] + today_df['Close']) / 3
-            today_df['PV'] = today_df['TP'] * today_df['Volume']
-            vwap_series = today_df['PV'].cumsum() / today_df['Volume'].cumsum()
-            vwap_val = vwap_series.iloc[-1]
-        else:
-            vwap_val = None
-
-        # 2. Calculate RVAT
         df['time_slot'] = df.index.time
         df['date'] = df.index.date 
 
@@ -83,17 +63,16 @@ def get_intraday_metrics(ticker):
         historical_at_time = df[df['time_slot'] == check_time]
         history_only = historical_at_time[historical_at_time['date'] != check_date]
 
-        if history_only.empty: return 1.0, vwap_val
+        if history_only.empty: return 1.0
 
         avg_vol = history_only['Volume'].mean()
-        if avg_vol == 0 or pd.isna(avg_vol): return 1.0, vwap_val
+        if avg_vol == 0 or pd.isna(avg_vol): return 1.0
 
-        rel_vol = check_vol / avg_vol
-        return rel_vol, vwap_val
+        return check_vol / avg_vol
 
     except Exception as e:
-        print(f"⚠️ Intraday calc failed for {ticker}: {e}")
-        return 1.0, None
+        print(f"⚠️ Volume calc failed for {ticker}: {e}")
+        return 1.0
 
 # --- HELPER: EARNINGS CHECK (NEW) ---
 def get_earnings_warning(ticker):
@@ -131,54 +110,38 @@ def get_earnings_warning(ticker):
         
         # Risk Window: 0 to 7 days
         if 0 <= days_until <= 7:
-            # Format date for cleaner display (e.g. "Feb 16")
-            date_str = earnings_date.strftime('%b %d')
-            return True, f"⚠️ **EARNINGS WARNING:** Report in {days_until} days ({date_str})"
+            return True, f"⚠️ **EARNINGS WARNING:** Report in {days_until} days ({earnings_date})"
         
         return False, ""
 
     except Exception as e:
         return False, ""
 
-# --- 1. ENHANCED SCORING ENGINE (PRO LOGIC) ---
-def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, sma_200, atr, macd_h, prev_macd_h, rel_vol, vwap_val, elapsed_minutes):
+# --- 1. ENHANCED SCORING ENGINE ---
+def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes):
     score = 0
     reasons = []
 
-    # --- A. VALUE (RSI + TREND FILTER) ---
-    # Logic: Only award max points if we are in an UPTREND (Price > 200 SMA)
-    # If below 200 SMA, we penalize the "Dip Buy" because it might be a crash.
-    is_uptrend = price > sma_200
-    
+    # A. RSI
     if rsi < 35:
-        if is_uptrend:
-            score += 4
-            reasons.append("💎 Deep Value (RSI < 35 + Uptrend)")
-        else:
-            score += 2 # Penalize for being against long-term trend
-            reasons.append("⚠️ Deep Oversold (Downtrend Risk)")
+        score += 4
+        reasons.append("💎 Deep Value (RSI < 35)")
     elif rsi < 45: 
-        score += 3 if is_uptrend else 2
+        score += 3
         reasons.append("📉 Oversold (RSI < 45)")
     elif rsi < 55:
         score += 2
         reasons.append("🌊 Momentum Reset (RSI < 55)")
 
-    # --- B. DYNAMIC SUPPORT (ATR) ---
-    # Logic: Use ATR for distance instead of fixed 2%
-    # "Touch Zone" is within 0.5 ATR
-    dist_to_ema = abs(price - ema_50)
-    atr_threshold = 0.5 * atr 
-    
+    # B. SUPPORT LEVELS
     if price <= bbl * 1.01: 
         score += 3
         reasons.append("🛡️ Touching Lower Bollinger Band")
-        
-    if dist_to_ema <= atr_threshold:
+    if abs(price - ema_50) <= (ema_50 * 0.02):
         score += 2
-        reasons.append(f"📈 Riding 50-Day Trendline (Within {dist_to_ema/atr:.1f} ATR)")
+        reasons.append("📈 Riding 50-Day Trendline")
 
-    # --- C. MOMENTUM (MACD) ---
+    # C. MACD
     if macd_h > 0:
         score += 2
         reasons.append("🚀 Positive Momentum (Green Histogram)")
@@ -186,31 +149,22 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
         score += 1
         reasons.append("🔄 Improving Momentum")
 
-    # --- D. VOLUME (VWAP CHECK) ---
-    # Logic: Use VWAP to confirm institutional flow
-    is_bullish_vol = False
-    method = "Price Action"
-
+    # D. VOLUME HYBRID
     if elapsed_minutes < 30:
-        is_bullish_vol = price > open_price
+        is_bullish = price > open_price
         method = "Green Candle"
     else:
-        if vwap_val is not None:
-            is_bullish_vol = price >= vwap_val
-            method = "VWAP"
-        else:
-            # Fallback if VWAP calc fails
-            midpoint = (day_high + day_low) / 2
-            is_bullish_vol = price >= midpoint
-            method = "Upper Range"
+        midpoint = (day_high + day_low) / 2
+        is_bullish = price >= midpoint
+        method = "Upper Range"
 
     if rel_vol > 1.2:
-        if is_bullish_vol:
+        if is_bullish:
             score += 1
             if rel_vol > 2.0: score += 1
-            reasons.append(f"🟢 High Buying Pressure ({rel_vol:.1f}x via {method})")
+            reasons.append(f"🟢 High Buying Pressure ({rel_vol:.1f}x)")
         else:
-            reasons.append(f"🔴 Selling Pressure ({rel_vol:.1f}x via {method})")
+            reasons.append(f"🔴 Selling Pressure ({rel_vol:.1f}x)")
 
     return score, reasons
 
@@ -317,11 +271,32 @@ def check_market():
     print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
     
     try:
-        # UPDATED: Download 1 year ("1y") to ensure 200 SMA calculation is valid
+        # FEEDBACK 1 & 2: Increase period to 1y to calculate Market Regime 200 SMA
         bulk_data = yf.download(TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
     except Exception as e:
         print(f"Critical Error: Bulk download failed - {e}")
         return
+
+    # --- FEEDBACK 1: MARKET REGIME FILTER ---
+    # Check if VTI (Total Market) is above/below 200 SMA
+    regime_penalty = 0
+    market_status = "Neutral"
+    
+    if 'VTI' in bulk_data:
+        try:
+            vti_df = bulk_data['VTI'].copy()
+            vti_df['SMA_200'] = ta.sma(vti_df['Close'], length=200)
+            if not vti_df.empty and len(vti_df) > 200:
+                last_vti = vti_df.iloc[-1]
+                if last_vti['Close'] < last_vti['SMA_200']:
+                    regime_penalty = 1 # BEAR MARKET: Require +1 score to alert
+                    market_status = "Bearish (VTI < 200 SMA)"
+                    print("⚠️ Market Regime: BEARISH. Increasing thresholds.")
+                else:
+                    market_status = "Bullish (VTI > 200 SMA)"
+                    print("✅ Market Regime: BULLISH.")
+        except Exception as e:
+            print(f"Market Regime Check Failed: {e}")
 
     for ticker in TICKERS:
         try:
@@ -336,7 +311,6 @@ def check_market():
 
             # --- CALCULATE INDICATORS ---
             df['EMA_50'] = ta.ema(df['Close'], length=50)
-            df['SMA_200'] = ta.sma(df['Close'], length=200) #
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
             macd = ta.macd(df['Close'])
@@ -351,10 +325,10 @@ def check_market():
             else:
                 df['BBL'] = pd.NA
             
-            df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14) #
+            df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
             # --- GET VALUES ---
-            if len(df) < 200: continue # Need 200 candles for SMA 200
+            if len(df) < 50: continue 
             
             last = df.iloc[-1]
             
@@ -376,36 +350,37 @@ def check_market():
 
             rsi = float(last['RSI'])
             ema_50 = float(last['EMA_50'])
-            sma_200 = float(last['SMA_200']) # New
             bbl = float(last['BBL'])
-            atr = float(last['ATR']) # New
             
             macd_h = float(last['MACD_H'])
             prev_macd_h = float(prev['MACD_H'])
+            atr = float(last['ATR'])
 
-            # --- TRIGGER LOGIC (UPDATED PRE-FILTER) ---
-            # Use ATR for pre-filtering too (1.0 ATR buffer)
-            dist_to_ema = abs(price - ema_50)
+            # --- TRIGGER LOGIC ---
+            near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
+            near_bb = abs(price - bbl) <= (bbl * 0.015)
             
-            # Interest Trigger: Near 50 EMA OR Deep Value
-            if (dist_to_ema <= 1.0 * atr) or (rsi < 55):
+            if (near_ema or near_bb) and rsi < 55:
                 
-                # 1. Check Volume & VWAP (Wait 1s to be polite)
-                rel_vol, vwap_val = get_intraday_metrics(ticker)
+                # --- FEEDBACK 2: OPTIMIZED PRE-SCAN ---
+                # Calculate score WITHOUT volume first to see if it's worth downloading intraday data
+                daily_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, 0, elapsed_minutes)
+                
+                # If daily chart is weak (< 3 points), skip volume check to save time/API
+                if daily_score < 3:
+                    continue 
+
+                # 1. Check Volume (Only runs if Daily Score is promising)
+                rel_vol = get_relative_volume(ticker)
 
                 # 2. Check Earnings (NEW - Only check if setup is good)
                 has_earnings_risk, earnings_msg = get_earnings_warning(ticker)
 
-                # Stops based on ATR
                 stop_loss = price - (atr * 1.5)
                 take_profit = price + (atr * 2.0) 
                 
-                # 3. Score (PRO LOGIC)
-                score, reasons = calculate_confidence(
-                    rsi, price, open_price, day_high, day_low, bbl, 
-                    ema_50, sma_200, atr, # Passing new indicators
-                    macd_h, prev_macd_h, rel_vol, vwap_val, elapsed_minutes
-                )
+                # 3. Final Score
+                score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
                 
                 # 4. Apply Earnings Penalty
                 if has_earnings_risk:
@@ -419,7 +394,10 @@ def check_market():
                 is_friday = datetime.now(tz).weekday() == 4
                 if is_friday and elapsed_minutes > 270: min_score_needed += 1
 
-                print(f"🔎 Checking {ticker}: Score {score}/10 (RVAT: {rel_vol:.2f}x)")
+                # Apply Market Regime Penalty (Harder to buy in bear market)
+                min_score_needed += regime_penalty
+
+                print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x)")
                 
                 if score >= min_score_needed:
                     # UPDATED CALL: Passing 'earnings_msg' to the new visual alert function
