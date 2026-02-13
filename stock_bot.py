@@ -10,8 +10,10 @@ import pytz
 
 # --- CONFIGURATION ---
 TICKERS = [
+    # --- MARKET PROXY (For Regime Check) ---
+    'VTI', 
     # --- SAFE FOUNDATION ---
-    'VFV.TO', 'ZSP.TO', 'XEF.TO', 'VTI',
+    'VFV.TO', 'ZSP.TO', 'XEF.TO',
     # --- SECTOR ETFS ---
     'SOXQ', 'XLY',
     # --- CANADIAN GROWTH ---
@@ -271,34 +273,33 @@ def check_market():
     print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
     
     try:
-        # FEEDBACK 1 & 2: Increase period to 1y to calculate Market Regime 200 SMA
+        # FEEDBACK: Increase history to 1y to calculate Market Regime 200 SMA
         bulk_data = yf.download(TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
     except Exception as e:
         print(f"Critical Error: Bulk download failed - {e}")
         return
 
-    # --- FEEDBACK 1: MARKET REGIME FILTER ---
-    # Check if VTI (Total Market) is above/below 200 SMA
-    regime_penalty = 0
-    market_status = "Neutral"
-    
+    # --- FEEDBACK 1: MARKET REGIME CHECK (VTI) ---
+    market_regime_penalty = 0
     if 'VTI' in bulk_data:
         try:
             vti_df = bulk_data['VTI'].copy()
-            vti_df['SMA_200'] = ta.sma(vti_df['Close'], length=200)
-            if not vti_df.empty and len(vti_df) > 200:
-                last_vti = vti_df.iloc[-1]
-                if last_vti['Close'] < last_vti['SMA_200']:
-                    regime_penalty = 1 # BEAR MARKET: Require +1 score to alert
-                    market_status = "Bearish (VTI < 200 SMA)"
-                    print("⚠️ Market Regime: BEARISH. Increasing thresholds.")
-                else:
-                    market_status = "Bullish (VTI > 200 SMA)"
-                    print("✅ Market Regime: BULLISH.")
+            vti_df.dropna(subset=['Close'], inplace=True)
+            # Calculate 200 SMA for Market
+            vti_sma_200 = ta.sma(vti_df['Close'], length=200).iloc[-1]
+            current_vti = float(vti_df['Close'].iloc[-1])
+            
+            if current_vti < vti_sma_200:
+                print("⚠️ MARKET REGIME: BEARISH (VTI < 200 SMA). Increasing thresholds.")
+                market_regime_penalty = 1
+            else:
+                print("✅ MARKET REGIME: BULLISH (VTI > 200 SMA).")
         except Exception as e:
             print(f"Market Regime Check Failed: {e}")
 
     for ticker in TICKERS:
+        if ticker == 'VTI': continue # Skip the proxy ticker
+
         try:
             try:
                 df = bulk_data[ticker].copy()
@@ -356,52 +357,64 @@ def check_market():
             prev_macd_h = float(prev['MACD_H'])
             atr = float(last['ATR'])
 
-            # --- TRIGGER LOGIC ---
-            near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
-            near_bb = abs(price - bbl) <= (bbl * 0.015)
+            # ==================================================
+            # 🚀 FEEDBACK 2: OPTIMIZED PRE-SCAN
+            # ==================================================
+            # Calculate a preliminary score using ONLY daily data.
+            # If the stock is boring, skip the expensive volume check.
             
-            if (near_ema or near_bb) and rsi < 55:
-                
-                # --- FEEDBACK 2: OPTIMIZED PRE-SCAN ---
-                # Calculate score WITHOUT volume first to see if it's worth downloading intraday data
-                daily_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, 0, elapsed_minutes)
-                
-                # If daily chart is weak (< 3 points), skip volume check to save time/API
-                if daily_score < 3:
-                    continue 
+            daily_score = 0
+            if rsi < 35: daily_score += 4
+            elif rsi < 45: daily_score += 3
+            elif rsi < 55: daily_score += 2
+            
+            if abs(price - ema_50) <= (ema_50 * 0.02): daily_score += 2
+            if price <= bbl * 1.01: daily_score += 3
+            if macd_h > 0: daily_score += 2
+            elif macd_h > prev_macd_h: daily_score += 1
 
-                # 1. Check Volume (Only runs if Daily Score is promising)
-                rel_vol = get_relative_volume(ticker)
+            # Threshold for proceeding to volume check
+            # We use a lower threshold (3) to be safe, plus the regime penalty
+            pre_threshold = 3 + market_regime_penalty
+            
+            if daily_score < pre_threshold:
+                # Skip this ticker to save time/API calls
+                continue
 
-                # 2. Check Earnings (NEW - Only check if setup is good)
-                has_earnings_risk, earnings_msg = get_earnings_warning(ticker)
+            # ==================================================
+            # ✅ PASSED PRE-SCAN: EXECUTE DEEP DIVE
+            # ==================================================
+            
+            # 1. Check Volume (Only runs if Daily Score is promising)
+            rel_vol = get_relative_volume(ticker)
 
-                stop_loss = price - (atr * 1.5)
-                take_profit = price + (atr * 2.0) 
-                
-                # 3. Final Score
-                score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
-                
-                # 4. Apply Earnings Penalty
-                if has_earnings_risk:
-                    score -= 2 # Penalize risky setups
-                    # Note: We pass earnings_msg explicitly to the alert function now
+            # 2. Check Earnings
+            has_earnings_risk, earnings_msg = get_earnings_warning(ticker)
 
-                # --- TIME & FRIDAY THRESHOLD ---
-                min_score_needed = 5 
-                if elapsed_minutes < 60: min_score_needed = 7 
-                
-                is_friday = datetime.now(tz).weekday() == 4
-                if is_friday and elapsed_minutes > 270: min_score_needed += 1
+            stop_loss = price - (atr * 1.5)
+            take_profit = price + (atr * 2.0) 
+            
+            # 3. Final Score
+            score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
+            
+            # 4. Apply Earnings Penalty
+            if has_earnings_risk:
+                score -= 2 
 
-                # Apply Market Regime Penalty (Harder to buy in bear market)
-                min_score_needed += regime_penalty
+            # --- TIME & FRIDAY THRESHOLD ---
+            min_score_needed = 5 
+            if elapsed_minutes < 60: min_score_needed = 7 
+            
+            is_friday = datetime.now(tz).weekday() == 4
+            if is_friday and elapsed_minutes > 270: min_score_needed += 1
 
-                print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x)")
-                
-                if score >= min_score_needed:
-                    # UPDATED CALL: Passing 'earnings_msg' to the new visual alert function
-                    send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg)
+            # FEEDBACK 1: Apply Market Regime Penalty
+            min_score_needed += market_regime_penalty
+
+            print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x)")
+            
+            if score >= min_score_needed:
+                send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg)
 
         except Exception as e:
             print(f"Error processing {ticker}: {e}")
