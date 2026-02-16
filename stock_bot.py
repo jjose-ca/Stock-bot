@@ -378,7 +378,15 @@ def check_market():
             if macd is not None:
                 # pandas_ta returns columns like: MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
                 # We dynamically find the column starting with 'MACDh' to get the Histogram
-                hist_col = [c for c in macd.columns if c.startswith('MACDh')][0]
+                
+                # FIX: Check if list is empty before accessing index 0
+                hist_cols = [c for c in macd.columns if c.startswith('MACDh')]
+                
+                if not hist_cols:
+                    print(f"⚠️ MACD calculation failed or missing columns for {ticker}")
+                    continue
+                    
+                hist_col = hist_cols[0]
                 df['MACD_H'] = macd[hist_col]
             else:
                 continue
