@@ -232,10 +232,17 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
     tz = pytz.timezone('US/Eastern')
     timestamp = datetime.now(tz).strftime('%I:%M %p EST')
 
-    # 3. Calculate Percentages for Trade Plan
-    stop_pct = ((stop_loss - price) / price) * 100
-    target_pct = ((take_profit - price) / price) * 100
-    risk_reward = abs(target_pct / stop_pct)
+    # 3. Calculate Risk/Reward (Clean Math Change)
+    risk = price - stop_loss
+    reward = take_profit - price
+    
+    if risk > 0:
+        risk_reward = reward / risk
+    else:
+        risk_reward = 0.0
+
+    stop_pct = (risk / price) * 100
+    target_pct = (reward / price) * 100
     
     # 4. Determine Status Strings
     rsi_status = "Oversold" if rsi < 35 else ("Weak" if rsi < 45 else "Neutral")
@@ -263,7 +270,7 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
         f"📊 **Trade Plan**\n"
         f"• **Entry:** `${price:.2f}`\n"
         f"• **Target:** `${take_profit:.2f}` (+{target_pct:.1f}%) 🎯\n"
-        f"• **Stop:** `${stop_loss:.2f}` ({stop_pct:.1f}%) 🛑\n"
+        f"• **Stop:** `${stop_loss:.2f}` (-{stop_pct:.1f}%) 🛑\n"
         f"• **Ratio:** `1:{risk_reward:.2f}` ⚖️\n\n"
     )
 
@@ -503,9 +510,38 @@ def check_market():
                 # 2. Check Earnings (NEW - Only check if setup is good)
                 has_earnings_risk, earnings_msg = get_earnings_warning(ticker)
 
-                stop_loss = price - (atr * 1.5)
-                take_profit = price + (atr * 2.0) 
-                
+                # ==================================================
+                # ✅ HYBRID FIX: Structure Stop + Safe Math
+                # ==================================================
+
+                # 1. DEFINE STRUCTURE (The "Floor" for the trade)
+                # Since your triggers are EMA and BBL, those are your immediate supports.
+                # We use the lower of the two to be safe, or just the one triggered.
+                support_level = bbl if near_bb else ema_50
+
+                # 2. CALCULATE STOP LOSS (Dynamic Risk)
+                # We place the stop slightly below the support structure.
+                # If volatility (ATR) is high, we give it more room.
+                stop_buffer = atr * 0.5
+                stop_loss = support_level - stop_buffer
+
+                # Sanity Check: Ensure stop is never above price (in case price dipped hard)
+                if stop_loss >= price:
+                     stop_loss = price - atr  # Fallback to pure ATR stop
+
+                # 3. CALCULATE TAKE PROFIT (Reward)
+                # We aim for a 2.0 ATR move from the entry price
+                take_profit = price + (atr * 2.0)
+
+                # 4. CALCULATE RISK/REWARD (The "Clean" Way)
+                risk_per_share = price - stop_loss
+                reward_per_share = take_profit - price
+
+                if risk_per_share > 0:
+                    rr_ratio = reward_per_share / risk_per_share
+                else:
+                    rr_ratio = 0.0 # Avoid division by zero errors
+
                 # 3. Final Score (Using REAL volume)
                 # Passed new bb_width argument
                 score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
@@ -523,8 +559,14 @@ def check_market():
 
                 # Apply Market Regime Penalty
                 min_score_needed += regime_penalty
+                
+                # 5. Risk/Reward Filter
+                # This filters out "bad" structure trades where support is too far away
+                if rr_ratio < 1.5:
+                     print(f"📉 {ticker} Skipped: Poor Risk/Reward ({rr_ratio:.2f})")
+                     continue
 
-                print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x)")
+                print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x) (RR: {rr_ratio:.2f})")
                 
                 if score >= min_score_needed:
                     send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes)
