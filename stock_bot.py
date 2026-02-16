@@ -286,10 +286,21 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
         ]
     }
     
+    # --- WEBHOOK ROBUSTNESS FIX ---
+    if not WEBHOOK_URL:
+        print("❌ Error: DISCORD_URL environment variable is missing.")
+        return
+
     try:
-        requests.post(WEBHOOK_URL, json=data)
+        # Added timeout to prevent hanging and raise_for_status for 4xx/5xx errors
+        response = requests.post(WEBHOOK_URL, json=data, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as err:
+        print(f"❌ HTTP Error sending alert for {ticker}: {err}")
+    except requests.exceptions.Timeout:
+        print(f"❌ Timeout sending alert for {ticker} - Discord might be down.")
     except Exception as e:
-        print(f"Failed to send Discord alert: {e}")
+        print(f"❌ General Error sending alert: {e}")
 
 # --- 3. MAIN LOOP ---
 def check_market():
