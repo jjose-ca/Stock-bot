@@ -9,17 +9,39 @@ from datetime import datetime, timedelta
 import pytz
 
 # --- CONFIGURATION ---
+# --- CONFIGURATION ---
 TICKERS = [
     # --- MARKET PROXY (For Regime Check) ---
     'VTI', 
-    # --- SAFE FOUNDATION ---
-    'VFV.TO', 'ZSP.TO', 'XEF.TO',
-    # --- SECTOR ETFS ---
-    'SOXQ', 'XLY',
-    # --- CANADIAN GROWTH ---
-    'HUT.TO',
-    # --- US SWINGS ---
-    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA', 'AAPL', 'MSFT', 'NFLX', 'ORCL', 'MARA'
+
+    # --- SAFE FOUNDATION (ETFs) ---
+    'VFV.TO',   # S&P 500 (CAD Hedged)
+    'ZSP.TO',   # S&P 500 (CAD Unhedged)
+    'XEF.TO',   # International Markets
+    'SPLG',     # S&P 500 (Cheaper alternative to SPY)
+    'QQQM',     # Nasdaq 100 (Cheaper alternative to QQQ)
+
+    # --- SECTOR ETFS (Commodities & Industry) ---
+    'SOXQ',     # Semiconductors
+    'XLY',      # Consumer Discretionary
+    'GDX',      # Gold Miners (High Beta to Gold)
+    'SIL',      # Silver Miners (High Volatility)
+    'XLF',      # Financials (Bank Swings)
+    'URA',      # Uranium (Energy Cycle Plays)
+
+    # --- US SWINGS (High Volume / Retail Favorites) ---
+    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA', 
+    'AAPL', 'MSFT', 'NFLX', 'ORCL', 'MARA', 'F', 'LCID', 'DKNG',
+    'UBER', 'RIVN', 'CLSK', 'RIOT', 'MSTR', 'PANW', 'ARM', 'SMCI', 'COIN', 
+
+    # --- CANADIAN GROWTH & SWINGS (TSX) ---
+    'HUT.TO',   # Bitcoin Miner (High Volatility)
+    'BITF.TO',  # Bitfarms (Crypto Swing)
+    'CVE.TO',   # Cenovus Energy (Oil Proxy)
+    'AC.TO',    # Air Canada (Range Bound / Travel Recovery)
+    'MFC.TO',   # Manulife Financial (Defensive Swing)
+    'ATD.TO',   # Alimentation Couche-Tard (Defensive Growth)
+    'TOU.TO',
 ]
 
 WEBHOOK_URL = os.getenv('DISCORD_URL')
