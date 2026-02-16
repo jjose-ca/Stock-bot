@@ -65,8 +65,8 @@ def get_relative_volume(ticker):
     try:
         time.sleep(1) # Safety delay to avoid rate limiting
         
-        # FIX 1: Increased lookback to 60 days for better statistical significance
-        df = yf.download(ticker, period="60d", interval="5m", progress=False)
+        # FIX 1: Reduced lookback to 35 days (was 60d) to prevent API timeouts/brittleness
+        df = yf.download(ticker, period="35d", interval="5m", progress=False)
         
         if df.empty or len(df) < 10: return 1.0 
 
