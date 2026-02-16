@@ -64,7 +64,9 @@ def get_relative_volume(ticker):
     """Calculates Relative Volume at Time (RVAT)."""
     try:
         time.sleep(1) # Safety delay to avoid rate limiting
-        df = yf.download(ticker, period="5d", interval="5m", progress=False)
+        
+        # FIX 1: Increased lookback to 60 days for better statistical significance
+        df = yf.download(ticker, period="60d", interval="5m", progress=False)
         
         if df.empty or len(df) < 10: return 1.0 
 
@@ -73,11 +75,15 @@ def get_relative_volume(ticker):
 
         df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce')
         df.dropna(subset=['Volume'], inplace=True)
+        
+        # FIX 2: Filter for Regular Market Hours only (9:30 - 16:00)
+        df = df.between_time('09:30', '16:00')
 
         df['time_slot'] = df.index.time
         df['date'] = df.index.date 
 
         # USE LAST COMPLETED CANDLE
+        if len(df) < 2: return 1.0
         last_completed_bar = df.iloc[-2]
         check_time = last_completed_bar.name.time()
         check_date = last_completed_bar.name.date()
