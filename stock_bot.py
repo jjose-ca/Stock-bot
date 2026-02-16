@@ -246,7 +246,8 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
         f"📊 **Trade Plan**\n"
         f"• **Entry:** `${price:.2f}`\n"
         f"• **Target:** `${take_profit:.2f}` (+{target_pct:.1f}%) 🎯\n"
-        f"• **Stop:** `${stop_loss:.2f}` ({stop_pct:.1f}%) 🛑\n\n"
+        f"• **Stop:** `${stop_loss:.2f}` ({stop_pct:.1f}%) 🛑\n"
+        f"• **Ratio:** `1:{risk_reward:.2f}` ⚖️\n\n"
     )
 
     # Technicals Section
