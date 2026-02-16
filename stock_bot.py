@@ -170,9 +170,9 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
     elif rsi < 45: 
         score += 3
         reasons.append("📉 Oversold (RSI < 45)")
-    elif rsi < 55:
+    elif rsi < 50:  # <--- CHANGED FROM 55 TO 50
         score += 2
-        reasons.append("🌊 Momentum Reset (RSI < 55)")
+        reasons.append("🌊 Momentum Reset (RSI < 50)")
 
     # B. SUPPORT LEVELS
     if price <= bbl * 1.01: 
@@ -379,10 +379,10 @@ def check_market():
                 # Fallback: If columns are (Price, Ticker), access via xs
                 if isinstance(bulk_data.columns, pd.MultiIndex):
                     try:
-                         df = bulk_data.xs(ticker, level=1, axis=1)
+                          df = bulk_data.xs(ticker, level=1, axis=1)
                     except Exception:
-                         print(f"⚠️ No data found for {ticker} (Extraction Failed)")
-                         continue
+                          print(f"⚠️ No data found for {ticker} (Extraction Failed)")
+                          continue
                 else:
                     print(f"⚠️ No data found for {ticker}")
                     continue
