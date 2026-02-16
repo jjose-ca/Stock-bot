@@ -239,7 +239,7 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
     description = f"*Triggered at {timestamp}*\n\n"
     
     if earnings_msg:
-        description += f"⚠️ **EARNINGS WARNING:** {earnings_msg}\n\n"
+        description += f"{earnings_msg}\n\n"
     
     # Trade Plan Section
     description += (
