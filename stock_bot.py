@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 import pytz
 
 # --- CONFIGURATION ---
-# --- CONFIGURATION ---
 TICKERS = [
     # --- MARKET PROXY (For Regime Check) ---
     'VTI', 
@@ -159,7 +158,7 @@ def get_earnings_warning(ticker):
 
 # --- 1. ENHANCED SCORING ENGINE ---
 # This is the "One Source of Truth" for scoring.
-def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes):
+def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes):
     score = 0
     reasons = []
 
@@ -189,8 +188,16 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
     elif macd_h > prev_macd_h: 
         score += 1
         reasons.append("🔄 Improving Momentum")
+        
+    # D. VOLATILITY (BB WIDTH FILTER)
+    if bb_width < 0.03: # Filter out squeezes/dead stocks
+        score -= 10 # Massive penalty to prevent alert
+        reasons.append(f"⚠️ Low Volatility Squeeze (Width: {bb_width:.2f})")
+    elif bb_width > 0.15:
+        score += 1
+        reasons.append("⚡ High Volatility Expansion")
 
-    # D. VOLUME HYBRID
+    # E. VOLUME HYBRID
     if elapsed_minutes < 30:
         is_bullish = price > open_price
         method = "Green Candle"
@@ -420,8 +427,13 @@ def check_market():
             bb = ta.bbands(df['Close'], length=20, std=2)
             if bb is not None and not bb.empty:
                 df['BBL'] = bb.iloc[:, 0]
+                df['BBM'] = bb.iloc[:, 1] # Middle Band
+                df['BBU'] = bb.iloc[:, 2] # Upper Band
+                # --- NEW: BOLLINGER WIDTH CALCULATION ---
+                df['BB_WIDTH'] = (df['BBU'] - df['BBL']) / df['BBM']
             else:
                 df['BBL'] = pd.NA
+                df['BB_WIDTH'] = 0
             
             df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
@@ -449,6 +461,7 @@ def check_market():
             rsi = float(last['RSI'])
             ema_50 = float(last['EMA_50'])
             bbl = float(last['BBL'])
+            bb_width = float(last['BB_WIDTH']) # New
             
             macd_h = float(last['MACD_H'])
             prev_macd_h = float(prev['MACD_H'])
@@ -467,7 +480,8 @@ def check_market():
                 # This prevents "Logic Drift" because any change to calculate_confidence() automatically updates here.
                 
                 dummy_vol = 1.0 
-                base_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, dummy_vol, elapsed_minutes)
+                # Passed new bb_width argument
+                base_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, macd_h, prev_macd_h, dummy_vol, elapsed_minutes)
                 
                 # Threshold check (including Market Regime penalty)
                 pre_threshold = 3 + regime_penalty
@@ -493,7 +507,8 @@ def check_market():
                 take_profit = price + (atr * 2.0) 
                 
                 # 3. Final Score (Using REAL volume)
-                score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
+                # Passed new bb_width argument
+                score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
                 
                 # 4. Apply Earnings Penalty
                 if has_earnings_risk:
