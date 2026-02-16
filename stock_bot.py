@@ -77,6 +77,14 @@ def get_relative_volume(ticker):
         df.dropna(subset=['Volume'], inplace=True)
         
         # FIX 2: Filter for Regular Market Hours only (9:30 - 16:00)
+        # --- TIMEZONE FIX START ---
+        # yfinance returns UTC-aware indexes. Must convert to US/Eastern BEFORE filtering time.
+        if df.index.tz is None:
+            df.index = df.index.tz_localize('UTC') # Assume UTC if naive
+        
+        df.index = df.index.tz_convert('US/Eastern')
+        # --- TIMEZONE FIX END ---
+        
         df = df.between_time('09:30', '16:00')
 
         df['time_slot'] = df.index.time
