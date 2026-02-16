@@ -342,6 +342,10 @@ def check_market():
         # Safe extraction attempt that handles Dict, MultiIndex, or Flat DF
         vti_df = bulk_data['VTI'].copy()
         
+        # --- FIX: Ensure VTI DataFrame is flat (MultiIndex Fix Part 1) ---
+        if isinstance(vti_df.columns, pd.MultiIndex):
+            vti_df.columns = vti_df.columns.get_level_values(0)
+
         # If it's a flat DF (only columns like 'Close', 'Open'), ensure it has data
         if 'Close' not in vti_df.columns:
              # If columns are MultiIndex, 'Close' might be at level 0, but .copy() usually preserves structure
@@ -369,10 +373,23 @@ def check_market():
 
         try:
             try:
+                # --- FIX: Handle MultiIndex Chaos (MultiIndex Fix Part 2) ---
                 df = bulk_data[ticker].copy()
             except KeyError:
-                print(f"⚠️ No data found for {ticker}")
-                continue
+                # Fallback: If columns are (Price, Ticker), access via xs
+                if isinstance(bulk_data.columns, pd.MultiIndex):
+                    try:
+                         df = bulk_data.xs(ticker, level=1, axis=1)
+                    except Exception:
+                         print(f"⚠️ No data found for {ticker} (Extraction Failed)")
+                         continue
+                else:
+                    print(f"⚠️ No data found for {ticker}")
+                    continue
+            
+            # CRITICAL: Flatten columns if they are still MultiIndex
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
 
             if df['Close'].isnull().all(): continue
             df.dropna(subset=['Close'], inplace=True)
