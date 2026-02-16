@@ -371,7 +371,7 @@ def check_market():
             last = df.iloc[-1]
             
             # --- 🛡️ GHOST CANDLE FIX 🛡️ ---
-            #tz = pytz.timezone('US/Eastern')
+            tz = pytz.timezone('US/Eastern')
            # today_date = datetime.now(tz).date()
            # candle_date = last.name.date()
             
