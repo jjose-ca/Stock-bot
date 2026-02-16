@@ -316,23 +316,31 @@ def check_market():
     # Check if VTI (Total Market) is above/below 200 SMA
     regime_penalty = 0
     
-    if 'VTI' in bulk_data:
-        try:
-            vti_df = bulk_data['VTI'].copy()
-            vti_df.dropna(subset=['Close'], inplace=True)
-            # Calculate 200 SMA for Market
-            vti_df['SMA_200'] = ta.sma(vti_df['Close'], length=200)
-            
-            # Get last valid VTI price
-            if not vti_df.empty and len(vti_df) > 200:
-                last_vti = vti_df.iloc[-1]
-                if last_vti['Close'] < last_vti['SMA_200']:
-                    regime_penalty = 1 # BEAR MARKET: Require +1 score to alert
-                    print(f"⚠️ Market Regime: BEARISH (VTI < 200 SMA). Increasing thresholds.")
-                else:
-                    print(f"✅ Market Regime: BULLISH (VTI > 200 SMA).")
-        except Exception as e:
-            print(f"Market Regime Check Failed: {e}")
+    try:
+        # Safe extraction attempt that handles Dict, MultiIndex, or Flat DF
+        vti_df = bulk_data['VTI'].copy()
+        
+        # If it's a flat DF (only columns like 'Close', 'Open'), ensure it has data
+        if 'Close' not in vti_df.columns:
+             # If columns are MultiIndex, 'Close' might be at level 0, but .copy() usually preserves structure
+             # If completely invalid, this might raise KeyError or Attribute Error
+             pass
+
+        vti_df.dropna(subset=['Close'], inplace=True)
+        # Calculate 200 SMA for Market
+        vti_df['SMA_200'] = ta.sma(vti_df['Close'], length=200)
+        
+        # Get last valid VTI price
+        if not vti_df.empty and len(vti_df) > 200:
+            last_vti = vti_df.iloc[-1]
+            if last_vti['Close'] < last_vti['SMA_200']:
+                regime_penalty = 1 # BEAR MARKET: Require +1 score to alert
+                print(f"⚠️ Market Regime: BEARISH (VTI < 200 SMA). Increasing thresholds.")
+            else:
+                print(f"✅ Market Regime: BULLISH (VTI > 200 SMA).")
+                
+    except Exception as e:
+        print(f"Market Regime Check Skipped (VTI data missing or malformed): {e}")
 
     for ticker in TICKERS:
         if ticker == 'VTI': continue # Skip the proxy ticker
