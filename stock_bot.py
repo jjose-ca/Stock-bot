@@ -351,11 +351,16 @@ def check_market():
             df['EMA_50'] = ta.ema(df['Close'], length=50)
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
+            # --- MACD FIX START ---
             macd = ta.macd(df['Close'])
             if macd is not None:
-                df['MACD_H'] = macd.iloc[:, 1]
+                # pandas_ta returns columns like: MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
+                # We dynamically find the column starting with 'MACDh' to get the Histogram
+                hist_col = [c for c in macd.columns if c.startswith('MACDh')][0]
+                df['MACD_H'] = macd[hist_col]
             else:
                 continue
+            # --- MACD FIX END ---
 
             bb = ta.bbands(df['Close'], length=20, std=2)
             if bb is not None and not bb.empty:
