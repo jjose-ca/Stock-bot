@@ -202,7 +202,7 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, ema_50,
     return score, reasons
 
 # --- 2. ALERT FUNCTION (VISUAL POLISH UPGRADE) ---
-def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol, earnings_msg):
+def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes):
     # 1. Determine Color & Rating
     if score >= 8:
         color = 5763719  # Green (Strong Buy)
@@ -226,15 +226,11 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
     rsi_status = "Oversold" if rsi < 35 else ("Weak" if rsi < 45 else "Neutral")
     trend_status = "Above" if price > ema_50 else "Below"
     
-    # --- LOGIC FIX START: Detect Volume Direction ---
-    vol_dir = "Neutral"
-    for r in reasons:
-        if "Buying Pressure" in r:
-            vol_dir = "Buying"
-            break
-        elif "Selling Pressure" in r:
-            vol_dir = "Selling"
-            break
+    # --- LOGIC FIX START: Direct Volume Direction Calculation ---
+    midpoint = (day_high + day_low) / 2
+    is_bullish = price > open_price if elapsed_minutes < 30 else price >= midpoint
+    
+    vol_dir = "Buying" if is_bullish else "Selling"
             
     vol_status = "Normal"
     if rel_vol > 2.0: vol_status = f"Heavy {vol_dir}"
@@ -483,7 +479,7 @@ def check_market():
                 print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x)")
                 
                 if score >= min_score_needed:
-                    send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg)
+                    send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes)
 
         except Exception as e:
             print(f"Error processing {ticker}: {e}")
