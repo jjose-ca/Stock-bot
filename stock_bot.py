@@ -451,11 +451,11 @@ def check_market():
             
             # --- 🛡️ GHOST CANDLE FIX 🛡️ ---
             tz = pytz.timezone('US/Eastern')
-           # today_date = datetime.now(tz).date()
-           # candle_date = last.name.date()
+            today_date = datetime.now(tz).date()
+            candle_date = last.name.date()
             
-          #  if elapsed_minutes > 20 and candle_date != today_date:
-            #    continue
+            if elapsed_minutes > 20 and candle_date != today_date:
+                continue
 
             prev = df.iloc[-2]
             if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
