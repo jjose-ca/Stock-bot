@@ -551,7 +551,7 @@ def check_market():
                     score -= 2 # Penalize risky setups
 
                 # --- TIME & FRIDAY THRESHOLD ---
-                min_score_needed = 5 
+                min_score_needed = 6 
                 if elapsed_minutes < 60: min_score_needed = 7 
                 
                 is_friday = datetime.now(tz).weekday() == 4
