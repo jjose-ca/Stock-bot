@@ -293,7 +293,7 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
 
     # 6. Construct the Payload
     data = {
-        "content": f"🚨 **SWING ALERT: {ticker}**",
+        "content": f"🚨 **SWING ALERT: {ticker}** <@YourID>", # Replace <@YourID> with actual ID if needed
         "embeds": [
             {
                 "title": f"🔥 {rating}: {ticker} (Score: {score}/10)",
@@ -393,10 +393,10 @@ def check_market():
                 # Fallback: If columns are (Price, Ticker), access via xs
                 if isinstance(bulk_data.columns, pd.MultiIndex):
                     try:
-                           df = bulk_data.xs(ticker, level=1, axis=1)
+                          df = bulk_data.xs(ticker, level=1, axis=1)
                     except Exception:
-                           print(f"⚠️ No data found for {ticker} (Extraction Failed)")
-                           continue
+                          print(f"⚠️ No data found for {ticker} (Extraction Failed)")
+                          continue
                 else:
                     print(f"⚠️ No data found for {ticker}")
                     continue
@@ -527,7 +527,7 @@ def check_market():
 
                 # Sanity Check: Ensure stop is never above price (in case price dipped hard)
                 if stop_loss >= price:
-                      stop_loss = price - atr  # Fallback to pure ATR stop
+                     stop_loss = price - atr  # Fallback to pure ATR stop
 
                 # 3. CALCULATE TAKE PROFIT (Reward)
                 # We aim for a 2.0 ATR move from the entry price
@@ -551,7 +551,7 @@ def check_market():
                     score -= 2 # Penalize risky setups
 
                 # --- TIME & FRIDAY THRESHOLD ---
-                min_score_needed = 5 
+                min_score_needed = 6 # <--- UPDATED FROM 5 TO 6
                 if elapsed_minutes < 60: min_score_needed = 7 
                 
                 is_friday = datetime.now(tz).weekday() == 4
@@ -563,8 +563,8 @@ def check_market():
                 # 5. Risk/Reward Filter
                 # This filters out "bad" structure trades where support is too far away
                 if rr_ratio < 1.5:
-                      print(f"📉 {ticker} Skipped: Poor Risk/Reward ({rr_ratio:.2f})")
-                      continue
+                     print(f"📉 {ticker} Skipped: Poor Risk/Reward ({rr_ratio:.2f})")
+                     continue
 
                 print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x) (RR: {rr_ratio:.2f})")
                 
