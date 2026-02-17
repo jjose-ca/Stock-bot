@@ -156,47 +156,42 @@ def get_earnings_warning(ticker):
         # print(f"Earnings check error for {ticker}: {e}") # Optional debug
         return False, ""
 
-# --- 1. ENHANCED SCORING ENGINE (MULTI-TIMEFRAME) ---
-# Inputs: 
-#   - rsi, price, bbl, macd (FROM HOURLY DATA)
-#   - ema_50 (FROM DAILY DATA)
+# --- 1. ENHANCED SCORING ENGINE ---
+# This is the "One Source of Truth" for scoring.
 def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes):
     score = 0
     reasons = []
 
-    # A. RSI (HOURLY)
+    # A. RSI
     if rsi < 35:
         score += 4
-        reasons.append("💎 Deep Value (Hourly RSI < 35)")
+        reasons.append("💎 Deep Value (RSI < 35)")
     elif rsi < 45: 
         score += 3
-        reasons.append("📉 Oversold (Hourly RSI < 45)")
-    elif rsi < 50: 
+        reasons.append("📉 Oversold (RSI < 45)")
+    elif rsi < 50:  # <--- CHANGED FROM 55 TO 50
         score += 2
-        reasons.append("🌊 Momentum Reset (Hourly RSI < 50)")
+        reasons.append("🌊 Momentum Reset (RSI < 50)")
 
-    # B. SUPPORT LEVELS (HYBRID)
-    # Check 1: Is Price at Hourly BB Bottom?
+    # B. SUPPORT LEVELS
     if price <= bbl * 1.01: 
         score += 3
-        reasons.append("🛡️ Touching Hourly Lower Band")
-    
-    # Check 2: Is Price at DAILY 50 EMA? (The Major Support)
+        reasons.append("🛡️ Touching Lower Bollinger Band")
     if abs(price - ema_50) <= (ema_50 * 0.02):
         score += 2
-        reasons.append("📈 Riding Daily 50 EMA Trendline")
+        reasons.append("📈 Riding 50-Day Trendline")
 
-    # C. MACD (HOURLY)
+    # C. MACD
     if macd_h > 0:
         score += 2
-        reasons.append("🚀 Positive Momentum (Hrly Green Hist)")
+        reasons.append("🚀 Positive Momentum (Green Histogram)")
     elif macd_h > prev_macd_h: 
         score += 1
-        reasons.append("🔄 Improving Momentum (Hrly)")
+        reasons.append("🔄 Improving Momentum")
         
-    # D. VOLATILITY (BB WIDTH FILTER - HOURLY)
-    if bb_width < 0.03: 
-        score -= 10 
+    # D. VOLATILITY (BB WIDTH FILTER)
+    if bb_width < 0.03: # Filter out squeezes/dead stocks
+        score -= 10 # Massive penalty to prevent alert
         reasons.append(f"⚠️ Low Volatility Squeeze (Width: {bb_width:.2f})")
     elif bb_width > 0.15:
         score += 1
@@ -265,7 +260,7 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
     # --- LOGIC FIX END ---
 
     # 5. Format the Description
-    description = f"*Triggered at {timestamp}* (1H Timeframe)\n\n"
+    description = f"*Triggered at {timestamp}*\n\n"
     
     if earnings_msg:
         description += f"{earnings_msg}\n\n"
@@ -281,16 +276,20 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
 
     # Technicals Section
     description += (
-        f"📉 **Technicals (Hybrid)**\n"
-        f"• **Hrly RSI:** `{rsi:.1f}` ({rsi_status})\n"
-        f"• **Daily Trend:** {trend_status} 50 EMA ( `${ema_50:.2f}` )\n"
+        f"📉 **Technicals**\n"
+        f"• **RSI:** `{rsi:.1f}` ({rsi_status})\n"
+        f"• **Trend:** {trend_status} 50 EMA ( `${ema_50:.2f}` )\n"
         f"• **Volume:** `{rel_vol:.1f}x` ({vol_status})\n\n"
     )
 
     # Analysis Section (Clean Bullets)
     description += "📝 **Analysis**\n"
     for r in reasons:
-        description += f"• {r}\n"
+        # Check if emoji exists, if not add a default bullet
+        if not any(char in r for char in ["💎", "📉", "🌊", "🛡️", "📈", "🚀", "🔄", "🟢", "🔴"]):
+            description += f"• {r}\n"
+        else:
+            description += f"• {r}\n"
 
     # 6. Construct the Payload
     data = {
@@ -330,39 +329,42 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
 
 # --- 3. MAIN LOOP ---
 def check_market():
-    print(f"Checking {len(TICKERS)} tickers (Hybrid Mode: Daily Trend + Hourly Trigger)...")
+    print(f"Checking {len(TICKERS)} tickers via Bulk Download...")
     elapsed_minutes = get_market_minutes_elapsed()
     print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
     
     try:
-        # 1. DOWNLOAD DAILY DATA (For VTI Regime & Macro Trend)
-        print("📥 Fetching 1Y Daily Data...")
-        bulk_daily = yf.download(TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
+        # Auto-adjust: If only 1 ticker, yfinance returns flat DF. 
+        # We force it into a dict-like structure for consistency.
+        bulk_data = yf.download(TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
         
-        # 2. DOWNLOAD HOURLY DATA (For Triggers)
-        print("📥 Fetching 30D Hourly Data...")
-        bulk_hourly = yf.download(TICKERS, period="1mo", interval="1h", group_by='ticker', progress=False)
-
-        # Normalize structure if only 1 ticker
+        # FIX: Normalize structure if only 1 ticker is queried
         if len(TICKERS) == 1:
-            bulk_daily = {TICKERS[0]: bulk_daily}
-            bulk_hourly = {TICKERS[0]: bulk_hourly}
+            # Create a dictionary mimicking the multi-ticker structure
+            single_ticker = TICKERS[0]
+            bulk_data = {single_ticker: bulk_data}
             
     except Exception as e:
         print(f"Critical Error: Bulk download failed - {e}")
         return
 
-    # --- FEEDBACK 1: MARKET REGIME CHECK (VTI - DAILY) ---
+    # --- FEEDBACK 1: MARKET REGIME CHECK (VTI) ---
     # Check if VTI (Total Market) is above/below 200 SMA
     regime_penalty = 0
     
     try:
         # Safe extraction attempt that handles Dict, MultiIndex, or Flat DF
-        vti_df = bulk_daily['VTI'].copy()
+        vti_df = bulk_data['VTI'].copy()
         
-        # --- FIX: Ensure VTI DataFrame is flat ---
+        # --- FIX: Ensure VTI DataFrame is flat (MultiIndex Fix Part 1) ---
         if isinstance(vti_df.columns, pd.MultiIndex):
             vti_df.columns = vti_df.columns.get_level_values(0)
+
+        # If it's a flat DF (only columns like 'Close', 'Open'), ensure it has data
+        if 'Close' not in vti_df.columns:
+             # If columns are MultiIndex, 'Close' might be at level 0, but .copy() usually preserves structure
+             # If completely invalid, this might raise KeyError or Attribute Error
+             pass
 
         vti_df.dropna(subset=['Close'], inplace=True)
         # Calculate 200 SMA for Market
@@ -384,77 +386,69 @@ def check_market():
         if ticker == 'VTI': continue # Skip the proxy ticker
 
         try:
-            # ==========================================
-            # STEP A: PROCESS DAILY DATA (CONTEXT)
-            # ==========================================
             try:
-                df_daily = bulk_daily[ticker].copy()
+                # --- FIX: Handle MultiIndex Chaos (MultiIndex Fix Part 2) ---
+                df = bulk_data[ticker].copy()
             except KeyError:
-                if isinstance(bulk_daily.columns, pd.MultiIndex):
-                    try: df_daily = bulk_daily.xs(ticker, level=1, axis=1)
-                    except: continue
-                else: continue
+                # Fallback: If columns are (Price, Ticker), access via xs
+                if isinstance(bulk_data.columns, pd.MultiIndex):
+                    try:
+                           df = bulk_data.xs(ticker, level=1, axis=1)
+                    except Exception:
+                           print(f"⚠️ No data found for {ticker} (Extraction Failed)")
+                           continue
+                else:
+                    print(f"⚠️ No data found for {ticker}")
+                    continue
             
-            if isinstance(df_daily.columns, pd.MultiIndex):
-                df_daily.columns = df_daily.columns.get_level_values(0)
+            # CRITICAL: Flatten columns if they are still MultiIndex
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
 
-            if df_daily['Close'].isnull().all(): continue
-            df_daily.dropna(subset=['Close'], inplace=True)
+            if df['Close'].isnull().all(): continue
+            df.dropna(subset=['Close'], inplace=True)
+
+            # --- CALCULATE INDICATORS ---
+            df['EMA_50'] = ta.ema(df['Close'], length=50)
+            df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # Calculate Daily EMA 50 (The "Trend Line")
-            df_daily['EMA_50'] = ta.ema(df_daily['Close'], length=50)
-            
-            if len(df_daily) < 50: continue
-            
-            # Get the Daily EMA value
-            # Note: We take the last available value.
-            daily_ema_value = float(df_daily['EMA_50'].iloc[-1])
-
-            # ==========================================
-            # STEP B: PROCESS HOURLY DATA (TRIGGERS)
-            # ==========================================
-            try:
-                df_hourly = bulk_hourly[ticker].copy()
-            except KeyError:
-                if isinstance(bulk_hourly.columns, pd.MultiIndex):
-                    try: df_hourly = bulk_hourly.xs(ticker, level=1, axis=1)
-                    except: continue
-                else: continue
-
-            if isinstance(df_hourly.columns, pd.MultiIndex):
-                df_hourly.columns = df_hourly.columns.get_level_values(0)
-
-            if df_hourly['Close'].isnull().all(): continue
-            df_hourly.dropna(subset=['Close'], inplace=True)
-
-            # --- CALCULATE HOURLY INDICATORS ---
-            df_hourly['RSI'] = ta.rsi(df_hourly['Close'], length=14)
-            
-            macd = ta.macd(df_hourly['Close'])
+            # --- MACD FIX START ---
+            macd = ta.macd(df['Close'])
             if macd is not None:
+                # pandas_ta returns columns like: MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
+                # We dynamically find the column starting with 'MACDh' to get the Histogram
+                
+                # FIX: Check if list is empty before accessing index 0
                 hist_cols = [c for c in macd.columns if c.startswith('MACDh')]
-                if not hist_cols: continue
-                df_hourly['MACD_H'] = macd[hist_cols[0]]
-            else: continue
-
-            bb = ta.bbands(df_hourly['Close'], length=20, std=2)
-            if bb is not None and not bb.empty:
-                df_hourly['BBL'] = bb.iloc[:, 0]
-                df_hourly['BBM'] = bb.iloc[:, 1]
-                df_hourly['BBU'] = bb.iloc[:, 2]
-                df_hourly['BB_WIDTH'] = (df_hourly['BBU'] - df_hourly['BBL']) / df_hourly['BBM']
+                
+                if not hist_cols:
+                    print(f"⚠️ MACD calculation failed or missing columns for {ticker}")
+                    continue
+                    
+                hist_col = hist_cols[0]
+                df['MACD_H'] = macd[hist_col]
             else:
-                df_hourly['BBL'] = pd.NA
-                df_hourly['BB_WIDTH'] = 0
-            
-            # ATR on Hourly for stop loss sizing
-            df_hourly['ATR'] = ta.atr(df_hourly['High'], df_hourly['Low'], df_hourly['Close'], length=14)
+                continue
+            # --- MACD FIX END ---
 
-            if len(df_hourly) < 20: continue 
+            bb = ta.bbands(df['Close'], length=20, std=2)
+            if bb is not None and not bb.empty:
+                df['BBL'] = bb.iloc[:, 0]
+                df['BBM'] = bb.iloc[:, 1] # Middle Band
+                df['BBU'] = bb.iloc[:, 2] # Upper Band
+                # --- NEW: BOLLINGER WIDTH CALCULATION ---
+                df['BB_WIDTH'] = (df['BBU'] - df['BBL']) / df['BBM']
+            else:
+                df['BBL'] = pd.NA
+                df['BB_WIDTH'] = 0
             
-            last = df_hourly.iloc[-1]
-            prev = df_hourly.iloc[-2]
+            df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
+            # --- GET VALUES ---
+            if len(df) < 50: continue 
+            
+            last = df.iloc[-1]
+            
             # --- 🛡️ GHOST CANDLE FIX 🛡️ ---
             tz = pytz.timezone('US/Eastern')
             today_date = datetime.now(tz).date()
@@ -463,92 +457,98 @@ def check_market():
             if elapsed_minutes > 20 and candle_date != today_date:
                 continue
 
-            if pd.isna(last['BBL']) or pd.isna(last['RSI']): continue
+            prev = df.iloc[-2]
+            if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
 
-            # Extract Hourly Values
             price = float(last['Close'])
             open_price = float(last['Open']) 
             day_high = float(last['High'])
             day_low = float(last['Low'])
+
             rsi = float(last['RSI'])
+            ema_50 = float(last['EMA_50'])
             bbl = float(last['BBL'])
-            bb_width = float(last['BB_WIDTH']) 
+            bb_width = float(last['BB_WIDTH']) # New
+            
             macd_h = float(last['MACD_H'])
             prev_macd_h = float(prev['MACD_H'])
             atr = float(last['ATR'])
 
-            # ==========================================
-            # STEP C: HYBRID TRIGGER LOGIC
-            # ==========================================
+            # --- TRIGGER LOGIC ---
+            near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
+            near_bb = abs(price - bbl) <= (bbl * 0.015)
             
-            # Trigger 1: Price near DAILY EMA 50 (Trend Support)
-            near_daily_ema = abs(price - daily_ema_value) <= (daily_ema_value * 0.02)
-            
-            # Trigger 2: Price at HOURLY BB Low (Intraday Oversold)
-            near_hourly_bb = abs(price - bbl) <= (bbl * 0.015)
-            
-            # Filter: Must be oversold on Hourly RSI
-            if (near_daily_ema or near_hourly_bb) and rsi < 55:
+            if (near_ema or near_bb) and rsi < 55:
                 
-                # Use Hybrid Inputs for Scoring
+                # ==================================================
+                # 🚀 FEEDBACK 2: OPTIMIZED PRE-SCAN (THE FIX)
+                # ==================================================
+                # We reuse the OFFICIAL scoring function, but pass "dummy" volume (1.0).
+                # This prevents "Logic Drift" because any change to calculate_confidence() automatically updates here.
+                
                 dummy_vol = 1.0 
-                base_score, _ = calculate_confidence(
-                    rsi, price, open_price, day_high, day_low, bbl, bb_width, 
-                    daily_ema_value, # <--- PASSING DAILY EMA
-                    macd_h, prev_macd_h, dummy_vol, elapsed_minutes
-                )
+                # Passed new bb_width argument
+                base_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, macd_h, prev_macd_h, dummy_vol, elapsed_minutes)
                 
+                # Threshold check (including Market Regime penalty)
                 pre_threshold = 3 + regime_penalty
+                
+                # FIX: Optimistic Pre-Scan (Assume max volume score of +2 to prevent false negatives)
                 potential_max_score = base_score + 2
 
                 if potential_max_score < pre_threshold:
+                    # Skip this ticker to save time/API calls
                     continue
 
                 # ==================================================
                 # ✅ PASSED PRE-SCAN: EXECUTE DEEP DIVE
                 # ==================================================
 
-                # 1. Check Volume (Keep 5m granularity for precision)
+                # 1. Check Volume (Only runs if Daily Score is promising)
                 rel_vol = get_relative_volume(ticker)
 
-                # 2. Check Earnings
+                # 2. Check Earnings (NEW - Only check if setup is good)
                 has_earnings_risk, earnings_msg = get_earnings_warning(ticker)
 
                 # ==================================================
-                # ✅ HYBRID STRUCTURE: STOP & TARGET
+                # ✅ HYBRID FIX: Structure Stop + Safe Math
                 # ==================================================
 
-                # Support Structure: Use the LOWEST of Daily EMA or Hourly BB
-                # This gives the trade "room to breathe"
-                support_level = min(bbl, daily_ema_value)
+                # 1. DEFINE STRUCTURE (The "Floor" for the trade)
+                # Since your triggers are EMA and BBL, those are your immediate supports.
+                # We use the lower of the two to be safe, or just the one triggered.
+                support_level = bbl if near_bb else ema_50
 
-                # Stop Loss: Dynamic Risk based on Hourly ATR
+                # 2. CALCULATE STOP LOSS (Dynamic Risk)
+                # We place the stop slightly below the support structure.
+                # If volatility (ATR) is high, we give it more room.
                 stop_buffer = atr * 0.5
                 stop_loss = support_level - stop_buffer
 
+                # Sanity Check: Ensure stop is never above price (in case price dipped hard)
                 if stop_loss >= price:
-                      stop_loss = price - atr 
+                      stop_loss = price - atr  # Fallback to pure ATR stop
 
-                # Target: 2.0x Hourly ATR (Scalp/Swing Target)
+                # 3. CALCULATE TAKE PROFIT (Reward)
+                # We aim for a 2.0 ATR move from the entry price
                 take_profit = price + (atr * 2.0)
 
+                # 4. CALCULATE RISK/REWARD (The "Clean" Way)
                 risk_per_share = price - stop_loss
                 reward_per_share = take_profit - price
 
                 if risk_per_share > 0:
                     rr_ratio = reward_per_share / risk_per_share
                 else:
-                    rr_ratio = 0.0 
+                    rr_ratio = 0.0 # Avoid division by zero errors
 
-                # 3. Final Score
-                score, reasons = calculate_confidence(
-                    rsi, price, open_price, day_high, day_low, bbl, bb_width, 
-                    daily_ema_value, 
-                    macd_h, prev_macd_h, rel_vol, elapsed_minutes
-                )
+                # 3. Final Score (Using REAL volume)
+                # Passed new bb_width argument
+                score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
                 
+                # 4. Apply Earnings Penalty
                 if has_earnings_risk:
-                    score -= 2 
+                    score -= 2 # Penalize risky setups
 
                 # --- TIME & FRIDAY THRESHOLD ---
                 min_score_needed = 5 
@@ -557,8 +557,11 @@ def check_market():
                 is_friday = datetime.now(tz).weekday() == 4
                 if is_friday and elapsed_minutes > 270: min_score_needed += 1
 
+                # Apply Market Regime Penalty
                 min_score_needed += regime_penalty
                 
+                # 5. Risk/Reward Filter
+                # This filters out "bad" structure trades where support is too far away
                 if rr_ratio < 1.5:
                       print(f"📉 {ticker} Skipped: Poor Risk/Reward ({rr_ratio:.2f})")
                       continue
@@ -566,7 +569,7 @@ def check_market():
                 print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x) (RR: {rr_ratio:.2f})")
                 
                 if score >= min_score_needed:
-                    send_discord_alert(ticker, price, rsi, daily_ema_value, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes)
+                    send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes)
 
         except Exception as e:
             print(f"Error processing {ticker}: {e}")
