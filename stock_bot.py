@@ -290,11 +290,7 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
     # Analysis Section (Clean Bullets)
     description += "📝 **Analysis**\n"
     for r in reasons:
-        # Check if emoji exists, if not add a default bullet
-        if not any(char in r for char in ["💎", "📉", "🌊", "🛡️", "📈", "🚀", "🔄", "🟢", "🔴"]):
-            description += f"• {r}\n"
-        else:
-            description += f"• {r}\n"
+        description += f"• {r}\n"
 
     # 6. Construct the Payload
     data = {
