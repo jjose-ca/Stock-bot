@@ -156,23 +156,25 @@ def get_earnings_warning(ticker):
         # print(f"Earnings check error for {ticker}: {e}") # Optional debug
         return False, ""
 
-# --- 1. ENHANCED SCORING ENGINE (UPDATED WITH 9/21 EMA) ---
+# --- 1. ENHANCED SCORING ENGINE ---
+# This is the "One Source of Truth" for scoring.
+# ADDED: ema_9, ema_21 arguments
 def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, rel_vol, elapsed_minutes):
     score = 0
     reasons = []
 
-    # A. RSI (Value)
+    # A. RSI
     if rsi < 35:
         score += 4
         reasons.append("💎 Deep Value (RSI < 35)")
     elif rsi < 45: 
         score += 3
         reasons.append("📉 Oversold (RSI < 45)")
-    elif rsi < 55:  
-        score += 1 # Reduced score here to prioritize Trend
+    elif rsi < 55:
+        score += 2
         reasons.append("🌊 Momentum Reset (RSI < 55)")
 
-    # B. TREND STRUCTURE (9/21 EMA)
+    # B. TREND STRUCTURE (9/21 EMA) -- [NEW LOGIC FROM FILE B]
     # 1. Momentum Alignment (Trend is Up)
     if ema_9 > ema_21:
         score += 1
@@ -180,31 +182,31 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_widt
     
     # 2. "Option A" Dip & Bounce Logic
     # Did we touch the 21 EMA today (Low <= 21 EMA) AND are we currently above it?
-    # Tolerance of 0.5% used for the "Touch"
     if day_low <= (ema_21 * 1.005) and price > ema_21:
         score += 2
         reasons.append("⚡ 21 EMA Bounce (Perfect Pullback)")
 
-    # C. MAJOR SUPPORT LEVELS
+    # C. SUPPORT LEVELS
     if price <= bbl * 1.01: 
         score += 3
         reasons.append("🛡️ Touching Lower Bollinger Band")
-    
-    # 50 EMA Touch (The "GPS" Support)
-    if abs(price - ema_50) <= (ema_50 * 0.015):
+    if abs(price - ema_50) <= (ema_50 * 0.02):
         score += 2
         reasons.append("📈 Riding 50-Day Trendline")
 
     # D. MACD
     if macd_h > 0:
         score += 2
-        reasons.append("🟢 Positive Momentum")
+        reasons.append("🚀 Positive Momentum (Green Histogram)")
     elif macd_h > prev_macd_h: 
         score += 1
         reasons.append("🔄 Improving Momentum")
         
-    # E. VOLATILITY
-    if bb_width > 0.15:
+    # E. VOLATILITY (BB WIDTH FILTER)
+    if bb_width < 0.03: # Filter out squeezes/dead stocks
+        score -= 10 # Massive penalty to prevent alert
+        reasons.append(f"⚠️ Low Volatility Squeeze (Width: {bb_width:.2f})")
+    elif bb_width > 0.15:
         score += 1
         reasons.append("⚡ High Volatility Expansion")
 
@@ -228,12 +230,13 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_widt
     return score, reasons
 
 # --- 2. ALERT FUNCTION (VISUAL POLISH UPGRADE) ---
+# ADDED: ema_21 argument for display
 def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes):
     # 1. Determine Color & Rating
     if score >= 8:
         color = 5763719  # Green (Strong Buy)
         rating = "🔥 STRONG BUY"
-    elif score >= 6:
+    elif score >= 5:
         color = 16776960 # Yellow (Moderate Watch)
         rating = "⚠️ MODERATE WATCH"
     else:
@@ -259,10 +262,16 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
     rsi_status = "Oversold" if rsi < 35 else ("Weak" if rsi < 45 else "Neutral")
     trend_status = "Above" if price > ema_50 else "Below"
     
-    vol_dir = "Buying" if price >= (day_high + day_low)/2 else "Selling"
+    # --- LOGIC FIX START: Direct Volume Direction Calculation ---
+    midpoint = (day_high + day_low) / 2
+    is_bullish = price > open_price if elapsed_minutes < 30 else price >= midpoint
+    
+    vol_dir = "Buying" if is_bullish else "Selling"
+            
     vol_status = "Normal"
     if rel_vol > 2.0: vol_status = f"Heavy {vol_dir}"
     elif rel_vol > 1.2: vol_status = f"Strong {vol_dir}"
+    # --- LOGIC FIX END ---
 
     # 5. Format the Description
     description = f"*Triggered at {timestamp}*\n\n"
@@ -279,17 +288,18 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
         f"• **Ratio:** `1:{risk_reward:.2f}` ⚖️\n\n"
     )
 
-    # Technicals Section
+    # Technicals Section [UPDATED TO INCLUDE 21 EMA]
     description += (
         f"📉 **Technicals**\n"
         f"• **RSI:** `{rsi:.1f}` ({rsi_status})\n"
-        f"• **Trend:** 21 EMA (`${ema_21:.2f}`) | 50 EMA (`${ema_50:.2f}`)\n"
+        f"• **Trend:** 21 EMA (`${ema_21:.2f}`) | 50 EMA ( `${ema_50:.2f}` )\n"
         f"• **Volume:** `{rel_vol:.1f}x` ({vol_status})\n\n"
     )
 
     # Analysis Section (Clean Bullets)
     description += "📝 **Analysis**\n"
     for r in reasons:
+        # Check if emoji exists, if not add a default bullet
         if not any(char in r for char in ["💎", "📉", "🌊", "🛡️", "📈", "🚀", "🔄", "🟢", "🔴"]):
             description += f"• {r}\n"
         else:
@@ -306,7 +316,7 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
                 "fields": [
                     {
                         "name": "🔗 Links", 
-                        "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})",
+                        "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})", # TradingView Removed
                         "inline": False
                     }
                 ],
@@ -315,13 +325,19 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
         ]
     }
     
+    # --- WEBHOOK ROBUSTNESS FIX ---
     if not WEBHOOK_URL:
         print("❌ Error: DISCORD_URL environment variable is missing.")
         return
 
     try:
+        # Added timeout to prevent hanging and raise_for_status for 4xx/5xx errors
         response = requests.post(WEBHOOK_URL, json=data, timeout=10)
         response.raise_for_status()
+    except requests.exceptions.HTTPError as err:
+        print(f"❌ HTTP Error sending alert for {ticker}: {err}")
+    except requests.exceptions.Timeout:
+        print(f"❌ Timeout sending alert for {ticker} - Discord might be down.")
     except Exception as e:
         print(f"❌ General Error sending alert: {e}")
 
@@ -332,8 +348,13 @@ def check_market():
     print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
     
     try:
+        # Auto-adjust: If only 1 ticker, yfinance returns flat DF. 
+        # We force it into a dict-like structure for consistency.
         bulk_data = yf.download(TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
+        
+        # FIX: Normalize structure if only 1 ticker is queried
         if len(TICKERS) == 1:
+            # Create a dictionary mimicking the multi-ticker structure
             single_ticker = TICKERS[0]
             bulk_data = {single_ticker: bulk_data}
             
@@ -341,40 +362,58 @@ def check_market():
         print(f"Critical Error: Bulk download failed - {e}")
         return
 
-    # --- MARKET REGIME CHECK (VTI) ---
+    # --- FEEDBACK 1: MARKET REGIME CHECK (VTI) ---
+    # Check if VTI (Total Market) is above/below 200 SMA
     regime_penalty = 0
+    
     try:
+        # Safe extraction attempt that handles Dict, MultiIndex, or Flat DF
         vti_df = bulk_data['VTI'].copy()
+        
+        # --- FIX: Ensure VTI DataFrame is flat (MultiIndex Fix Part 1) ---
         if isinstance(vti_df.columns, pd.MultiIndex):
             vti_df.columns = vti_df.columns.get_level_values(0)
+
+        # If it's a flat DF (only columns like 'Close', 'Open'), ensure it has data
+        if 'Close' not in vti_df.columns:
+             pass
+
         vti_df.dropna(subset=['Close'], inplace=True)
+        # Calculate 200 SMA for Market
         vti_df['SMA_200'] = ta.sma(vti_df['Close'], length=200)
         
+        # Get last valid VTI price
         if not vti_df.empty and len(vti_df) > 200:
             last_vti = vti_df.iloc[-1]
             if last_vti['Close'] < last_vti['SMA_200']:
-                regime_penalty = 1 
+                regime_penalty = 1 # BEAR MARKET: Require +1 score to alert
                 print(f"⚠️ Market Regime: BEARISH (VTI < 200 SMA). Increasing thresholds.")
             else:
                 print(f"✅ Market Regime: BULLISH (VTI > 200 SMA).")
+                
     except Exception as e:
-        print(f"Market Regime Check Skipped: {e}")
+        print(f"Market Regime Check Skipped (VTI data missing or malformed): {e}")
 
     for ticker in TICKERS:
-        if ticker == 'VTI': continue 
+        if ticker == 'VTI': continue # Skip the proxy ticker
 
         try:
             try:
+                # --- FIX: Handle MultiIndex Chaos (MultiIndex Fix Part 2) ---
                 df = bulk_data[ticker].copy()
             except KeyError:
+                # Fallback: If columns are (Price, Ticker), access via xs
                 if isinstance(bulk_data.columns, pd.MultiIndex):
                     try:
-                          df = bulk_data.xs(ticker, level=1, axis=1)
+                           df = bulk_data.xs(ticker, level=1, axis=1)
                     except Exception:
-                          continue
+                           print(f"⚠️ No data found for {ticker} (Extraction Failed)")
+                           continue
                 else:
+                    print(f"⚠️ No data found for {ticker}")
                     continue
             
+            # CRITICAL: Flatten columns if they are still MultiIndex
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
@@ -383,25 +422,35 @@ def check_market():
 
             # --- CALCULATE INDICATORS ---
             df['EMA_50'] = ta.ema(df['Close'], length=50)
-            df['EMA_21'] = ta.ema(df['Close'], length=21) # New
-            df['EMA_9'] = ta.ema(df['Close'], length=9)   # New
+            df['EMA_21'] = ta.ema(df['Close'], length=21) # ADDED
+            df['EMA_9'] = ta.ema(df['Close'], length=9)   # ADDED
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # --- MACD ---
+            # --- MACD FIX START ---
             macd = ta.macd(df['Close'])
             if macd is not None:
+                # pandas_ta returns columns like: MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
+                # We dynamically find the column starting with 'MACDh' to get the Histogram
+                
+                # FIX: Check if list is empty before accessing index 0
                 hist_cols = [c for c in macd.columns if c.startswith('MACDh')]
-                if not hist_cols: continue
+                
+                if not hist_cols:
+                    print(f"⚠️ MACD calculation failed or missing columns for {ticker}")
+                    continue
+                    
                 hist_col = hist_cols[0]
                 df['MACD_H'] = macd[hist_col]
             else:
                 continue
+            # --- MACD FIX END ---
 
             bb = ta.bbands(df['Close'], length=20, std=2)
             if bb is not None and not bb.empty:
                 df['BBL'] = bb.iloc[:, 0]
-                df['BBM'] = bb.iloc[:, 1]
-                df['BBU'] = bb.iloc[:, 2]
+                df['BBM'] = bb.iloc[:, 1] # Middle Band
+                df['BBU'] = bb.iloc[:, 2] # Upper Band
+                # --- NEW: BOLLINGER WIDTH CALCULATION ---
                 df['BB_WIDTH'] = (df['BBU'] - df['BBL']) / df['BBM']
             else:
                 df['BBL'] = pd.NA
@@ -411,16 +460,18 @@ def check_market():
 
             # --- GET VALUES ---
             if len(df) < 50: continue 
+            
             last = df.iloc[-1]
-            prev = df.iloc[-2]
             
             # --- 🛡️ GHOST CANDLE FIX 🛡️ ---
             tz = pytz.timezone('US/Eastern')
             today_date = datetime.now(tz).date()
             candle_date = last.name.date()
+            
             if elapsed_minutes > 20 and candle_date != today_date:
                 continue
 
+            prev = df.iloc[-2]
             if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
 
             price = float(last['Close'])
@@ -430,69 +481,119 @@ def check_market():
 
             rsi = float(last['RSI'])
             ema_50 = float(last['EMA_50'])
-            ema_21 = float(last['EMA_21']) # New
-            ema_9 = float(last['EMA_9'])   # New
+            ema_21 = float(last['EMA_21']) # ADDED
+            ema_9 = float(last['EMA_9'])   # ADDED
             bbl = float(last['BBL'])
-            bb_width = float(last['BB_WIDTH']) 
+            bb_width = float(last['BB_WIDTH']) # New
             
             macd_h = float(last['MACD_H'])
             prev_macd_h = float(prev['MACD_H'])
             atr = float(last['ATR'])
 
-            # --- 🚦 TREND FILTER (Safety First) ---
+            # --- 🚦 TREND FILTER (Safety First) [FROM FILE B] ---
             # If price is below 50 EMA, we skip it (unless it's a massive capitulation RSI < 25)
             # This prevents buying "cheap" stocks that are crashing.
             if price < ema_50 and rsi > 30:
                 continue
 
             # --- TRIGGER LOGIC ---
-            # We alert if near 21 EMA (Momentum) OR near Bollinger Band (Mean Reversion)
-            near_21 = abs(price - ema_21) <= (ema_21 * 0.01) # Within 1% of 21 EMA
+            near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
             near_bb = abs(price - bbl) <= (bbl * 0.015)
-            
-            if (near_21 or near_bb) and rsi < 60: # RSI threshold raised slightly for Momentum trades
+            # ADDED: Logic to detect Option A (21 EMA Bounce)
+            near_21 = abs(price - ema_21) <= (ema_21 * 0.01)
+
+            # Updated trigger to include near_21 (for Option A) and increased RSI threshold to 60 (to match File B logic)
+            if (near_ema or near_bb or near_21) and rsi < 60:
                 
-                # Pre-Scan with dummy vol
+                # ==================================================
+                # 🚀 FEEDBACK 2: OPTIMIZED PRE-SCAN (THE FIX)
+                # ==================================================
+                # We reuse the OFFICIAL scoring function, but pass "dummy" volume (1.0).
+                # This prevents "Logic Drift" because any change to calculate_confidence() automatically updates here.
+                
                 dummy_vol = 1.0 
+                # Passed new ema_9 and ema_21 arguments
                 base_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, dummy_vol, elapsed_minutes)
                 
+                # Threshold check (including Market Regime penalty)
                 pre_threshold = 3 + regime_penalty
-                if (base_score + 2) < pre_threshold:
+                
+                # FIX: Optimistic Pre-Scan (Assume max volume score of +2 to prevent false negatives)
+                potential_max_score = base_score + 2
+
+                if potential_max_score < pre_threshold:
+                    # Skip this ticker to save time/API calls
                     continue
 
-                # --- DEEP DIVE ---
+                # ==================================================
+                # ✅ PASSED PRE-SCAN: EXECUTE DEEP DIVE
+                # ==================================================
+
+                # 1. Check Volume (Only runs if Daily Score is promising)
                 rel_vol = get_relative_volume(ticker)
+
+                # 2. Check Earnings (NEW - Only check if setup is good)
                 has_earnings_risk, earnings_msg = get_earnings_warning(ticker)
 
-                # --- HYBRID STOP LOSS (Dynamic) ---
-                # If we are bouncing off 21 EMA, Stop is below 21 EMA.
-                # If we are bouncing off BBL, Stop is below BBL.
-                support_level = bbl if near_bb else ema_21
-                
+                # ==================================================
+                # ✅ HYBRID FIX: Structure Stop + Safe Math
+                # ==================================================
+
+                # 1. DEFINE STRUCTURE (The "Floor" for the trade)
+                # We choose the most logical support based on what triggered the alert.
+                if near_bb:
+                    support_level = bbl
+                elif near_21:
+                    support_level = ema_21
+                else:
+                    support_level = ema_50
+
+                # 2. CALCULATE STOP LOSS (Dynamic Risk)
+                # We place the stop slightly below the support structure.
+                # If volatility (ATR) is high, we give it more room.
                 stop_buffer = atr * 0.5
                 stop_loss = support_level - stop_buffer
-                if stop_loss >= price: stop_loss = price - atr 
 
+                # Sanity Check: Ensure stop is never above price (in case price dipped hard)
+                if stop_loss >= price:
+                      stop_loss = price - atr  # Fallback to pure ATR stop
+
+                # 3. CALCULATE TAKE PROFIT (Reward)
+                # We aim for a 2.0 ATR move from the entry price
                 take_profit = price + (atr * 2.0)
+
+                # 4. CALCULATE RISK/REWARD (The "Clean" Way)
                 risk_per_share = price - stop_loss
                 reward_per_share = take_profit - price
-                rr_ratio = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
 
-                # Final Score
+                if risk_per_share > 0:
+                    rr_ratio = reward_per_share / risk_per_share
+                else:
+                    rr_ratio = 0.0 # Avoid division by zero errors
+
+                # 3. Final Score (Using REAL volume)
+                # Passed new ema_9 and ema_21 arguments
                 score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
                 
-                if has_earnings_risk: score -= 2
+                # 4. Apply Earnings Penalty
+                if has_earnings_risk:
+                    score -= 2 # Penalize risky setups
 
+                # --- TIME & FRIDAY THRESHOLD ---
                 min_score_needed = 6 
                 if elapsed_minutes < 60: min_score_needed = 7 
                 
                 is_friday = datetime.now(tz).weekday() == 4
                 if is_friday and elapsed_minutes > 270: min_score_needed += 1
+
+                # Apply Market Regime Penalty
                 min_score_needed += regime_penalty
                 
+                # 5. Risk/Reward Filter
+                # This filters out "bad" structure trades where support is too far away
                 if rr_ratio < 1.5:
-                     print(f"📉 {ticker} Skipped: Poor Risk/Reward ({rr_ratio:.2f})")
-                     continue
+                      print(f"📉 {ticker} Skipped: Poor Risk/Reward ({rr_ratio:.2f})")
+                      continue
 
                 print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x) (RR: {rr_ratio:.2f})")
                 
