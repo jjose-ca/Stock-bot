@@ -64,7 +64,7 @@ def get_relative_volume(ticker):
     try:
         time.sleep(1) # Safety delay to avoid rate limiting
         
-        # FIX 1: Reduced lookback to 35 days (was 60d) to prevent API timeouts/brittleness
+        # FIX: Reduced lookback to 35 days (was 60d) to prevent API timeouts/brittleness
         df = yf.download(ticker, period="35d", interval="5m", progress=False)
         
         if df.empty or len(df) < 10: return 1.0 
@@ -75,7 +75,7 @@ def get_relative_volume(ticker):
         df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce')
         df.dropna(subset=['Volume'], inplace=True)
         
-        # FIX 2: Filter for Regular Market Hours only (9:30 - 16:00)
+        # FIX: Filter for Regular Market Hours only (9:30 - 16:00)
         # --- TIMEZONE FIX START ---
         # yfinance returns UTC-aware indexes. Must convert to US/Eastern BEFORE filtering time.
         if df.index.tz is None:
@@ -290,7 +290,7 @@ def send_discord_alert(ticker, price, rsi, ema_50, stop_loss, take_profit, score
     # Analysis Section (Clean Bullets)
     description += "📝 **Analysis**\n"
     for r in reasons:
-        description += f"• {r}\n"
+        description += f"• {r}\n" # Fixed: Removed redundant check
 
     # 6. Construct the Payload
     data = {
@@ -368,7 +368,7 @@ def check_market():
         # Calculate 200 SMA for Market
         vti_df['SMA_200'] = ta.sma(vti_df['Close'], length=200)
         
-        # Get last valid VTI price
+        # Get last valid VTI price (Fixed to use LAST COMPLETED candle)
         if not vti_df.empty and len(vti_df) > 200:
             
             # --- FIX: Determine correct index based on market status ---
@@ -380,7 +380,7 @@ def check_market():
             if len(vti_df) >= abs(vti_idx):
                 last_vti = vti_df.iloc[vti_idx]
                 if last_vti['Close'] < last_vti['SMA_200']:
-                    regime_penalty = 1 # BEAR MARKET: Require +1 score to alert
+                    regime_penalty = 1 
                     print(f"⚠️ Market Regime: BEARISH (VTI < 200 SMA). Increasing thresholds.")
                 else:
                     print(f"✅ Market Regime: BULLISH (VTI > 200 SMA).")
@@ -414,7 +414,7 @@ def check_market():
             
             if len(df_daily) < 50: continue
             
-            # --- FIX: SELECT STABLE DAILY ANCHOR ---
+            # --- FIX: SELECT STABLE DAILY ANCHOR (Image 2 Fix) ---
             # If market is open, use -2 (Yesterday's Close). 
             # If market is closed, use -1 (Today's Close).
             is_market_open = 0 < elapsed_minutes < 390
@@ -440,6 +440,13 @@ def check_market():
 
             if df_hourly['Close'].isnull().all(): continue
             df_hourly.dropna(subset=['Close'], inplace=True)
+
+            # --- TIMEZONE FIX (Image 3 Fix) ---
+            # Normalize to US/Eastern before ANY date comparisons to prevent "Ghost Candles"
+            if df_hourly.index.tz is None:
+                df_hourly.index = df_hourly.index.tz_localize('UTC') # Assume UTC
+            
+            df_hourly.index = df_hourly.index.tz_convert('US/Eastern')
 
             # --- CALCULATE HOURLY INDICATORS ---
             df_hourly['RSI'] = ta.rsi(df_hourly['Close'], length=14)
@@ -469,10 +476,10 @@ def check_market():
             last = df_hourly.iloc[-1]
             prev = df_hourly.iloc[-2]
 
-            # --- 🛡️ GHOST CANDLE FIX 🛡️ ---
+            # --- 🛡️ GHOST CANDLE FIX (Now Reliable) 🛡️ ---
             tz = pytz.timezone('US/Eastern')
             today_date = datetime.now(tz).date()
-            candle_date = last.name.date()
+            candle_date = last.name.date() # Now in Eastern Time
             
             if elapsed_minutes > 20 and candle_date != today_date:
                 continue
