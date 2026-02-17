@@ -370,12 +370,20 @@ def check_market():
         
         # Get last valid VTI price
         if not vti_df.empty and len(vti_df) > 200:
-            last_vti = vti_df.iloc[-1]
-            if last_vti['Close'] < last_vti['SMA_200']:
-                regime_penalty = 1 # BEAR MARKET: Require +1 score to alert
-                print(f"⚠️ Market Regime: BEARISH (VTI < 200 SMA). Increasing thresholds.")
-            else:
-                print(f"✅ Market Regime: BULLISH (VTI > 200 SMA).")
+            
+            # --- FIX: Determine correct index based on market status ---
+            # If market is OPEN (0-390 mins), iloc[-1] is fluctuating today. Use -2 (Yesterday).
+            # If market is CLOSED, iloc[-1] is finalized today. Use -1.
+            is_market_open = 0 < elapsed_minutes < 390
+            vti_idx = -2 if is_market_open else -1
+            
+            if len(vti_df) >= abs(vti_idx):
+                last_vti = vti_df.iloc[vti_idx]
+                if last_vti['Close'] < last_vti['SMA_200']:
+                    regime_penalty = 1 # BEAR MARKET: Require +1 score to alert
+                    print(f"⚠️ Market Regime: BEARISH (VTI < 200 SMA). Increasing thresholds.")
+                else:
+                    print(f"✅ Market Regime: BULLISH (VTI > 200 SMA).")
                 
     except Exception as e:
         print(f"Market Regime Check Skipped (VTI data missing or malformed): {e}")
@@ -406,9 +414,15 @@ def check_market():
             
             if len(df_daily) < 50: continue
             
-            # Get the Daily EMA value
-            # Note: We take the last available value.
-            daily_ema_value = float(df_daily['EMA_50'].iloc[-1])
+            # --- FIX: SELECT STABLE DAILY ANCHOR ---
+            # If market is open, use -2 (Yesterday's Close). 
+            # If market is closed, use -1 (Today's Close).
+            is_market_open = 0 < elapsed_minutes < 390
+            daily_idx = -2 if is_market_open else -1
+            
+            if len(df_daily) < abs(daily_idx): continue
+
+            daily_ema_value = float(df_daily['EMA_50'].iloc[daily_idx])
 
             # ==========================================
             # STEP B: PROCESS HOURLY DATA (TRIGGERS)
