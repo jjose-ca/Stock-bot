@@ -83,6 +83,11 @@ def get_relative_volume(ticker):
         # Filter RTH (Regular Trading Hours) for accurate VWAP
         df_rth = df.between_time('09:30', '16:00').copy()
 
+        # --- 🛡️ CRITICAL FIX: SAFETY CHECK FOR EMPTY DATAFRAME 🛡️ ---
+        if df_rth.empty:
+            return 1.0, None
+        # -----------------------------------------------------------
+
         # ---------------------------------------------------------
         # 1. CALCULATE INTRADAY VWAP (The "Gold Standard" for Direction)
         # ---------------------------------------------------------
