@@ -405,10 +405,10 @@ def check_market():
                 # Fallback: If columns are (Price, Ticker), access via xs
                 if isinstance(bulk_data.columns, pd.MultiIndex):
                     try:
-                           df = bulk_data.xs(ticker, level=1, axis=1)
+                            df = bulk_data.xs(ticker, level=1, axis=1)
                     except Exception:
-                           print(f"⚠️ No data found for {ticker} (Extraction Failed)")
-                           continue
+                            print(f"⚠️ No data found for {ticker} (Extraction Failed)")
+                            continue
                 else:
                     print(f"⚠️ No data found for {ticker}")
                     continue
@@ -462,8 +462,9 @@ def check_market():
             if len(df) < 50: continue 
             
             last = df.iloc[-1]
+            prev = df.iloc[-2]
             
-            # --- 🛡️ ROBUST DATA CHECK (UPDATED) 🛡️ ---
+            # --- 🛡️ ROBUST DATA CHECK (FIXED) 🛡️ ---
             tz = pytz.timezone('US/Eastern')
             now = datetime.now(tz)
             today_date = now.date()
@@ -473,26 +474,37 @@ def check_market():
             # Check for stale data (Market open > 20m, Weekday, Date mismatch)
             is_stale = (not is_weekend) and (elapsed_minutes > 20) and (candle_date != today_date)
 
-            price = float(last['Close']) # Default to candle close
-
-            # If stale, patch with live price instead of skipping
-            if is_stale:
-                print(f"⚠️ Stale Data for {ticker} (Last: {candle_date}). Patching with Live Price...")
-                try:
-                    live_price = yf.Ticker(ticker).fast_info['last_price']
-                    if live_price:
-                        price = float(live_price)
-                        print(f"   ✅ Live Price Patched: ${price:.2f}")
-                except Exception:
-                    print(f"   ⚠️ Live fetch failed. Using stale Close.")
-
-            prev = df.iloc[-2]
-            if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
-
-            # Note: 'price' is now potentially patched with live data
-            open_price = float(last['Open']) 
+            # 1. Initialize with Dataframe values (Default)
+            price = float(last['Close'])
+            open_price = float(last['Open'])
             day_high = float(last['High'])
             day_low = float(last['Low'])
+
+            # 2. Patch if Stale
+            if is_stale:
+                print(f"⚠️ Stale Data for {ticker} (Last: {candle_date}). Patching OHLC with Live Data...")
+                try:
+                    # FETCH ALL LIVE DATA (Price, Open, High, Low)
+                    fi = yf.Ticker(ticker).fast_info
+                    live_price = fi['last_price']
+                    live_open = fi['open']
+                    live_high = fi['day_high']
+                    live_low = fi['day_low']
+
+                    # Ensure we have valid numbers before overwriting
+                    if live_price and live_open and live_high and live_low:
+                        price = float(live_price)
+                        open_price = float(live_open)
+                        day_high = float(live_high)
+                        day_low = float(live_low)
+                        print(f"   ✅ Live Patched: Price ${price:.2f} | Open ${open_price:.2f} | Low ${day_low:.2f}")
+                    else:
+                         print("   ⚠️ Live data incomplete. Using stale data.")
+                except Exception as e:
+                    print(f"   ⚠️ Live fetch failed: {e}. Using stale Close.")
+            # -----------------------------------------------
+
+            if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
 
             rsi = float(last['RSI'])
             ema_50 = float(last['EMA_50'])
