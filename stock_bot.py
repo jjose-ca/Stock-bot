@@ -58,16 +58,16 @@ def get_market_minutes_elapsed():
     diff = (now - market_open).total_seconds() / 60
     return min(diff, 390)
 
-# --- HELPER: RELATIVE VOLUME (RVAT) ---
+# --- STEP 1 UPDATE: VWAP & MEDIAN CALCULATION ---
 def get_relative_volume(ticker):
-    """Calculates Relative Volume at Time (RVAT)."""
+    """Calculates Relative Volume (RVAT) and Current Intraday VWAP."""
     try:
-        time.sleep(1) # Safety delay to avoid rate limiting
+        time.sleep(1) # Safety delay
         
-        # FIX 1: Reduced lookback to 35 days (was 60d) to prevent API timeouts/brittleness
+        # Download 35 days of 5m data
         df = yf.download(ticker, period="35d", interval="5m", progress=False)
         
-        if df.empty or len(df) < 10: return 1.0 
+        if df.empty or len(df) < 10: return 1.0, None 
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -75,73 +75,84 @@ def get_relative_volume(ticker):
         df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce')
         df.dropna(subset=['Volume'], inplace=True)
         
-        # FIX 2: Filter for Regular Market Hours only (9:30 - 16:00)
-        # --- TIMEZONE FIX START ---
-        # yfinance returns UTC-aware indexes. Must convert to US/Eastern BEFORE filtering time.
+        # --- TIMEZONE FIX ---
         if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC') # Assume UTC if naive
-        
+            df.index = df.index.tz_localize('UTC')
         df.index = df.index.tz_convert('US/Eastern')
-        # --- TIMEZONE FIX END ---
         
-        df = df.between_time('09:30', '16:00')
+        # Filter RTH (Regular Trading Hours) for accurate VWAP
+        df_rth = df.between_time('09:30', '16:00').copy()
 
-        df['time_slot'] = df.index.time
-        df['date'] = df.index.date 
+        # ---------------------------------------------------------
+        # 1. CALCULATE INTRADAY VWAP (The "Gold Standard" for Direction)
+        # ---------------------------------------------------------
+        current_date = df_rth.index[-1].date()
+        today_data = df_rth[df_rth.index.date == current_date].copy()
+        
+        if not today_data.empty:
+            # Pandas TA VWAP requires High, Low, Close, Volume
+            today_data['VWAP'] = ta.vwap(today_data['High'], today_data['Low'], today_data['Close'], today_data['Volume'])
+            if today_data['VWAP'] is not None and not today_data['VWAP'].empty:
+                current_vwap = float(today_data['VWAP'].iloc[-1])
+            else:
+                current_vwap = None
+        else:
+            current_vwap = None
+        # ---------------------------------------------------------
 
-        # USE LAST COMPLETED CANDLE
-        if len(df) < 2: return 1.0
-        last_completed_bar = df.iloc[-2]
+        # 2. CALCULATE RELATIVE VOLUME
+        df_rth['time_slot'] = df_rth.index.time
+        df_rth['date'] = df_rth.index.date 
+
+        if len(df_rth) < 2: return 1.0, current_vwap
+        
+        last_completed_bar = df_rth.iloc[-2]
         check_time = last_completed_bar.name.time()
         check_date = last_completed_bar.name.date()
         check_vol = float(last_completed_bar['Volume'])
 
-        # Filter: Same time of day, excluding TODAY (check_date)
-        historical_at_time = df[df['time_slot'] == check_time]
+        historical_at_time = df_rth[df_rth['time_slot'] == check_time]
         history_only = historical_at_time[historical_at_time['date'] != check_date]
 
-        if history_only.empty: return 1.0
+        if history_only.empty: return 1.0, current_vwap
 
-        avg_vol = history_only['Volume'].mean()
-        if avg_vol == 0 or pd.isna(avg_vol): return 1.0
+        # UPDATE: Use Median instead of Mean to ignore one-off explosions
+        avg_vol = history_only['Volume'].median() 
+        
+        if avg_vol == 0 or pd.isna(avg_vol): return 1.0, current_vwap
 
-        return check_vol / avg_vol
+        return (check_vol / avg_vol), current_vwap
 
     except Exception as e:
-        print(f"⚠️ Volume calc failed for {ticker}: {e}")
-        return 1.0
+        print(f"⚠️ Volume/VWAP calc failed for {ticker}: {e}")
+        return 1.0, None
 
-# --- HELPER: EARNINGS CHECK (FIXED) ---
+# --- HELPER: EARNINGS CHECK ---
 def get_earnings_warning(ticker):
     """Checks if earnings are within 7 days using robust timezone handling."""
     try:
-        time.sleep(1)  # <--- CRITICAL FIX: Prevent Rate Limiting
+        time.sleep(1) 
         stock = yf.Ticker(ticker)
         cal = stock.calendar
         
         if cal is None: return False, ""
             
         earnings_date = None
-        # Handle Dictionary return (newer yfinance versions)
         if isinstance(cal, dict) and 'Earnings Date' in cal:
             earnings_date = cal['Earnings Date'][0]
-        # Handle DataFrame return (older versions)
         elif isinstance(cal, pd.DataFrame):
             if 'Earnings Date' in cal.columns:
                 earnings_date = cal.iloc[0]['Earnings Date']
-            elif not cal.empty: # Fallback for index-based dataframes
+            elif not cal.empty:
                 earnings_date = cal.iloc[0, 0] 
 
         if earnings_date is None: return False, ""
 
-        # Normalize to US/Eastern to match market time
         eastern = pytz.timezone('US/Eastern')
         
-        # Parse earnings date (handle both datetime and date objects)
         if isinstance(earnings_date, (datetime, pd.Timestamp)):
             earnings_date = pd.to_datetime(earnings_date).replace(tzinfo=eastern).date()
         else:
-            # If it's just a raw date object, assume it's correct
             earnings_date = pd.to_datetime(earnings_date).date()
 
         today = datetime.now(eastern).date()
@@ -153,13 +164,11 @@ def get_earnings_warning(ticker):
         return False, ""
 
     except Exception as e:
-        # print(f"Earnings check error for {ticker}: {e}") # Optional debug
         return False, ""
 
 # --- 1. ENHANCED SCORING ENGINE ---
-# This is the "One Source of Truth" for scoring.
-# ADDED: ema_9, ema_21 arguments
-def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, rel_vol, elapsed_minutes):
+# ADDED: intraday_vwap argument
+def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, rel_vol, elapsed_minutes, intraday_vwap=None):
     score = 0
     reasons = []
 
@@ -174,14 +183,12 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_widt
         score += 2
         reasons.append("🌊 Momentum Reset (RSI < 55)")
 
-    # B. TREND STRUCTURE (9/21 EMA) -- [NEW LOGIC FROM FILE B]
-    # 1. Momentum Alignment (Trend is Up)
+    # B. TREND STRUCTURE
     if ema_9 > ema_21:
         score += 1
         reasons.append("🚀 Bullish Trend (9 > 21 EMA)")
     
-    # 2. "Option A" Dip & Bounce Logic
-    # Did we touch the 21 EMA today (Low <= 21 EMA) AND are we currently above it?
+    # 21 EMA Bounce Logic
     if day_low <= (ema_21 * 1.005) and price > ema_21:
         score += 2
         reasons.append("⚡ 21 EMA Bounce (Perfect Pullback)")
@@ -202,22 +209,27 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_widt
         score += 1
         reasons.append("🔄 Improving Momentum")
         
-    # E. VOLATILITY (BB WIDTH FILTER)
-    if bb_width < 0.03: # Filter out squeezes/dead stocks
-        score -= 10 # Massive penalty to prevent alert
+    # E. VOLATILITY
+    if bb_width < 0.03: 
+        score -= 10
         reasons.append(f"⚠️ Low Volatility Squeeze (Width: {bb_width:.2f})")
     elif bb_width > 0.15:
         score += 1
         reasons.append("⚡ High Volatility Expansion")
 
-    # F. VOLUME HYBRID
+    # F. VOLUME HYBRID (Updated with VWAP Logic)
     if elapsed_minutes < 30:
         is_bullish = price > open_price
         method = "Green Candle"
     else:
-        midpoint = (day_high + day_low) / 2
-        is_bullish = price >= midpoint
-        method = "Upper Range"
+        # STEP 2 UPDATE: USE VWAP IF AVAILABLE
+        if intraday_vwap is not None:
+            is_bullish = price >= intraday_vwap
+            method = "VWAP"
+        else:
+            midpoint = (day_high + day_low) / 2
+            is_bullish = price >= midpoint
+            method = "Upper Range"
 
     if rel_vol > 1.2:
         if is_bullish:
@@ -229,9 +241,9 @@ def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_widt
 
     return score, reasons
 
-# --- 2. ALERT FUNCTION (VISUAL POLISH UPGRADE) ---
-# ADDED: ema_21 argument for display
-def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes):
+# --- 2. ALERT FUNCTION ---
+# ADDED: intraday_vwap argument
+def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes, intraday_vwap=None):
     # 1. Determine Color & Rating
     if score >= 8:
         color = 5763719  # Green (Strong Buy)
@@ -246,7 +258,7 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
     tz = pytz.timezone('US/Eastern')
     timestamp = datetime.now(tz).strftime('%I:%M %p EST')
 
-    # 3. Calculate Risk/Reward (Clean Math Change)
+    # 3. Calculate Risk/Reward
     risk = price - stop_loss
     reward = take_profit - price
     
@@ -260,18 +272,23 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
     
     # 4. Determine Status Strings
     rsi_status = "Oversold" if rsi < 35 else ("Weak" if rsi < 45 else "Neutral")
-    trend_status = "Above" if price > ema_50 else "Below"
     
-    # --- LOGIC FIX START: Direct Volume Direction Calculation ---
+    # --- STEP 2 LOGIC FIX: VWAP Direction ---
     midpoint = (day_high + day_low) / 2
-    is_bullish = price > open_price if elapsed_minutes < 30 else price >= midpoint
     
+    if elapsed_minutes < 30:
+        is_bullish = price > open_price
+    elif intraday_vwap is not None:
+        is_bullish = price >= intraday_vwap # The Superior Check
+    else:
+        is_bullish = price >= midpoint # Fallback
+
     vol_dir = "Buying" if is_bullish else "Selling"
             
     vol_status = "Normal"
     if rel_vol > 2.0: vol_status = f"Heavy {vol_dir}"
     elif rel_vol > 1.2: vol_status = f"Strong {vol_dir}"
-    # --- LOGIC FIX END ---
+    # ----------------------------------------
 
     # 5. Format the Description
     description = f"*Triggered at {timestamp}*\n\n"
@@ -279,7 +296,6 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
     if earnings_msg:
         description += f"{earnings_msg}\n\n"
     
-    # Trade Plan Section
     description += (
         f"📊 **Trade Plan**\n"
         f"• **Entry:** `${price:.2f}`\n"
@@ -288,18 +304,18 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
         f"• **Ratio:** `1:{risk_reward:.2f}` ⚖️\n\n"
     )
 
-    # Technicals Section [UPDATED TO INCLUDE 21 EMA]
+    vwap_str = f"${intraday_vwap:.2f}" if intraday_vwap else "N/A"
+
     description += (
         f"📉 **Technicals**\n"
         f"• **RSI:** `{rsi:.1f}` ({rsi_status})\n"
         f"• **Trend:** 21 EMA (`${ema_21:.2f}`) | 50 EMA ( `${ema_50:.2f}` )\n"
+        f"• **VWAP:** `{vwap_str}`\n"
         f"• **Volume:** `{rel_vol:.1f}x` ({vol_status})\n\n"
     )
 
-    # Analysis Section (Clean Bullets)
     description += "📝 **Analysis**\n"
     for r in reasons:
-        # Check if emoji exists, if not add a default bullet
         if not any(char in r for char in ["💎", "📉", "🌊", "🛡️", "📈", "🚀", "🔄", "🟢", "🔴"]):
             description += f"• {r}\n"
         else:
@@ -316,7 +332,7 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
                 "fields": [
                     {
                         "name": "🔗 Links", 
-                        "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})", # TradingView Removed
+                        "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})",
                         "inline": False
                     }
                 ],
@@ -325,13 +341,11 @@ def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profi
         ]
     }
     
-    # --- WEBHOOK ROBUSTNESS FIX ---
     if not WEBHOOK_URL:
         print("❌ Error: DISCORD_URL environment variable is missing.")
         return
 
     try:
-        # Added timeout to prevent hanging and raise_for_status for 4xx/5xx errors
         response = requests.post(WEBHOOK_URL, json=data, timeout=10)
         response.raise_for_status()
     except requests.exceptions.HTTPError as err:
@@ -348,13 +362,9 @@ def check_market():
     print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
     
     try:
-        # Auto-adjust: If only 1 ticker, yfinance returns flat DF. 
-        # We force it into a dict-like structure for consistency.
         bulk_data = yf.download(TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
         
-        # FIX: Normalize structure if only 1 ticker is queried
         if len(TICKERS) == 1:
-            # Create a dictionary mimicking the multi-ticker structure
             single_ticker = TICKERS[0]
             bulk_data = {single_ticker: bulk_data}
             
@@ -363,30 +373,24 @@ def check_market():
         return
 
     # --- FEEDBACK 1: MARKET REGIME CHECK (VTI) ---
-    # Check if VTI (Total Market) is above/below 200 SMA
     regime_penalty = 0
     
     try:
-        # Safe extraction attempt that handles Dict, MultiIndex, or Flat DF
         vti_df = bulk_data['VTI'].copy()
         
-        # --- FIX: Ensure VTI DataFrame is flat (MultiIndex Fix Part 1) ---
         if isinstance(vti_df.columns, pd.MultiIndex):
             vti_df.columns = vti_df.columns.get_level_values(0)
 
-        # If it's a flat DF (only columns like 'Close', 'Open'), ensure it has data
         if 'Close' not in vti_df.columns:
              pass
 
         vti_df.dropna(subset=['Close'], inplace=True)
-        # Calculate 200 SMA for Market
         vti_df['SMA_200'] = ta.sma(vti_df['Close'], length=200)
         
-        # Get last valid VTI price
         if not vti_df.empty and len(vti_df) > 200:
             last_vti = vti_df.iloc[-1]
             if last_vti['Close'] < last_vti['SMA_200']:
-                regime_penalty = 1 # BEAR MARKET: Require +1 score to alert
+                regime_penalty = 1 
                 print(f"⚠️ Market Regime: BEARISH (VTI < 200 SMA). Increasing thresholds.")
             else:
                 print(f"✅ Market Regime: BULLISH (VTI > 200 SMA).")
@@ -395,14 +399,12 @@ def check_market():
         print(f"Market Regime Check Skipped (VTI data missing or malformed): {e}")
 
     for ticker in TICKERS:
-        if ticker == 'VTI': continue # Skip the proxy ticker
+        if ticker == 'VTI': continue 
 
         try:
             try:
-                # --- FIX: Handle MultiIndex Chaos (MultiIndex Fix Part 2) ---
                 df = bulk_data[ticker].copy()
             except KeyError:
-                # Fallback: If columns are (Price, Ticker), access via xs
                 if isinstance(bulk_data.columns, pd.MultiIndex):
                     try:
                             df = bulk_data.xs(ticker, level=1, axis=1)
@@ -413,7 +415,6 @@ def check_market():
                     print(f"⚠️ No data found for {ticker}")
                     continue
             
-            # CRITICAL: Flatten columns if they are still MultiIndex
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
@@ -422,17 +423,12 @@ def check_market():
 
             # --- CALCULATE INDICATORS ---
             df['EMA_50'] = ta.ema(df['Close'], length=50)
-            df['EMA_21'] = ta.ema(df['Close'], length=21) # ADDED
-            df['EMA_9'] = ta.ema(df['Close'], length=9)   # ADDED
+            df['EMA_21'] = ta.ema(df['Close'], length=21) 
+            df['EMA_9'] = ta.ema(df['Close'], length=9)    
             df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # --- MACD FIX START ---
             macd = ta.macd(df['Close'])
             if macd is not None:
-                # pandas_ta returns columns like: MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
-                # We dynamically find the column starting with 'MACDh' to get the Histogram
-                
-                # FIX: Check if list is empty before accessing index 0
                 hist_cols = [c for c in macd.columns if c.startswith('MACDh')]
                 
                 if not hist_cols:
@@ -443,14 +439,12 @@ def check_market():
                 df['MACD_H'] = macd[hist_col]
             else:
                 continue
-            # --- MACD FIX END ---
 
             bb = ta.bbands(df['Close'], length=20, std=2)
             if bb is not None and not bb.empty:
                 df['BBL'] = bb.iloc[:, 0]
-                df['BBM'] = bb.iloc[:, 1] # Middle Band
-                df['BBU'] = bb.iloc[:, 2] # Upper Band
-                # --- NEW: BOLLINGER WIDTH CALCULATION ---
+                df['BBM'] = bb.iloc[:, 1] 
+                df['BBU'] = bb.iloc[:, 2] 
                 df['BB_WIDTH'] = (df['BBU'] - df['BBL']) / df['BBM']
             else:
                 df['BBL'] = pd.NA
@@ -458,40 +452,34 @@ def check_market():
             
             df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
-            # --- GET VALUES ---
             if len(df) < 50: continue 
             
             last = df.iloc[-1]
             prev = df.iloc[-2]
             
-            # --- 🛡️ ROBUST DATA CHECK (FIXED) 🛡️ ---
+            # --- 🛡️ ROBUST DATA CHECK 🛡️ ---
             tz = pytz.timezone('US/Eastern')
             now = datetime.now(tz)
             today_date = now.date()
             candle_date = last.name.date()
-            is_weekend = now.weekday() >= 5  # Sat=5, Sun=6
+            is_weekend = now.weekday() >= 5 
 
-            # Check for stale data (Market open > 20m, Weekday, Date mismatch)
             is_stale = (not is_weekend) and (elapsed_minutes > 20) and (candle_date != today_date)
 
-            # 1. Initialize with Dataframe values (Default)
             price = float(last['Close'])
             open_price = float(last['Open'])
             day_high = float(last['High'])
             day_low = float(last['Low'])
 
-            # 2. Patch if Stale
             if is_stale:
                 print(f"⚠️ Stale Data for {ticker} (Last: {candle_date}). Patching OHLC with Live Data...")
                 try:
-                    # FETCH ALL LIVE DATA (Price, Open, High, Low)
                     fi = yf.Ticker(ticker).fast_info
                     live_price = fi['last_price']
                     live_open = fi['open']
                     live_high = fi['day_high']
                     live_low = fi['day_low']
 
-                    # Ensure we have valid numbers before overwriting
                     if live_price and live_open and live_high and live_low:
                         price = float(live_price)
                         open_price = float(live_open)
@@ -502,72 +490,54 @@ def check_market():
                          print("   ⚠️ Live data incomplete. Using stale data.")
                 except Exception as e:
                     print(f"   ⚠️ Live fetch failed: {e}. Using stale Close.")
-            # -----------------------------------------------
 
             if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
 
             rsi = float(last['RSI'])
             ema_50 = float(last['EMA_50'])
-            ema_21 = float(last['EMA_21']) # ADDED
-            ema_9 = float(last['EMA_9'])   # ADDED
+            ema_21 = float(last['EMA_21']) 
+            ema_9 = float(last['EMA_9'])   
             bbl = float(last['BBL'])
-            bb_width = float(last['BB_WIDTH']) # New
+            bb_width = float(last['BB_WIDTH']) 
             
             macd_h = float(last['MACD_H'])
             prev_macd_h = float(prev['MACD_H'])
             atr = float(last['ATR'])
 
-            # --- 🚦 TREND FILTER (Safety First) [FROM FILE B] ---
-            # If price is below 50 EMA, we skip it (unless it's a massive capitulation RSI < 25)
-            # This prevents buying "cheap" stocks that are crashing.
             if price < ema_50 and rsi > 30:
                 continue
 
-            # --- TRIGGER LOGIC ---
             near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
             near_bb = abs(price - bbl) <= (bbl * 0.015)
-            # ADDED: Logic to detect Option A (21 EMA Bounce)
             near_21 = abs(price - ema_21) <= (ema_21 * 0.01)
 
-            # Updated trigger to include near_21 (for Option A) and increased RSI threshold to 60 (to match File B logic)
             if (near_ema or near_bb or near_21) and rsi < 60:
                 
                 # ==================================================
-                # 🚀 FEEDBACK 2: OPTIMIZED PRE-SCAN (THE FIX)
+                # PRE-SCAN (Optimistic)
                 # ==================================================
-                # We reuse the OFFICIAL scoring function, but pass "dummy" volume (1.0).
-                # This prevents "Logic Drift" because any change to calculate_confidence() automatically updates here.
-                
                 dummy_vol = 1.0 
-                # Passed new ema_9 and ema_21 arguments
-                base_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, dummy_vol, elapsed_minutes)
+                # Note: We pass None for intraday_vwap here because we haven't fetched it yet
+                base_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, dummy_vol, elapsed_minutes, intraday_vwap=None)
                 
-                # Threshold check (including Market Regime penalty)
                 pre_threshold = 3 + regime_penalty
-                
-                # FIX: Optimistic Pre-Scan (Assume max volume score of +2 to prevent false negatives)
                 potential_max_score = base_score + 2
 
                 if potential_max_score < pre_threshold:
-                    # Skip this ticker to save time/API calls
                     continue
 
                 # ==================================================
                 # ✅ PASSED PRE-SCAN: EXECUTE DEEP DIVE
                 # ==================================================
 
-                # 1. Check Volume (Only runs if Daily Score is promising)
-                rel_vol = get_relative_volume(ticker)
+                # 1. Check Volume AND Intraday VWAP (STEP 2 INTEGRATION)
+                # We unpack the tuple returned by get_relative_volume
+                rel_vol, intraday_vwap = get_relative_volume(ticker)
 
-                # 2. Check Earnings (NEW - Only check if setup is good)
+                # 2. Check Earnings
                 has_earnings_risk, earnings_msg = get_earnings_warning(ticker)
 
-                # ==================================================
-                # ✅ HYBRID FIX: Structure Stop + Safe Math
-                # ==================================================
-
-                # 1. DEFINE STRUCTURE (The "Floor" for the trade)
-                # We choose the most logical support based on what triggered the alert.
+                # 1. DEFINE STRUCTURE
                 if near_bb:
                     support_level = bbl
                 elif near_21:
@@ -575,36 +545,30 @@ def check_market():
                 else:
                     support_level = ema_50
 
-                # 2. CALCULATE STOP LOSS (Dynamic Risk)
-                # We place the stop slightly below the support structure.
-                # If volatility (ATR) is high, we give it more room.
+                # 2. CALCULATE STOP LOSS
                 stop_buffer = atr * 0.5
                 stop_loss = support_level - stop_buffer
 
-                # Sanity Check: Ensure stop is never above price (in case price dipped hard)
                 if stop_loss >= price:
-                      stop_loss = price - atr  # Fallback to pure ATR stop
+                      stop_loss = price - atr 
 
-                # 3. CALCULATE TAKE PROFIT (Reward)
-                # We aim for a 2.0 ATR move from the entry price
+                # 3. CALCULATE TAKE PROFIT
                 take_profit = price + (atr * 2.0)
 
-                # 4. CALCULATE RISK/REWARD (The "Clean" Way)
+                # 4. CALCULATE RISK/REWARD
                 risk_per_share = price - stop_loss
                 reward_per_share = take_profit - price
 
                 if risk_per_share > 0:
                     rr_ratio = reward_per_share / risk_per_share
                 else:
-                    rr_ratio = 0.0 # Avoid division by zero errors
+                    rr_ratio = 0.0 
 
-                # 3. Final Score (Using REAL volume)
-                # Passed new ema_9 and ema_21 arguments
-                score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, rel_vol, elapsed_minutes)
+                # 3. Final Score (Using REAL volume AND REAL VWAP)
+                score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, rel_vol, elapsed_minutes, intraday_vwap=intraday_vwap)
                 
-                # 4. Apply Earnings Penalty
                 if has_earnings_risk:
-                    score -= 2 # Penalize risky setups
+                    score -= 2 
 
                 # --- TIME & FRIDAY THRESHOLD ---
                 min_score_needed = 6 
@@ -613,11 +577,9 @@ def check_market():
                 is_friday = datetime.now(tz).weekday() == 4
                 if is_friday and elapsed_minutes > 270: min_score_needed += 1
 
-                # Apply Market Regime Penalty
                 min_score_needed += regime_penalty
                 
                 # 5. Risk/Reward Filter
-                # This filters out "bad" structure trades where support is too far away
                 if rr_ratio < 1.5:
                       print(f"📉 {ticker} Skipped: Poor Risk/Reward ({rr_ratio:.2f})")
                       continue
@@ -625,7 +587,7 @@ def check_market():
                 print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x) (RR: {rr_ratio:.2f})")
                 
                 if score >= min_score_needed:
-                    send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes)
+                    send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes, intraday_vwap=intraday_vwap)
 
         except Exception as e:
             print(f"Error processing {ticker}: {e}")
