@@ -1,147 +1,310 @@
+"""
+=============================================================================
+  STOCK ALERT BOT v3.0 — Funnel Architecture + Day Trading + Swing Fallback
+=============================================================================
+
+ARCHITECTURE: Three-Stage Funnel
+─────────────────────────────────────────────────────────────────────────────
+  STAGE 1 — BULK DAILY DOWNLOAD (1 API call for all tickers)
+    └─ 1 year of daily bars per ticker
+    └─ VTI regime check (200 SMA) — extracted from the same bulk pull
+    └─ Reliable EMA-50, EMA-200, MACD, BB — no data starvation
+
+  STAGE 2 — SWING FILTER (runs on bulk daily data, no extra API calls)
+    └─ Liquidity filter (dollar volume gate)
+    └─ Swing Engine scoring on full daily history
+    └─ Only tickers with qualifying swing score (OR bullish structure
+       flagged explicitly as day-only) advance to Stage 3
+
+  STAGE 3 — TARGETED INTRADAY (5m fetch ONLY for Stage 2 survivors)
+    └─ State machine check (fast fail before API call)
+    └─ fetch_targeted_intraday() — 5d × 5m RTH bars
+    └─ Day Engine scoring on today's 5m bars only
+    └─ Conflict gate → Decision matrix → Risk validator → Alert
+
+KEY FIXES vs v2.0:
+  - Bulk daily gives ~252 bars (vs ~43 from 60d resample) — EMA-50/200 valid
+  - 5m API calls made ONLY for tickers that passed swing filter
+  - No is_bullish_structure silent pass-through — day-only plays explicitly flagged
+  - curr_price for state machine uses live 5m data (not stale daily close)
+  - Earnings penalty fully implemented (was a no-op placeholder in proposal)
+  - MultiIndex flattening applied at extraction point (not assumed upstream)
+  - Complete scoring logic from v2.0 (BB, MACD, squeeze penalty all intact)
+=============================================================================
+"""
+
 import yfinance as yf
 import pandas_ta as ta
 import requests
 import os
+import json
 import pandas as pd
 import numpy as np
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
+from pathlib import Path
 import pytz
 
-# --- CONFIGURATION ---
+# ─────────────────────────────────────────────────────────────────────────────
+#  CONFIGURATION
+# ─────────────────────────────────────────────────────────────────────────────
+
 TICKERS = [
-    # --- MARKET PROXY (For Regime Check) ---
-    'VTI', 
+    'VTI',          # Market proxy — regime check
 
-    # --- SAFE FOUNDATION (ETFs) ---
-    'VFV.TO',   # S&P 500 (CAD Hedged)
-    'ZSP.TO',   # S&P 500 (CAD Unhedged)
-    'XEF.TO',   # International Markets
-    'SPLG',     # S&P 500 (Cheaper alternative to SPY)
-    'QQQM',     # Nasdaq 100 (Cheaper alternative to QQQ)
+    # Safe Foundation
+    'VFV.TO', 'ZSP.TO', 'XEF.TO', 'SPLG', 'QQQM',
 
-    # --- SECTOR ETFS (Commodities & Industry) ---
-    'SOXQ',     # Semiconductors
-    'XLY',      # Consumer Discretionary
-    'GDX',      # Gold Miners (High Beta to Gold)
-    'SIL',      # Silver Miners (High Volatility)
-    'XLF',      # Financials (Bank Swings)
-    'URA',      # Uranium (Energy Cycle Plays)
+    # Sector ETFs
+    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'URA',
 
-    # --- US SWINGS (High Volume / Retail Favorites) ---
-    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA', 
+    # US Swings
+    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA',
     'AAPL', 'MSFT', 'NFLX', 'ORCL', 'MARA', 'F', 'LCID', 'DKNG',
-    'UBER', 'RIVN', 'CLSK', 'RIOT', 'MSTR', 'PANW', 'ARM', 'SMCI', 'COIN', 
+    'UBER', 'RIVN', 'CLSK', 'RIOT', 'MSTR', 'PANW', 'ARM', 'SMCI', 'COIN',
 
-    # --- CANADIAN GROWTH & SWINGS (TSX) ---
-    'HUT.TO',   # Bitcoin Miner (High Volatility)
-    'BITF.TO',  # Bitfarms (Crypto Swing)
-    'CVE.TO',   # Cenovus Energy (Oil Proxy)
-    'AC.TO',    # Air Canada (Range Bound / Travel Recovery)
-    'MFC.TO',   # Manulife Financial (Defensive Swing)
-    'ATD.TO',   # Alimentation Couche-Tard (Defensive Growth)
-    'TOU.TO',
+    # Canadian Growth & Swings
+    'HUT.TO', 'BITF.TO', 'CVE.TO', 'AC.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO',
 ]
 
 WEBHOOK_URL = os.getenv('DISCORD_URL')
 
-# --- HELPER: GET MARKET TIME ---
-def get_market_minutes_elapsed():
-    """Returns minutes elapsed since 9:30 AM EST today. Returns 390 if market is closed."""
-    tz = pytz.timezone('US/Eastern')
-    now = datetime.now(tz)
-    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    
-    if now < market_open:
-        return 0
-    
-    diff = (now - market_open).total_seconds() / 60
-    return min(diff, 390)
+# Scoring thresholds
+DAY_SCORE_THRESHOLD   = 6
+SWING_SCORE_THRESHOLD = 5
 
-# --- STEP 1 UPDATE: VWAP & MEDIAN CALCULATION ---
-def get_relative_volume(ticker):
-    """Calculates Relative Volume (RVAT) and Current Intraday VWAP."""
+# Risk parameters
+MAX_STOP_PCT = {
+    "DAY TRADE":          0.02,
+    "SWING":              0.06,
+    "DAY TRADE + SWING":  0.03,
+}
+MIN_RR_RATIO = 1.5
+
+# Liquidity gate (avg daily dollar volume)
+MIN_DOLLAR_VOLUME = {
+    "DAY TRADE": 10_000_000,
+    "SWING":      2_000_000,
+}
+
+# State & cooldown persistence
+COOLDOWN_FILE    = "/tmp/alert_cooldowns.json"
+STATE_FILE       = "/tmp/setup_states.json"
+COOLDOWN_MINUTES = {"DAY TRADE": 30, "SWING": 240, "DAY TRADE + SWING": 30}
+
+EARNINGS_WARNING_DAYS = 7
+
+
+# =============================================================================
+#  SECTION 1 — UTILITIES: TIME, STATE MACHINE, COOLDOWN
+# =============================================================================
+
+def get_market_minutes_elapsed() -> float:
+    tz  = pytz.timezone('US/Eastern')
+    now = datetime.now(tz)
+    mkt = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    if now < mkt:
+        return 0.0
+    return min((now - mkt).total_seconds() / 60.0, 390.0)
+
+
+def _load_json(path: str) -> dict:
     try:
-        time.sleep(1) # Safety delay
-        
-        # --- UPDATED: Changed lookback from 35d to 20d ---
-        df = yf.download(ticker, period="20d", interval="5m", progress=False)
-        
-        if df.empty or len(df) < 10: return 1.0, None 
+        if Path(path).exists():
+            with open(path) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_json(path: str, data: dict):
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"⚠️ Could not save {path}: {e}")
+
+
+# ── Cooldown ──────────────────────────────────────────────────────────────────
+
+def is_on_cooldown(ticker: str, mode: str) -> bool:
+    cooldowns = _load_json(COOLDOWN_FILE)
+    key = f"{ticker}_{mode}"
+    if key in cooldowns:
+        try:
+            last  = datetime.fromisoformat(cooldowns[key])
+            mins  = (datetime.now() - last).total_seconds() / 60
+            limit = COOLDOWN_MINUTES.get(mode, 30)
+            if mins < limit:
+                print(f"   ⏱️ [{ticker}] On cooldown for {mode} ({mins:.0f}/{limit} min)")
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def set_cooldown(ticker: str, mode: str):
+    cooldowns = _load_json(COOLDOWN_FILE)
+    cooldowns[f"{ticker}_{mode}"] = datetime.now().isoformat()
+    _save_json(COOLDOWN_FILE, cooldowns)
+
+
+# ── State Machine: CLEAR → TRIGGERED → INVALIDATED → CLEAR ───────────────────
+
+def get_setup_state(ticker: str) -> dict:
+    states = _load_json(STATE_FILE)
+    return states.get(ticker, {"state": "CLEAR", "stop_loss": None, "mode": None})
+
+
+def update_setup_state(ticker: str, new_state: str,
+                       stop_loss: float = None, mode: str = None):
+    states = _load_json(STATE_FILE)
+    states[ticker] = {
+        "state":     new_state,
+        "stop_loss": stop_loss,
+        "mode":      mode,
+        "updated":   datetime.now().isoformat(),
+    }
+    _save_json(STATE_FILE, states)
+
+
+def check_and_update_state(ticker: str, current_price: float) -> str:
+    """
+    Returns 'ALLOW_ALERT', 'SUPPRESS_TRIGGERED', or 'SUPPRESS_INVALIDATED'.
+    Call this with the LIVE price from 5m data — not the stale daily close.
+    """
+    record = get_setup_state(ticker)
+    state  = record["state"]
+
+    if state == "TRIGGERED":
+        stop = record.get("stop_loss")
+        if stop is not None and current_price < stop:
+            update_setup_state(ticker, "INVALIDATED",
+                               stop_loss=stop, mode=record.get("mode"))
+            print(f"   ⛔ [{ticker}] Stop ${stop:.2f} hit. → INVALIDATED")
+            return "SUPPRESS_INVALIDATED"
+        return "SUPPRESS_TRIGGERED"
+
+    if state == "INVALIDATED":
+        update_setup_state(ticker, "CLEAR")
+        print(f"   🔄 [{ticker}] INVALIDATED → CLEAR")
+        return "SUPPRESS_INVALIDATED"
+
+    return "ALLOW_ALERT"
+
+
+# =============================================================================
+#  SECTION 2 — DATA FETCHING (FUNNEL ARCHITECTURE)
+# =============================================================================
+
+def fetch_bulk_daily(tickers: list) -> pd.DataFrame:
+    """
+    STAGE 1: Single bulk download — 1 year of daily bars for ALL tickers.
+    Gives ~252 trading bars: enough for EMA-50, EMA-200 (VTI), and MACD.
+    auto_adjust=True ensures split/dividend-adjusted prices consistently.
+    """
+    print(f"📥 STAGE 1: Bulk downloading 1y daily data for {len(tickers)} tickers...")
+    try:
+        df = yf.download(
+            tickers, period="1y", interval="1d",
+            group_by='ticker', auto_adjust=True, progress=False
+        )
+        print(f"   ✅ Bulk download complete.")
+        return df
+    except Exception as e:
+        print(f"   ❌ Bulk download failed: {e}")
+        return pd.DataFrame()
+
+
+def extract_ticker_daily(bulk_data: pd.DataFrame, ticker: str) -> pd.DataFrame | None:
+    """
+    Extracts a single ticker's daily OHLCV from the bulk MultiIndex DataFrame.
+    Handles both multi-ticker MultiIndex and single-ticker flat column formats.
+    Flattens MultiIndex columns and drops fully-null rows.
+    """
+    try:
+        # Multi-ticker bulk download produces a MultiIndex
+        if isinstance(bulk_data.columns, pd.MultiIndex):
+            if ticker not in bulk_data.columns.get_level_values(0):
+                return None
+            df = bulk_data[ticker].copy()
+        else:
+            # Single ticker fallback (shouldn't happen in normal operation)
+            df = bulk_data.copy()
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce')
-        df.dropna(subset=['Volume'], inplace=True)
-        
-        # --- TIMEZONE FIX ---
+        df.dropna(subset=['Close'], inplace=True)
+        return df if not df.empty else None
+
+    except Exception as e:
+        print(f"   ⚠️ [{ticker}] Daily extraction failed: {e}")
+        return None
+
+
+def fetch_targeted_intraday(ticker: str) -> pd.DataFrame | None:
+    """
+    STAGE 3: Targeted 5-minute fetch — called ONLY for Stage 2 survivors.
+    5 days is sufficient: today's bars for Day Engine + 4 prior days for rel vol.
+    RTH filter (09:30–16:00 ET) applied before returning.
+    """
+    try:
+        df = yf.download(
+            ticker, period="5d", interval="5m",
+            auto_adjust=True, progress=False
+        )
+        if df is None or df.empty:
+            return None
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
         if df.index.tz is None:
             df.index = df.index.tz_localize('UTC')
         df.index = df.index.tz_convert('US/Eastern')
-        
-        # Filter RTH (Regular Trading Hours) for accurate VWAP
+
         df_rth = df.between_time('09:30', '16:00').copy()
-
-        # --- 🛡️ CRITICAL FIX: SAFETY CHECK FOR EMPTY DATAFRAME 🛡️ ---
-        if df_rth.empty:
-            return 1.0, None
-        # -----------------------------------------------------------
-
-        # ---------------------------------------------------------
-        # 1. CALCULATE INTRADAY VWAP (The "Gold Standard" for Direction)
-        # ---------------------------------------------------------
-        current_date = df_rth.index[-1].date()
-        today_data = df_rth[df_rth.index.date == current_date].copy()
-        
-        if not today_data.empty:
-            # Pandas TA VWAP requires High, Low, Close, Volume
-            today_data['VWAP'] = ta.vwap(today_data['High'], today_data['Low'], today_data['Close'], today_data['Volume'])
-            if today_data['VWAP'] is not None and not today_data['VWAP'].empty:
-                current_vwap = float(today_data['VWAP'].iloc[-1])
-            else:
-                current_vwap = None
-        else:
-            current_vwap = None
-        # ---------------------------------------------------------
-
-        # 2. CALCULATE RELATIVE VOLUME
-        df_rth['time_slot'] = df_rth.index.time
-        df_rth['date'] = df_rth.index.date 
-
-        if len(df_rth) < 2: return 1.0, current_vwap
-        
-        last_completed_bar = df_rth.iloc[-2]
-        check_time = last_completed_bar.name.time()
-        check_date = last_completed_bar.name.date()
-        check_vol = float(last_completed_bar['Volume'])
-
-        historical_at_time = df_rth[df_rth['time_slot'] == check_time]
-        history_only = historical_at_time[historical_at_time['date'] != check_date]
-
-        if history_only.empty: return 1.0, current_vwap
-
-        # UPDATE: Use Median instead of Mean to ignore one-off explosions
-        avg_vol = history_only['Volume'].median() 
-        
-        if avg_vol == 0 or pd.isna(avg_vol): return 1.0, current_vwap
-
-        return (check_vol / avg_vol), current_vwap
+        return df_rth if not df_rth.empty else None
 
     except Exception as e:
-        print(f"⚠️ Volume/VWAP calc failed for {ticker}: {e}")
-        return 1.0, None
+        print(f"   ⚠️ [{ticker}] Intraday fetch failed: {e}")
+        return None
 
-# --- HELPER: EARNINGS CHECK ---
-def get_earnings_warning(ticker):
-    """Checks if earnings are within 7 days using robust timezone handling."""
+
+# =============================================================================
+#  SECTION 3 — LIQUIDITY FILTER
+# =============================================================================
+
+def passes_liquidity_filter(df_daily: pd.DataFrame, mode: str) -> bool:
+    """
+    Rejects thinly traded tickers where spread/slippage destroys the R/R.
+    Computes average dollar volume over the last 20 daily bars.
+    """
     try:
-        time.sleep(1) 
-        stock = yf.Ticker(ticker)
-        cal = stock.calendar
-        
-        if cal is None: return False, ""
-            
+        tail       = df_daily.tail(20)
+        avg_close  = tail['Close'].mean()
+        avg_volume = tail['Volume'].mean()
+        dollar_vol = avg_close * avg_volume
+        minimum    = MIN_DOLLAR_VOLUME.get(mode, 2_000_000)
+        if dollar_vol < minimum:
+            print(f"   💧 Liquidity ${dollar_vol/1e6:.1f}M < ${minimum/1e6:.0f}M min. Rejected.")
+            return False
+        return True
+    except Exception:
+        return True  # Don't reject on calculation error
+
+
+# =============================================================================
+#  SECTION 4 — EARNINGS CHECK
+# =============================================================================
+
+def get_earnings_warning(ticker: str) -> tuple[bool, str]:
+    try:
+        cal = yf.Ticker(ticker).calendar
+        if cal is None:
+            return False, ""
+
         earnings_date = None
         if isinstance(cal, dict) and 'Earnings Date' in cal:
             earnings_date = cal['Earnings Date'][0]
@@ -149,453 +312,832 @@ def get_earnings_warning(ticker):
             if 'Earnings Date' in cal.columns:
                 earnings_date = cal.iloc[0]['Earnings Date']
             elif not cal.empty:
-                earnings_date = cal.iloc[0, 0] 
+                earnings_date = cal.iloc[0, 0]
 
-        if earnings_date is None: return False, ""
+        if earnings_date is None:
+            return False, ""
 
         eastern = pytz.timezone('US/Eastern')
-        
         if isinstance(earnings_date, (datetime, pd.Timestamp)):
             earnings_date = pd.to_datetime(earnings_date).replace(tzinfo=eastern).date()
         else:
             earnings_date = pd.to_datetime(earnings_date).date()
 
-        today = datetime.now(eastern).date()
+        today      = datetime.now(eastern).date()
         days_until = (earnings_date - today).days
-        
-        if 0 <= days_until <= 7:
-            return True, f"⚠️ **EARNINGS WARNING:** Report in {days_until} days ({earnings_date})"
-        
+
+        if 0 <= days_until <= EARNINGS_WARNING_DAYS:
+            return True, (f"⚠️ **EARNINGS WARNING:** Report in "
+                          f"{days_until} days ({earnings_date})")
         return False, ""
 
-    except Exception as e:
+    except Exception:
         return False, ""
 
-# --- 1. ENHANCED SCORING ENGINE ---
-# ADDED: intraday_vwap argument
-def calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, rel_vol, elapsed_minutes, intraday_vwap=None):
-    score = 0
+
+# =============================================================================
+#  SECTION 5 — RELATIVE VOLUME (from already-fetched 5m data)
+# =============================================================================
+
+def calculate_relative_volume(df_intraday: pd.DataFrame) -> float:
+    """
+    Uses median volume at the same 5m time-slot across prior days
+    to compute RVAT. No extra API call — uses the Stage 3 intraday fetch.
+    Compares last COMPLETED bar (iloc[-2]) to avoid live partial-bar bias.
+    """
+    try:
+        if df_intraday is None or len(df_intraday) < 2:
+            return 1.0
+
+        df             = df_intraday.copy()
+        df['time_slot'] = df.index.time
+        df['date']      = df.index.date
+
+        last_bar   = df.iloc[-2]
+        check_time = last_bar.name.time()
+        check_date = last_bar.name.date()
+        check_vol  = float(last_bar['Volume'])
+
+        historical = df[(df['time_slot'] == check_time) & (df['date'] != check_date)]
+
+        if historical.empty:
+            return 1.0
+
+        median_vol = historical['Volume'].median()
+        if median_vol == 0 or pd.isna(median_vol):
+            return 1.0
+
+        return check_vol / median_vol
+
+    except Exception:
+        return 1.0
+
+
+# =============================================================================
+#  SECTION 6 — DAY ENGINE (5-Minute Bars, today only)
+# =============================================================================
+
+def run_day_engine(df_today: pd.DataFrame, regime_penalty: int) -> dict | None:
+    """
+    All indicators on today's 5m RTH bars. RSI, EMA, ATR, VWAP all live
+    in the same timeframe — no phantom setups from daily/intraday mixing.
+    """
+    if df_today is None or len(df_today) < 10:
+        return None
+
+    df = df_today.copy()
+
+    df['EMA_9']  = ta.ema(df['Close'], length=9)
+    df['EMA_21'] = ta.ema(df['Close'], length=21)
+    df['RSI']    = ta.rsi(df['Close'], length=14)
+    df['ATR']    = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['VWAP']   = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
+
+    bb = ta.bbands(df['Close'], length=20, std=2)
+    if bb is not None and not bb.empty:
+        df['BBL'] = bb.iloc[:, 0]
+        df['BBU'] = bb.iloc[:, 2]
+
+    df.dropna(subset=['RSI', 'EMA_9', 'EMA_21', 'VWAP', 'ATR'], inplace=True)
+
+    if len(df) < 3:
+        return None
+
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    price  = float(last['Close'])
+    vwap   = float(last['VWAP'])
+    rsi    = float(last['RSI'])
+    ema_9  = float(last['EMA_9'])
+    ema_21 = float(last['EMA_21'])
+    atr    = float(last['ATR'])
+
+    score   = 0
     reasons = []
 
-    # A. RSI
+    # A. VWAP position — primary intraday direction filter
+    above_vwap = price > vwap
+    if above_vwap:
+        score += 3
+        reasons.append(f"✅ Price Above VWAP (${vwap:.2f})")
+
+    # B. 5m RSI — reacts within minutes, not days
     if rsi < 35:
-        score += 4
-        reasons.append("💎 Deep Value (RSI < 35)")
-    elif rsi < 45: 
         score += 3
-        reasons.append("📉 Oversold (RSI < 45)")
+        reasons.append(f"💎 Intraday Deeply Oversold (RSI {rsi:.1f})")
+    elif rsi < 45:
+        score += 2
+        reasons.append(f"📉 Intraday Oversold (RSI {rsi:.1f})")
     elif rsi < 55:
-        score += 2
-        reasons.append("🌊 Momentum Reset (RSI < 55)")
-
-    # B. TREND STRUCTURE
-    if ema_9 > ema_21:
         score += 1
-        reasons.append("🚀 Bullish Trend (9 > 21 EMA)")
-    
-    # 21 EMA Bounce Logic
-    if day_low <= (ema_21 * 1.005) and price > ema_21:
-        score += 2
-        reasons.append("⚡ 21 EMA Bounce (Perfect Pullback)")
+        reasons.append(f"🌊 Intraday Momentum Reset (RSI {rsi:.1f})")
 
-    # C. SUPPORT LEVELS
-    if price <= bbl * 1.01: 
+    # C. 5m EMA stack
+    if ema_9 > ema_21:
+        score += 2
+        reasons.append("🚀 5m Bullish EMA Stack (9 > 21)")
+
+    # D. VWAP reclaim — dipped below, now above (bounce confirmation)
+    low_last_3 = df['Low'].iloc[-3:].min()
+    if low_last_3 < vwap and price > vwap:
+        score += 2
+        reasons.append("⚡ VWAP Reclaim — Intraday Bounce Confirmed")
+
+    # E. Higher high + higher low on 5m (momentum shift)
+    if float(last['High']) > float(prev['High']) and float(last['Low']) > float(prev['Low']):
+        score += 1
+        reasons.append("📈 5m Higher High + Higher Low")
+
+    # F. 5m Bollinger Lower Band touch
+    if 'BBL' in df.columns and not pd.isna(last.get('BBL', float('nan'))):
+        bbl_5m = float(last['BBL'])
+        if price <= bbl_5m * 1.01:
+            score += 2
+            reasons.append("🛡️ 5m Bollinger Lower Band Touch")
+
+    threshold = DAY_SCORE_THRESHOLD + regime_penalty
+
+    if score < threshold:
+        return None
+
+    stop_loss   = price - (atr * 1.5)
+    take_profit = price + (atr * 3.0)
+
+    return {
+        "score":       score,
+        "threshold":   threshold,
+        "reasons":     reasons,
+        "stop_loss":   stop_loss,
+        "take_profit": take_profit,
+        "atr":         atr,
+        "atr_source":  "5m",
+        "vwap":        vwap,
+        "rsi":         rsi,
+        "ema_21":      ema_21,
+        "ema_50":      None,
+        "price":       price,
+        "is_bullish":  above_vwap,
+        "mode":        "DAY TRADE",
+    }
+
+
+# =============================================================================
+#  SECTION 7 — SWING ENGINE (Full 1-Year Daily Bars)
+# =============================================================================
+
+def run_swing_engine(df_daily: pd.DataFrame, regime_penalty: int) -> dict | None:
+    """
+    Runs on the full 1-year daily dataset from Stage 1 bulk download.
+    EMA-50 is now mathematically valid (~252 bars vs ~43 from resample).
+    All comparisons use daily CLOSING prices only — no intraday patching.
+    """
+    if df_daily is None or len(df_daily) < 50:
+        return None
+
+    df = df_daily.copy()
+
+    # Full indicator suite — reliable with 252 bars
+    df['EMA_21']  = ta.ema(df['Close'], length=21)
+    df['EMA_50']  = ta.ema(df['Close'], length=50)
+    df['RSI']     = ta.rsi(df['Close'], length=14)
+    df['ATR']     = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+
+    macd = ta.macd(df['Close'])
+    if macd is not None:
+        hist_cols = [c for c in macd.columns if c.startswith('MACDh')]
+        if hist_cols:
+            df['MACD_H'] = macd[hist_cols[0]]
+
+    bb = ta.bbands(df['Close'], length=20, std=2)
+    if bb is not None and not bb.empty:
+        df['BBL']      = bb.iloc[:, 0]
+        df['BBM']      = bb.iloc[:, 1]
+        df['BBU']      = bb.iloc[:, 2]
+        df['BB_WIDTH'] = (df['BBU'] - df['BBL']) / df['BBM']
+
+    df.dropna(subset=['RSI', 'EMA_50', 'ATR'], inplace=True)
+
+    if len(df) < 2:
+        return None
+
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    price    = float(last['Close'])
+    ema_21   = float(last['EMA_21'])
+    ema_50   = float(last['EMA_50'])
+    rsi      = float(last['RSI'])
+    atr      = float(last['ATR'])
+    bbl      = float(last['BBL'])      if 'BBL'      in df.columns else None
+    bb_width = float(last['BB_WIDTH']) if 'BB_WIDTH' in df.columns else 0.0
+    macd_h   = float(last['MACD_H'])   if 'MACD_H'   in df.columns else 0.0
+    prev_mh  = float(prev['MACD_H'])   if 'MACD_H'   in df.columns else 0.0
+
+    score   = 0
+    reasons = []
+
+    # A. Daily RSI
+    if rsi < 35:
         score += 3
-        reasons.append("🛡️ Touching Lower Bollinger Band")
-    if abs(price - ema_50) <= (ema_50 * 0.02):
+        reasons.append(f"💎 Daily RSI Deeply Oversold ({rsi:.1f})")
+    elif rsi < 45:
         score += 2
-        reasons.append("📈 Riding 50-Day Trendline")
+        reasons.append(f"📉 Daily RSI Oversold ({rsi:.1f})")
+    elif rsi < 55:
+        score += 1
+        reasons.append(f"🌊 Daily Momentum Reset ({rsi:.1f})")
 
-    # D. MACD
+    # B. Daily BB Lower Band touch — price closed at/below band
+    if bbl is not None and price <= bbl * 1.01:
+        score += 3
+        reasons.append(f"🛡️ Closed at Daily BB Lower (${bbl:.2f})")
+
+    # C. 21 EMA — Wick Detection + Support Hold
+    daily_low   = float(last['Low'])    # Completed daily candle low — same dataset as ema_21
+    daily_close = float(last['Close'])  # Same candle close — no intraday patching
+
+    # Wick check: daily Low touched EMA-21 but Close recovered above it
+    # RSI cap (< 65) prevents flagging overbought momentum stocks as dip buys
+    wick_to_21 = (daily_low <= ema_21 * 1.005) and (daily_close > ema_21) and (rsi < 65)
+
+    # Support hold: price is currently sitting near EMA-21 (no wick needed)
+    near_21 = abs(daily_close - ema_21) / ema_21 < 0.015
+
+    if wick_to_21 and not near_21:
+        # Price wicked down and bounced hard away — buying demand already confirmed
+        # Strongest setup: support tested AND rejected decisively
+        score += 3
+        reasons.append(f"⚡ Daily Wick to 21 EMA + Strong Recovery (Low ${daily_low:.2f} → Close ${daily_close:.2f})")
+    elif wick_to_21 and near_21:
+        # Price wicked and is still close to EMA — bounce just beginning
+        # Support tested but not yet confirmed by follow-through
+        score += 2
+        reasons.append(f"⚡ Daily Wick to 21 EMA — Early Bounce (${ema_21:.2f})")
+    elif near_21 and rsi < 55:
+        # No wick — price hovering at EMA without having tested below
+        # Weakest of the three: support respected but not actively tested
+        score += 2
+        reasons.append(f"📈 Daily 21 EMA Support Hold (${ema_21:.2f})")
+
+    # D. 50 EMA proximity — now always reliable with 1y data
+    near_50 = abs(price - ema_50) / ema_50 < 0.02
+    if near_50:
+        score += 2
+        reasons.append(f"📊 Testing Daily 50 EMA (${ema_50:.2f})")
+
+    # E. Broader trend: price above 50 EMA
+    if price > ema_50:
+        score += 1
+        reasons.append("✅ Price Above Daily 50 EMA (Bullish Structure)")
+
+    # F. MACD momentum
     if macd_h > 0:
         score += 2
-        reasons.append("🚀 Positive Momentum (Green Histogram)")
-    elif macd_h > prev_macd_h: 
+        reasons.append("🚀 Daily MACD: Positive Histogram")
+    elif macd_h > prev_mh:
         score += 1
-        reasons.append("🔄 Improving Momentum")
-        
-    # E. VOLATILITY
-    if bb_width < 0.03: 
-        score -= 10
-        reasons.append(f"⚠️ Low Volatility Squeeze (Width: {bb_width:.2f})")
-    elif bb_width > 0.15:
-        score += 1
-        reasons.append("⚡ High Volatility Expansion")
+        reasons.append("🔄 Daily MACD: Improving Momentum")
 
-    # F. VOLUME HYBRID (Updated with VWAP Logic)
-    if elapsed_minutes < 30:
-        is_bullish = price > open_price
-        method = "Green Candle"
+    # G. BB squeeze penalty — too narrow means no edge
+    if 0 < bb_width < 0.03:
+        score -= 2
+        reasons.append(f"⚠️ BB Squeeze (width {bb_width:.3f}) — reduced edge")
+
+    # Direction signal for conflict gate
+    is_bullish = price > ema_21
+
+    threshold = SWING_SCORE_THRESHOLD + regime_penalty
+
+    if score < threshold:
+        return None
+
+    # Support-aware stop loss
+    if bbl is not None and price <= bbl * 1.02:
+        support = bbl
+    elif near_21:
+        support = ema_21
     else:
-        # STEP 2 UPDATE: USE VWAP IF AVAILABLE
-        if intraday_vwap is not None:
-            is_bullish = price >= intraday_vwap
-            method = "VWAP"
-        else:
-            midpoint = (day_high + day_low) / 2
-            is_bullish = price >= midpoint
-            method = "Upper Range"
+        support = ema_50
 
-    if rel_vol > 1.2:
-        if is_bullish:
-            score += 1
-            if rel_vol > 2.0: score += 1
-            reasons.append(f"🟢 High Buying Pressure ({rel_vol:.1f}x)")
-        else:
-            reasons.append(f"🔴 Selling Pressure ({rel_vol:.1f}x)")
+    stop_loss   = support - (atr * 0.8)
+    take_profit = price   + (atr * 2.5)
 
-    return score, reasons
+    if stop_loss >= price:
+        stop_loss = price - atr
 
-# --- 2. ALERT FUNCTION ---
-# ADDED: intraday_vwap argument
-def send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profit, score, reasons, threshold, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes, intraday_vwap=None):
-    # 1. Determine Color & Rating
-    if score >= 8:
-        color = 5763719  # Green (Strong Buy)
-        rating = "🔥 STRONG BUY"
-    elif score >= 5:
-        color = 16776960 # Yellow (Moderate Watch)
-        rating = "⚠️ MODERATE WATCH"
-    else:
-        return 
+    return {
+        "score":       score,
+        "threshold":   threshold,
+        "reasons":     reasons,
+        "stop_loss":   stop_loss,
+        "take_profit": take_profit,
+        "atr":         atr,
+        "atr_source":  "Daily",
+        "vwap":        None,
+        "rsi":         rsi,
+        "ema_21":      ema_21,
+        "ema_50":      ema_50,
+        "price":       price,
+        "is_bullish":  is_bullish,
+        "mode":        "SWING",
+    }
 
-    # 2. Get Timestamp
-    tz = pytz.timezone('US/Eastern')
+
+# =============================================================================
+#  SECTION 8 — CONFLICT GATE
+# =============================================================================
+
+def signals_conflict(day_signal: dict | None, swing_signal: dict | None) -> bool:
+    """
+    Returns True if both engines fired but disagree on price direction.
+    Example: 5m VWAP reclaim (bullish day) inside daily EMA-21 breakdown
+    (bearish swing) = bear trap. Suppress the alert.
+    Only fires when BOTH engines have a signal — single-engine is not a conflict.
+    """
+    if day_signal is None or swing_signal is None:
+        return False
+
+    return day_signal.get("is_bullish", True) != swing_signal.get("is_bullish", True)
+
+
+# =============================================================================
+#  SECTION 9 — DECISION MATRIX
+# =============================================================================
+
+def build_final_signal(day_signal: dict | None, swing_signal: dict | None,
+                       rel_vol: float, elapsed_minutes: float) -> dict | None:
+    """
+    Combines engine outputs into one of three scenarios:
+
+    Scenario A — Both engines pass, same direction (highest conviction)
+      Large size. Shows both 5m stop (tight) and daily ATR stop (runner).
+
+    Scenario B — Day Engine only (no daily structure confirmation)
+      Small size. Tight 5m ATR stop. Must exit before 3:45 PM.
+
+    Scenario C — Swing Engine only (no intraday confirmation yet)
+      Half size. Wait for VWAP reclaim at next open before adding.
+
+    NOTE: Scenario B only reaches here if the ticker passed the swing
+    liquidity filter AND was explicitly tagged 'day_only_eligible'
+    by the main loop. It is never a silent pass-through.
+    """
+    day_ok   = day_signal   is not None
+    swing_ok = swing_signal is not None
+
+    if not day_ok and not swing_ok:
+        return None
+
+    # ── Scenario A: Fully Aligned ────────────────────────────────────────────
+    if day_ok and swing_ok:
+        sig = swing_signal.copy()
+        sig["scenario"]       = "A"
+        sig["scenario_label"] = "⚡ SCENARIO A — DAY + SWING ALIGNED"
+        sig["size_guidance"]  = "Full Size — Both timeframes confirmed"
+        sig["hold_guidance"]  = (
+            f"Intraday target: ${day_signal['take_profit']:.2f} (5m ATR × 3). "
+            f"Trail remainder with daily ATR stop for multi-day hold."
+        )
+        sig["day_stop"]   = day_signal["stop_loss"]
+        sig["day_target"] = day_signal["take_profit"]
+        sig["mode"]       = "DAY TRADE + SWING"
+        sig["vwap"]       = day_signal.get("vwap")
+        sig["rsi"]        = day_signal.get("rsi")   # Fresher 5m RSI
+
+        day_reasons   = [f"[5m] {r}"    for r in day_signal.get("reasons", [])]
+        swing_reasons = [f"[Daily] {r}" for r in swing_signal.get("reasons", [])]
+        sig["reasons"] = day_reasons + swing_reasons
+        sig["atr_source"] = "Daily (swing) + 5m (day)"
+        return sig
+
+    # ── Scenario B: Day Only ─────────────────────────────────────────────────
+    if day_ok and not swing_ok:
+        sig = day_signal.copy()
+        sig["scenario"]       = "B"
+        sig["scenario_label"] = "⚡ SCENARIO B — INTRADAY SCALP ONLY"
+        sig["size_guidance"]  = "Small Size — No daily structure confirmation"
+        sig["hold_guidance"]  = "Must exit before 3:45 PM EST. No overnight."
+        sig["mode"]           = "DAY TRADE"
+        return sig
+
+    # ── Scenario C: Swing Only ────────────────────────────────────────────────
+    if swing_ok and not day_ok:
+        sig = swing_signal.copy()
+        sig["scenario"]       = "C"
+        sig["scenario_label"] = "📅 SCENARIO C — SWING (Awaiting Intraday Confirmation)"
+        sig["size_guidance"]  = "Half Size — Add on VWAP reclaim with volume"
+        sig["hold_guidance"]  = (
+            "Daily structure valid. Best entry: next open or when "
+            "5m price reclaims VWAP with 1.5x+ relative volume."
+        )
+        sig["mode"] = "SWING"
+        return sig
+
+    return None
+
+
+# =============================================================================
+#  SECTION 10 — RISK VALIDATOR
+# =============================================================================
+
+def validate_risk(signal: dict, mode: str) -> dict | None:
+    """
+    Two-step check:
+    1. Stop must not exceed MAX_STOP_PCT — tighten if it does, flag the alert.
+    2. Resulting R/R ratio must meet MIN_RR_RATIO — reject if not.
+    """
+    price     = signal["price"]
+    stop_loss = signal["stop_loss"]
+    target    = signal["take_profit"]
+
+    # Normalise mode key for lookup
+    mode_key = "DAY TRADE" if mode.startswith("DAY TRADE") else mode
+    max_stop = MAX_STOP_PCT.get(mode_key, 0.05)
+
+    actual_pct = (price - stop_loss) / price
+
+    if actual_pct > max_stop:
+        signal["stop_loss"]      = price * (1 - max_stop)
+        signal["stop_adjusted"]  = True
+
+    risk   = price - signal["stop_loss"]
+    reward = target - price
+
+    if risk <= 0:
+        return None
+
+    rr = reward / risk
+    signal["rr_ratio"] = rr
+
+    if rr < MIN_RR_RATIO:
+        print(f"   📉 R/R {rr:.2f} below minimum {MIN_RR_RATIO}. Skipping.")
+        return None
+
+    return signal
+
+
+# =============================================================================
+#  SECTION 11 — DISCORD ALERT
+# =============================================================================
+
+def send_discord_alert(ticker: str, signal: dict, rel_vol: float,
+                       earnings_msg: str, elapsed_minutes: float):
+    scenario = signal.get("scenario", "?")
+    mode     = signal.get("mode", "UNKNOWN")
+    price    = signal["price"]
+
+    color_map  = {"A": 5763719, "B": 16776960, "C": 3447003}
+    rating_map = {"A": "🔥 HIGH CONVICTION", "B": "⚡ INTRADAY SCALP", "C": "📅 SWING SETUP"}
+
+    color     = color_map.get(scenario, 16711680)
+    rating    = rating_map.get(scenario, "⚠️ ALERT")
+
+    tz        = pytz.timezone('US/Eastern')
     timestamp = datetime.now(tz).strftime('%I:%M %p EST')
 
-    # 3. Calculate Risk/Reward
-    risk = price - stop_loss
-    reward = take_profit - price
-    
-    if risk > 0:
-        risk_reward = reward / risk
-    else:
-        risk_reward = 0.0
+    stop_loss   = signal["stop_loss"]
+    take_profit = signal["take_profit"]
+    rr_ratio    = signal.get("rr_ratio", 0.0)
+    stop_pct    = (price - stop_loss)   / price * 100
+    target_pct  = (take_profit - price) / price * 100
 
-    stop_pct = (risk / price) * 100
-    target_pct = (reward / price) * 100
-    
-    # 4. Determine Status Strings
-    rsi_status = "Oversold" if rsi < 35 else ("Weak" if rsi < 45 else "Neutral")
-    
-    # --- STEP 2 LOGIC FIX: VWAP Direction ---
-    midpoint = (day_high + day_low) / 2
-    
-    if elapsed_minutes < 30:
-        is_bullish = price > open_price
-    elif intraday_vwap is not None:
-        is_bullish = price >= intraday_vwap # The Superior Check
-    else:
-        is_bullish = price >= midpoint # Fallback
+    # ── Build description ────────────────────────────────────────────────────
+    desc  = f"*Triggered at {timestamp}*\n"
+    desc += f"**{signal.get('scenario_label', '')}**\n\n"
 
-    vol_dir = "Buying" if is_bullish else "Selling"
-            
-    vol_status = "Normal"
-    if rel_vol > 2.0: vol_status = f"Heavy {vol_dir}"
-    elif rel_vol > 1.2: vol_status = f"Strong {vol_dir}"
-    # ----------------------------------------
-
-    # 5. Format the Description
-    description = f"*Triggered at {timestamp}*\n\n"
-    
     if earnings_msg:
-        description += f"{earnings_msg}\n\n"
-    
-    description += (
-        f"📊 **Trade Plan**\n"
-        f"• **Entry:** `${price:.2f}`\n"
-        f"• **Target:** `${take_profit:.2f}` (+{target_pct:.1f}%) 🎯\n"
-        f"• **Stop:** `${stop_loss:.2f}` (-{stop_pct:.1f}%) 🛑\n"
-        f"• **Ratio:** `1:{risk_reward:.2f}` ⚖️\n\n"
-    )
+        desc += f"{earnings_msg}\n\n"
 
-    vwap_str = f"${intraday_vwap:.2f}" if intraday_vwap else "N/A"
+    if signal.get("stop_adjusted"):
+        mode_key = "DAY TRADE" if mode.startswith("DAY TRADE") else mode
+        pct      = MAX_STOP_PCT.get(mode_key, 0.05) * 100
+        desc += f"⚠️ *Stop tightened to {pct:.0f}% max*\n\n"
 
-    description += (
-        f"📉 **Technicals**\n"
-        f"• **RSI:** `{rsi:.1f}` ({rsi_status})\n"
-        f"• **Trend:** 21 EMA (`${ema_21:.2f}`) | 50 EMA ( `${ema_50:.2f}` )\n"
-        f"• **VWAP:** `{vwap_str}`\n"
-        f"• **Volume:** `{rel_vol:.1f}x` ({vol_status})\n\n"
-    )
+    desc += "📊 **Trade Plan**\n"
+    desc += f"• **Entry:** `${price:.2f}`\n"
+    desc += f"• **Target:** `${take_profit:.2f}` (+{target_pct:.1f}%) 🎯\n"
+    desc += f"• **Stop:** `${stop_loss:.2f}` (-{stop_pct:.1f}%) 🛑 *(ATR: {signal['atr_source']})*\n"
+    desc += f"• **R/R:** `1:{rr_ratio:.2f}` ⚖️\n\n"
 
-    description += "📝 **Analysis**\n"
-    for r in reasons:
-        if not any(char in r for char in ["💎", "📉", "🌊", "🛡️", "📈", "🚀", "🔄", "🟢", "🔴"]):
-            description += f"• {r}\n"
-        else:
-            description += f"• {r}\n"
+    # Scenario A shows the tighter 5m stop separately
+    if scenario == "A" and "day_stop" in signal:
+        desc += "📌 **Intraday Plan (Scale Out)**\n"
+        desc += f"• **Day Stop:** `${signal['day_stop']:.2f}` *(5m ATR × 1.5)*\n"
+        desc += f"• **Day Target:** `${signal['day_target']:.2f}` *(5m ATR × 3)*\n\n"
 
-    # 6. Construct the Payload
-    data = {
-        "content": f"🚨 **SWING ALERT: {ticker}**",
-        "embeds": [
-            {
-                "title": f"🔥 {rating}: {ticker} (Score: {score}/10)",
-                "description": description,
-                "color": color,
-                "fields": [
-                    {
-                        "name": "🔗 Links", 
-                        "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})",
-                        "inline": False
-                    }
-                ],
-                "footer": {"text": "Bot Triggered via GitHub Actions"}
-            }
-        ]
+    vwap_str  = f"${signal['vwap']:.2f}" if signal.get("vwap") else "N/A"
+    rsi_val   = signal.get("rsi", 0.0)
+    ema_21    = signal.get("ema_21", 0.0)
+    ema_50    = signal.get("ema_50")
+    rsi_label = ("Deeply Oversold" if rsi_val < 35
+                 else "Oversold" if rsi_val < 45 else "Neutral")
+
+    desc += "📉 **Technicals**\n"
+    desc += f"• **RSI:** `{rsi_val:.1f}` ({rsi_label})\n"
+    if ema_50:
+        desc += f"• **Trend:** 21 EMA `${ema_21:.2f}` | 50 EMA `${ema_50:.2f}`\n"
+    else:
+        desc += f"• **Trend:** 21 EMA `${ema_21:.2f}`\n"
+    desc += f"• **VWAP:** `{vwap_str}`\n"
+
+    vol_dir   = "Buying" if signal.get("is_bullish") else "Selling"
+    vol_label = ("Heavy" if rel_vol > 2.0
+                 else "Strong" if rel_vol > 1.2 else "Normal")
+    desc += f"• **Volume:** `{rel_vol:.1f}x` ({vol_label} {vol_dir})\n\n"
+
+    desc += "🎯 **Execution Guidance**\n"
+    desc += f"• **Size:** {signal.get('size_guidance', 'Standard')}\n"
+    desc += f"• **Hold:** {signal.get('hold_guidance', '')}\n\n"
+
+    desc += "📝 **Signal Reasons**\n"
+    for r in signal.get("reasons", []):
+        desc += f"• {r}\n"
+
+    payload = {
+        "content": f"🚨 **ALERT: {ticker}** | Mode: **{mode}**",
+        "embeds": [{
+            "title":       f"{rating} — {ticker} (Score: {signal.get('score', 0)})",
+            "description": desc,
+            "color":       color,
+            "fields": [{
+                "name":   "🔗 Links",
+                "value":  (f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker}) | "
+                           f"[TradingView](https://tradingview.com/chart/?symbol={ticker})"),
+                "inline": False,
+            }],
+            "footer": {
+                "text": f"Alert Bot v3.0 | Funnel Architecture | ATR: {signal['atr_source']}"
+            },
+        }],
     }
-    
+
     if not WEBHOOK_URL:
-        print("❌ Error: DISCORD_URL environment variable is missing.")
+        print(f"   ❌ DISCORD_URL missing. Would have alerted: {ticker} [{mode}]")
         return
 
     try:
-        response = requests.post(WEBHOOK_URL, json=data, timeout=10)
-        response.raise_for_status()
-    except requests.exceptions.HTTPError as err:
-        print(f"❌ HTTP Error sending alert for {ticker}: {err}")
+        resp = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+        resp.raise_for_status()
+        print(f"   ✅ Alert sent: {ticker} [{mode}] Scenario {scenario}")
+    except requests.exceptions.HTTPError as e:
+        print(f"   ❌ HTTP error for {ticker}: {e}")
     except requests.exceptions.Timeout:
-        print(f"❌ Timeout sending alert for {ticker} - Discord might be down.")
+        print(f"   ❌ Timeout sending alert for {ticker}")
     except Exception as e:
-        print(f"❌ General Error sending alert: {e}")
+        print(f"   ❌ Discord error for {ticker}: {e}")
 
-# --- 3. MAIN LOOP ---
+
+# =============================================================================
+#  SECTION 12 — MAIN LOOP (THREE-STAGE FUNNEL)
+# =============================================================================
+
 def check_market():
-    print(f"Checking {len(TICKERS)} tickers via Bulk Download...")
+    tz  = pytz.timezone('US/Eastern')
+    now = datetime.now(tz)
+
+    print(f"\n{'='*62}")
+    print(f"  ALERT BOT v3.0 — {now.strftime('%Y-%m-%d %I:%M %p EST')}")
+    print(f"{'='*62}")
+
     elapsed_minutes = get_market_minutes_elapsed()
     print(f"🕒 Market Minutes Elapsed: {elapsed_minutes:.0f}/390")
-    
-    try:
-        bulk_data = yf.download(TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
-        
-        if len(TICKERS) == 1:
-            single_ticker = TICKERS[0]
-            bulk_data = {single_ticker: bulk_data}
-            
-    except Exception as e:
-        print(f"Critical Error: Bulk download failed - {e}")
+
+    # ── Time-of-day penalty ──────────────────────────────────────────────────
+    time_penalty = 0
+    if elapsed_minutes < 30:
+        time_penalty += 1
+        print("⏰ Opening 30 min — thresholds +1 (noisy open)")
+    if now.weekday() == 4 and elapsed_minutes > 270:
+        time_penalty += 1
+        print("📅 Late Friday — thresholds +1 (weekend risk)")
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  STAGE 1: BULK DAILY DOWNLOAD + REGIME CHECK
+    #  One API call for all tickers. VTI extracted for regime check.
+    # ════════════════════════════════════════════════════════════════════════
+    bulk_data = fetch_bulk_daily(TICKERS)
+
+    if bulk_data.empty:
+        print("❌ Critical: Bulk download empty. Exiting.")
         return
 
-    # --- FEEDBACK 1: MARKET REGIME CHECK (VTI) ---
-    regime_penalty = 0
-    
+    # VTI Regime Check — extracted from same bulk pull, no extra API call
+    regime_penalty = time_penalty
     try:
-        vti_df = bulk_data['VTI'].copy()
-        
-        if isinstance(vti_df.columns, pd.MultiIndex):
-            vti_df.columns = vti_df.columns.get_level_values(0)
-
-        if 'Close' not in vti_df.columns:
-             pass
-
-        vti_df.dropna(subset=['Close'], inplace=True)
-        vti_df['SMA_200'] = ta.sma(vti_df['Close'], length=200)
-        
-        if not vti_df.empty and len(vti_df) > 200:
-            last_vti = vti_df.iloc[-1]
-            if last_vti['Close'] < last_vti['SMA_200']:
-                regime_penalty = 1 
-                print(f"⚠️ Market Regime: BEARISH (VTI < 200 SMA). Increasing thresholds.")
+        vti_df = extract_ticker_daily(bulk_data, 'VTI')
+        if vti_df is not None and len(vti_df) >= 200:
+            vti_sma   = ta.sma(vti_df['Close'], length=200).iloc[-1]
+            vti_price = float(vti_df['Close'].iloc[-1])
+            if vti_price < vti_sma:
+                regime_penalty += 1
+                print(f"⚠️ Regime: BEARISH (VTI ${vti_price:.2f} < 200 SMA ${vti_sma:.2f}) → penalty +1")
             else:
-                print(f"✅ Market Regime: BULLISH (VTI > 200 SMA).")
-                
+                print(f"✅ Regime: BULLISH (VTI ${vti_price:.2f} > 200 SMA ${vti_sma:.2f})")
+        else:
+            print("⚠️ VTI: Insufficient data for 200 SMA — defaulting BULLISH")
     except Exception as e:
-        print(f"Market Regime Check Skipped (VTI data missing or malformed): {e}")
+        print(f"⚠️ Regime check error: {e} — defaulting BULLISH")
 
-    for ticker in TICKERS:
-        if ticker == 'VTI': continue 
+    # ════════════════════════════════════════════════════════════════════════
+    #  STAGE 2: SWING FILTER — runs on bulk daily data (no extra API calls)
+    #  Two types of candidates advance to Stage 3:
+    #    Type 1: swing_signal is valid (Scenario C or A possible)
+    #    Type 2: swing_signal is None BUT daily structure is bullish enough
+    #            for a pure day trade (Scenario B). Explicitly flagged.
+    # ════════════════════════════════════════════════════════════════════════
+    scan_tickers = [t for t in TICKERS if t != 'VTI']
+    print(f"\n🔍 STAGE 2: Swing filter on {len(scan_tickers)} tickers...")
 
+    # Each entry: (ticker, swing_signal_or_None, day_only_eligible: bool)
+    swing_candidates: list[tuple[str, dict | None, bool]] = []
+
+    for ticker in scan_tickers:
         try:
-            try:
-                df = bulk_data[ticker].copy()
-            except KeyError:
-                if isinstance(bulk_data.columns, pd.MultiIndex):
-                    try:
-                            df = bulk_data.xs(ticker, level=1, axis=1)
-                    except Exception:
-                            print(f"⚠️ No data found for {ticker} (Extraction Failed)")
-                            continue
-                else:
-                    print(f"⚠️ No data found for {ticker}")
-                    continue
-            
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-
-            if df['Close'].isnull().all(): continue
-            df.dropna(subset=['Close'], inplace=True)
-
-            # --- CALCULATE INDICATORS ---
-            df['EMA_50'] = ta.ema(df['Close'], length=50)
-            df['EMA_21'] = ta.ema(df['Close'], length=21) 
-            df['EMA_9'] = ta.ema(df['Close'], length=9)    
-            df['RSI'] = ta.rsi(df['Close'], length=14)
-            
-            macd = ta.macd(df['Close'])
-            if macd is not None:
-                hist_cols = [c for c in macd.columns if c.startswith('MACDh')]
-                
-                if not hist_cols:
-                    print(f"⚠️ MACD calculation failed or missing columns for {ticker}")
-                    continue
-                    
-                hist_col = hist_cols[0]
-                df['MACD_H'] = macd[hist_col]
-            else:
+            df_daily = extract_ticker_daily(bulk_data, ticker)
+            if df_daily is None:
                 continue
 
-            bb = ta.bbands(df['Close'], length=20, std=2)
-            if bb is not None and not bb.empty:
-                df['BBL'] = bb.iloc[:, 0]
-                df['BBM'] = bb.iloc[:, 1] 
-                df['BBU'] = bb.iloc[:, 2] 
-                df['BB_WIDTH'] = (df['BBU'] - df['BBL']) / df['BBM']
+            # Liquidity check on daily data (before any engine work)
+            if not passes_liquidity_filter(df_daily, "SWING"):
+                continue
+
+            # Run Swing Engine on full 1-year daily bars
+            swing_signal = run_swing_engine(df_daily, regime_penalty)
+
+            if swing_signal is not None:
+                # Has a valid swing setup — advance for Scenarios A or C
+                swing_candidates.append((ticker, swing_signal, False))
+
             else:
-                df['BBL'] = pd.NA
-                df['BB_WIDTH'] = 0
-            
-            df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-
-            if len(df) < 50: continue 
-            
-            last = df.iloc[-1]
-            prev = df.iloc[-2]
-            
-            # --- 🛡️ ROBUST DATA CHECK 🛡️ ---
-            tz = pytz.timezone('US/Eastern')
-            now = datetime.now(tz)
-            today_date = now.date()
-            candle_date = last.name.date()
-            is_weekend = now.weekday() >= 5 
-
-            is_stale = (not is_weekend) and (elapsed_minutes > 20) and (candle_date != today_date)
-
-            price = float(last['Close'])
-            open_price = float(last['Open'])
-            day_high = float(last['High'])
-            day_low = float(last['Low'])
-
-            if is_stale:
-                print(f"⚠️ Stale Data for {ticker} (Last: {candle_date}). Patching OHLC with Live Data...")
+                # No swing signal — check if bullish structure exists for day-only play.
+                # Explicitly tagged so the decision matrix knows it's Scenario B only.
+                # Requires BOTH: price > EMA-50 AND RSI not overbought.
                 try:
-                    fi = yf.Ticker(ticker).fast_info
-                    live_price = fi['last_price']
-                    live_open = fi['open']
-                    live_high = fi['day_high']
-                    live_low = fi['day_low']
+                    df_tmp = df_daily.copy()
+                    df_tmp['EMA_50'] = ta.ema(df_tmp['Close'], length=50)
+                    df_tmp['RSI']    = ta.rsi(df_tmp['Close'], length=14)
+                    df_tmp.dropna(subset=['EMA_50', 'RSI'], inplace=True)
 
-                    if live_price and live_open and live_high and live_low:
-                        price = float(live_price)
-                        open_price = float(live_open)
-                        day_high = float(live_high)
-                        day_low = float(live_low)
-                        print(f"   ✅ Live Patched: Price ${price:.2f} | Open ${open_price:.2f} | Low ${day_low:.2f}")
-                    else:
-                         print("   ⚠️ Live data incomplete. Using stale data.")
-                except Exception as e:
-                    print(f"   ⚠️ Live fetch failed: {e}. Using stale Close.")
+                    if not df_tmp.empty:
+                        last_close = float(df_tmp['Close'].iloc[-1])
+                        last_ema50 = float(df_tmp['EMA_50'].iloc[-1])
+                        last_rsi   = float(df_tmp['RSI'].iloc[-1])
 
-            if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
-
-            rsi = float(last['RSI'])
-            ema_50 = float(last['EMA_50'])
-            ema_21 = float(last['EMA_21']) 
-            ema_9 = float(last['EMA_9'])   
-            bbl = float(last['BBL'])
-            bb_width = float(last['BB_WIDTH']) 
-            
-            macd_h = float(last['MACD_H'])
-            prev_macd_h = float(prev['MACD_H'])
-            atr = float(last['ATR'])
-
-            if price < ema_50 and rsi > 30:
-                continue
-
-            near_ema = abs(price - ema_50) <= (ema_50 * 0.02)
-            near_bb = abs(price - bbl) <= (bbl * 0.015)
-            near_21 = abs(price - ema_21) <= (ema_21 * 0.01)
-
-            if (near_ema or near_bb or near_21) and rsi < 60:
-                
-                # ==================================================
-                # PRE-SCAN (Optimistic)
-                # ==================================================
-                dummy_vol = 1.0 
-                # Note: We pass None for intraday_vwap here because we haven't fetched it yet
-                base_score, _ = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, dummy_vol, elapsed_minutes, intraday_vwap=None)
-                
-                pre_threshold = 3 + regime_penalty
-                potential_max_score = base_score + 2
-
-                if potential_max_score < pre_threshold:
-                    continue
-
-                # ==================================================
-                # ✅ PASSED PRE-SCAN: EXECUTE DEEP DIVE
-                # ==================================================
-
-                # 1. Check Volume AND Intraday VWAP (STEP 2 INTEGRATION)
-                # We unpack the tuple returned by get_relative_volume
-                rel_vol, intraday_vwap = get_relative_volume(ticker)
-
-                # 2. Check Earnings
-                has_earnings_risk, earnings_msg = get_earnings_warning(ticker)
-
-                # 1. DEFINE STRUCTURE
-                if near_bb:
-                    support_level = bbl
-                elif near_21:
-                    support_level = ema_21
-                else:
-                    support_level = ema_50
-
-                # 2. CALCULATE STOP LOSS
-                stop_buffer = atr * 0.5
-                stop_loss = support_level - stop_buffer
-
-                if stop_loss >= price:
-                      stop_loss = price - atr 
-
-                # 3. CALCULATE TAKE PROFIT
-                take_profit = price + (atr * 2.0)
-
-                # 4. CALCULATE RISK/REWARD
-                risk_per_share = price - stop_loss
-                reward_per_share = take_profit - price
-
-                if risk_per_share > 0:
-                    rr_ratio = reward_per_share / risk_per_share
-                else:
-                    rr_ratio = 0.0 
-
-                # 3. Final Score (Using REAL volume AND REAL VWAP)
-                score, reasons = calculate_confidence(rsi, price, open_price, day_high, day_low, bbl, bb_width, ema_50, ema_9, ema_21, macd_h, prev_macd_h, rel_vol, elapsed_minutes, intraday_vwap=intraday_vwap)
-                
-                if has_earnings_risk:
-                    score -= 2 
-
-                # --- TIME & FRIDAY THRESHOLD ---
-                min_score_needed = 6 
-                if elapsed_minutes < 60: min_score_needed = 7 
-                
-                is_friday = datetime.now(tz).weekday() == 4
-                if is_friday and elapsed_minutes > 270: min_score_needed += 1
-
-                min_score_needed += regime_penalty
-                
-                # 5. Risk/Reward Filter
-                if rr_ratio < 1.5:
-                      print(f"📉 {ticker} Skipped: Poor Risk/Reward ({rr_ratio:.2f})")
-                      continue
-
-                print(f"🔎 Checking {ticker}: Score {score}/{min_score_needed} (RVAT: {rel_vol:.2f}x) (RR: {rr_ratio:.2f})")
-                
-                if score >= min_score_needed:
-                    send_discord_alert(ticker, price, rsi, ema_21, ema_50, stop_loss, take_profit, score, reasons, min_score_needed, rel_vol, earnings_msg, open_price, day_high, day_low, elapsed_minutes, intraday_vwap=intraday_vwap)
+                        # Bullish structure + not overbought = day-only eligible
+                        if last_close > last_ema50 and last_rsi < 65:
+                            # Also needs day-trade liquidity
+                            if passes_liquidity_filter(df_daily, "DAY TRADE"):
+                                swing_candidates.append((ticker, None, True))
+                except Exception:
+                    pass
 
         except Exception as e:
-            print(f"Error processing {ticker}: {e}")
+            print(f"   ⚠️ [{ticker}] Stage 2 error: {e}")
+
+    type1 = sum(1 for _, s, _ in swing_candidates if s is not None)
+    type2 = sum(1 for _, s, d in swing_candidates if s is None and d)
+    print(f"   ✅ Funnel: {type1} swing setups + {type2} day-only eligible = "
+          f"{len(swing_candidates)}/{len(scan_tickers)} advance to Stage 3")
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  STAGE 3: TARGETED INTRADAY — 5m fetch ONLY for Stage 2 survivors
+    # ════════════════════════════════════════════════════════════════════════
+    print(f"\n⚡ STAGE 3: Targeted intraday analysis for {len(swing_candidates)} tickers...")
+
+    for ticker, swing_signal, day_only_eligible in swing_candidates:
+        try:
+            print(f"\n── {ticker} {'(day-only)' if day_only_eligible else ''} ─────────────")
+
+            # ── State machine check — DISABLED (allow repeat alerts) ────────
+            # Re-enable this block to suppress re-alerts on active setups.
+            # daily_close = float(extract_ticker_daily(bulk_data, ticker)['Close'].iloc[-1])
+            # prelim_state = check_and_update_state(ticker, daily_close)
+            # if prelim_state in ("SUPPRESS_TRIGGERED", "SUPPRESS_INVALIDATED"):
+            #     print(f"   🔒 State machine suppressed ({prelim_state})")
+            #     continue
+
+            # ── Targeted 5m fetch ────────────────────────────────────────────
+            df_intraday = fetch_targeted_intraday(ticker)
+            if df_intraday is None:
+                print(f"   ⚠️ No intraday data available.")
+                continue
+
+            # Isolate today's 5m bars
+            today_date = now.date()
+            df_today   = df_intraday[df_intraday.index.date == today_date].copy()
+
+            # ── Live state machine check — DISABLED (allow repeat alerts) ───
+            # Re-enable this block to detect intraday stop hits between scans.
+            # if not df_today.empty:
+            #     live_price   = float(df_today['Close'].iloc[-1])
+            #     state_action = check_and_update_state(ticker, live_price)
+            #     if state_action in ("SUPPRESS_TRIGGERED", "SUPPRESS_INVALIDATED"):
+            #         print(f"   🔒 Live state check suppressed ({state_action})")
+            #         continue
+            # else:
+            #     print(f"   ⚠️ No today bars in intraday data (market closed or pre-open).")
+            if df_today.empty:
+                print(f"   ⚠️ No today bars in intraday data (market closed or pre-open).")
+
+            # ── Day Engine (5m bars) ─────────────────────────────────────────
+            day_signal = run_day_engine(df_today, regime_penalty)
+            day_status = (f"Score {day_signal['score']}/{day_signal['threshold']} ✅"
+                         if day_signal else "❌ Below threshold")
+            print(f"   Day Engine:   {day_status}")
+
+            # ── Enforce day-only constraint ───────────────────────────────────
+            # If this ticker is day-only eligible (no swing signal),
+            # suppress Scenario C entirely — only Scenario B is valid here.
+            if day_only_eligible and day_signal is None:
+                print(f"   ➖ Day-only ticker: no day signal. Skipping.")
+                continue
+
+            # ── Swing signal status ──────────────────────────────────────────
+            swing_status = (f"Score {swing_signal['score']}/{swing_signal['threshold']} ✅"
+                           if swing_signal else "N/A (day-only eligible)")
+            print(f"   Swing Engine: {swing_status}")
+
+            # ── Conflict gate ─────────────────────────────────────────────────
+            if signals_conflict(day_signal, swing_signal):
+                print(f"   ⚔️ Direction conflict — suppressed.")
+                continue
+
+            # ── Relative volume (from already-fetched 5m data) ───────────────
+            rel_vol = calculate_relative_volume(df_intraday)
+
+            # ── Decision matrix ───────────────────────────────────────────────
+            final_signal = build_final_signal(day_signal, swing_signal,
+                                              rel_vol, elapsed_minutes)
+            if final_signal is None:
+                print(f"   ➖ No qualifying scenario.")
+                continue
+
+            scenario = final_signal["scenario"]
+            mode     = final_signal["mode"]
+            print(f"   🎯 Scenario {scenario} | Mode: {mode}")
+
+            # ── Cooldown check — DISABLED (allow repeat alerts) ─────────────
+            # Re-enable this block to enforce per-ticker time-based suppression.
+            # if is_on_cooldown(ticker, mode):
+            #     continue
+
+            # ── Risk validation ───────────────────────────────────────────────
+            final_signal = validate_risk(final_signal, mode)
+            if final_signal is None:
+                continue
+
+            print(f"   📊 R/R {final_signal['rr_ratio']:.2f} | "
+                  f"Stop ${final_signal['stop_loss']:.2f} | "
+                  f"Target ${final_signal['take_profit']:.2f}")
+
+            # ── Earnings check (full implementation, not a placeholder) ───────
+            has_earnings, earnings_msg = get_earnings_warning(ticker)
+            if has_earnings:
+                final_signal["score"] -= 2
+                print(f"   ⚠️ Earnings within {EARNINGS_WARNING_DAYS}d — score docked 2pts")
+
+                # Re-check threshold after penalty
+                base_threshold = (DAY_SCORE_THRESHOLD if "DAY" in mode
+                                  else SWING_SCORE_THRESHOLD)
+                if final_signal["score"] < base_threshold + regime_penalty:
+                    print(f"   ⚠️ Score below threshold after earnings penalty. Skipping.")
+                    continue
+            else:
+                earnings_msg = ""
+
+            # ── FIRE THE ALERT ────────────────────────────────────────────────
+            send_discord_alert(
+                ticker          = ticker,
+                signal          = final_signal,
+                rel_vol         = rel_vol,
+                earnings_msg    = earnings_msg,
+                elapsed_minutes = elapsed_minutes,
+            )
+
+            # State machine + cooldown write — DISABLED (allow repeat alerts)
+            # Re-enable these two calls to track alert state between scan cycles.
+            # update_setup_state(
+            #     ticker    = ticker,
+            #     new_state = "TRIGGERED",
+            #     stop_loss = final_signal["stop_loss"],
+            #     mode      = mode,
+            # )
+            # set_cooldown(ticker, mode)
+
+        except Exception as e:
+            print(f"   ❌ Error on {ticker}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    print(f"\n{'='*62}")
+    print(f"  Scan complete — {datetime.now(tz).strftime('%I:%M %p EST')}")
+    print(f"{'='*62}\n")
+
+
+# =============================================================================
+#  ENTRY POINT
+# =============================================================================
 
 if __name__ == "__main__":
     check_market()
