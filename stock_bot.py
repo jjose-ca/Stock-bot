@@ -463,18 +463,33 @@ def check_market():
             
             last = df.iloc[-1]
             
-            # --- 🛡️ GHOST CANDLE FIX 🛡️ ---
+            # --- 🛡️ ROBUST DATA CHECK (UPDATED) 🛡️ ---
             tz = pytz.timezone('US/Eastern')
-            today_date = datetime.now(tz).date()
+            now = datetime.now(tz)
+            today_date = now.date()
             candle_date = last.name.date()
-            
-            if elapsed_minutes > 20 and candle_date != today_date:
-                continue
+            is_weekend = now.weekday() >= 5  # Sat=5, Sun=6
+
+            # Check for stale data (Market open > 20m, Weekday, Date mismatch)
+            is_stale = (not is_weekend) and (elapsed_minutes > 20) and (candle_date != today_date)
+
+            price = float(last['Close']) # Default to candle close
+
+            # If stale, patch with live price instead of skipping
+            if is_stale:
+                print(f"⚠️ Stale Data for {ticker} (Last: {candle_date}). Patching with Live Price...")
+                try:
+                    live_price = yf.Ticker(ticker).fast_info['last_price']
+                    if live_price:
+                        price = float(live_price)
+                        print(f"   ✅ Live Price Patched: ${price:.2f}")
+                except Exception:
+                    print(f"   ⚠️ Live fetch failed. Using stale Close.")
 
             prev = df.iloc[-2]
             if pd.isna(last['BBL']) or pd.isna(last['EMA_50']): continue
 
-            price = float(last['Close'])
+            # Note: 'price' is now potentially patched with live data
             open_price = float(last['Open']) 
             day_high = float(last['High'])
             day_low = float(last['Low'])
