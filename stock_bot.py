@@ -85,6 +85,8 @@ TICKERS = [
 WEBHOOK_URL = os.getenv('DISCORD_URL')
 
 # Scoring thresholds
+# SWING raised from 5 → 8 based on backtest results:
+# Score 7 = 15% win rate (noise), Score 8 = 50% win rate (break-even at 2.5:1 R/R)
 DAY_SCORE_THRESHOLD   = 6
 SWING_SCORE_THRESHOLD = 8
 
