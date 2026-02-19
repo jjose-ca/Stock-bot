@@ -400,6 +400,7 @@ def run_day_engine(df_today: pd.DataFrame, regime_penalty: int) -> dict | None:
 
     df.dropna(subset=['RSI', 'EMA_9', 'EMA_21', 'VWAP', 'ATR'], inplace=True)
 
+    # Need at least 3 bars for RSI direction check
     if len(df) < 3:
         return None
 
@@ -455,6 +456,24 @@ def run_day_engine(df_today: pd.DataFrame, regime_penalty: int) -> dict | None:
         if price <= bbl_5m * 1.01:
             score += 2
             reasons.append("🛡️ 5m Bollinger Lower Band Touch")
+
+    # ── G. RSI CURLING UPWARD ─────────────────────────────────────────────────
+    # Detects RSI making three consecutive higher readings from an oversold base.
+    # Scores the DIRECTION of momentum, not just the current RSI level.
+    # RSI cap at 50 prevents flagging stocks that are already overbought.
+    # Example: RSI 28 → 32 → 37 = buyers taking control from oversold territory.
+    rsi_now   = float(df['RSI'].iloc[-1])
+    rsi_prev1 = float(df['RSI'].iloc[-2])
+    rsi_prev2 = float(df['RSI'].iloc[-3])
+
+    rsi_curling_up = (rsi_now > rsi_prev1 > rsi_prev2) and (rsi_now < 50)
+
+    if rsi_curling_up:
+        score += 2
+        reasons.append(
+            f"🔄 RSI Curling Up from Oversold "
+            f"({rsi_prev2:.0f} → {rsi_prev1:.0f} → {rsi_now:.0f})"
+        )
 
     threshold = DAY_SCORE_THRESHOLD + regime_penalty
 
