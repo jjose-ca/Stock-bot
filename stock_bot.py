@@ -817,16 +817,17 @@ def validate_risk(signal: dict, mode: str) -> dict | None:
 # =============================================================================
 
 def send_discord_alert(ticker: str, signal: dict, rel_vol: float,
-                       earnings_msg: str, elapsed_minutes: float):
+                       earnings_msg: str, elapsed_minutes: float,
+                       regime_bullish: bool = True):
     scenario = signal.get("scenario", "?")
     mode     = signal.get("mode", "UNKNOWN")
     price    = signal["price"]
 
-    color_map  = {"A": 5763719, "B": 16776960, "C": 3447003}
+    color_map  = {"A": 5763719,  "B": 16776960, "C": 3447003}
     rating_map = {"A": "🔥 HIGH CONVICTION", "B": "⚡ INTRADAY SCALP", "C": "📅 SWING SETUP"}
 
-    color     = color_map.get(scenario, 16711680)
-    rating    = rating_map.get(scenario, "⚠️ ALERT")
+    color  = color_map.get(scenario, 16711680)
+    rating = rating_map.get(scenario, "⚠️ ALERT")
 
     tz        = pytz.timezone('US/Eastern')
     timestamp = datetime.now(tz).strftime('%I:%M %p EST')
@@ -836,10 +837,74 @@ def send_discord_alert(ticker: str, signal: dict, rel_vol: float,
     rr_ratio    = signal.get("rr_ratio", 0.0)
     stop_pct    = (price - stop_loss)   / price * 100
     target_pct  = (take_profit - price) / price * 100
+    risk_dollar = price - stop_loss
+    atr_val     = signal.get("atr", 0.0)
 
-    # ── Build description ────────────────────────────────────────────────────
+    # ── RSI label (full range) ────────────────────────────────────────────────
+    rsi_val = signal.get("rsi", 0.0)
+    if rsi_val < 30:
+        rsi_label = "🔴 Deeply Oversold"
+    elif rsi_val < 45:
+        rsi_label = "🟠 Oversold"
+    elif rsi_val < 55:
+        rsi_label = "🟡 Neutral"
+    elif rsi_val < 65:
+        rsi_label = "🟢 Bullish"
+    else:
+        rsi_label = "⚪ Extended"
+
+    # ── EMA distances ─────────────────────────────────────────────────────────
+    ema_21 = signal.get("ema_21", 0.0)
+    ema_50 = signal.get("ema_50")
+
+    ema_21_pct  = (price - ema_21) / ema_21 * 100 if ema_21 else None
+    ema_21_dir  = "above" if (ema_21_pct or 0) >= 0 else "below"
+    ema_21_str  = (f"${ema_21:.2f} ({abs(ema_21_pct):.1f}% {ema_21_dir})"
+                   if ema_21_pct is not None else "N/A")
+
+    ema_50_pct  = (price - ema_50) / ema_50 * 100 if ema_50 else None
+    ema_50_dir  = "above" if (ema_50_pct or 0) >= 0 else "below"
+    ema_50_str  = (f"${ema_50:.2f} ({abs(ema_50_pct):.1f}% {ema_50_dir})"
+                   if ema_50_pct is not None else "—")
+
+    # ── VWAP relationship ─────────────────────────────────────────────────────
+    vwap = signal.get("vwap")
+    if vwap:
+        vwap_pct = (price - vwap) / vwap * 100
+        vwap_dir = "above" if vwap_pct >= 0 else "below"
+        vwap_str = f"${vwap:.2f} ({abs(vwap_pct):.1f}% {vwap_dir})"
+    else:
+        vwap_str = "N/A"
+
+    # ── Volume label ──────────────────────────────────────────────────────────
+    vol_dir   = "Buying" if signal.get("is_bullish") else "Selling"
+    vol_label = "🔥 Heavy" if rel_vol > 2.0 else "💪 Strong" if rel_vol > 1.2 else "😐 Normal"
+    vol_str   = f"{rel_vol:.1f}x · {vol_label} {vol_dir}"
+
+    # ── Session label ─────────────────────────────────────────────────────────
+    if elapsed_minutes < 20:
+        session_label = "⏰ Opening"
+    elif elapsed_minutes > 360:
+        session_label = "🕒 Late Session"
+    else:
+        session_label = "✅ Normal Hours"
+
+    regime_label = "🟢 Bullish Market" if regime_bullish else "🔴 Bearish Market"
+
+    # ── Score context ─────────────────────────────────────────────────────────
+    score     = signal.get("score", 0)
+    threshold = signal.get("threshold", 5)
+    score_str = f"**{score}** / min {threshold} · +{score - threshold} pts above"
+
+    # ── Description — original vertical bullet list + 7 enrichments ────────────
     desc  = f"*Triggered at {timestamp}*\n"
-    desc += f"**{signal.get('scenario_label', '')}**\n\n"
+    desc += f"**{signal.get('scenario_label', '')}**\n"
+
+    # 1. Regime + Session header line
+    desc += f"{regime_label} · {session_label}\n\n"
+
+    # 2. Score with threshold context
+    desc += f"📊 **Score:** {score_str}\n\n"
 
     if earnings_msg:
         desc += f"{earnings_msg}\n\n"
@@ -847,40 +912,37 @@ def send_discord_alert(ticker: str, signal: dict, rel_vol: float,
     if signal.get("stop_adjusted"):
         mode_key = "DAY TRADE" if mode.startswith("DAY TRADE") else mode
         pct      = MAX_STOP_PCT.get(mode_key, 0.05) * 100
-        desc += f"⚠️ *Stop tightened to {pct:.0f}% max*\n\n"
+        desc += f"⚠️ *Stop auto-tightened to {pct:.0f}% max*\n\n"
 
+    # Trade Plan — original layout
     desc += "📊 **Trade Plan**\n"
     desc += f"• **Entry:** `${price:.2f}`\n"
     desc += f"• **Target:** `${take_profit:.2f}` (+{target_pct:.1f}%) 🎯\n"
-    desc += f"• **Stop:** `${stop_loss:.2f}` (-{stop_pct:.1f}%) 🛑 *(ATR: {signal['atr_source']})*\n"
-    desc += f"• **R/R:** `1:{rr_ratio:.2f}` ⚖️\n\n"
+    desc += f"• **Stop:** `${stop_loss:.2f}` (−{stop_pct:.1f}%) 🛑 *(ATR: {signal['atr_source']})*\n"
+    desc += f"• **R/R:** `1:{rr_ratio:.2f}` ⚖️\n"
+    # 3. Risk/Share added
+    desc += f"• **Risk/Share:** `${risk_dollar:.2f}` · ATR `${atr_val:.2f}`\n\n"
 
-    # Scenario A shows the tighter 5m stop separately
+    # Scenario A intraday plan
     if scenario == "A" and "day_stop" in signal:
         desc += "📌 **Intraday Plan (Scale Out)**\n"
         desc += f"• **Day Stop:** `${signal['day_stop']:.2f}` *(5m ATR × 1.5)*\n"
         desc += f"• **Day Target:** `${signal['day_target']:.2f}` *(5m ATR × 3)*\n\n"
 
-    vwap_str  = f"${signal['vwap']:.2f}" if signal.get("vwap") else "N/A"
-    rsi_val   = signal.get("rsi", 0.0)
-    ema_21    = signal.get("ema_21", 0.0)
-    ema_50    = signal.get("ema_50")
-    rsi_label = ("Deeply Oversold" if rsi_val < 35
-                 else "Oversold" if rsi_val < 45 else "Neutral")
-
+    # Technicals — enriched
     desc += "📉 **Technicals**\n"
-    desc += f"• **RSI:** `{rsi_val:.1f}` ({rsi_label})\n"
+    # 4. RSI colour-coded label
+    desc += f"• **RSI:** `{rsi_val:.1f}` {rsi_label}\n"
+    # 5. EMA distance %
     if ema_50:
-        desc += f"• **Trend:** 21 EMA `${ema_21:.2f}` | 50 EMA `${ema_50:.2f}`\n"
+        desc += f"• **Trend:** 21 EMA `{ema_21_str}` | 50 EMA `{ema_50_str}`\n"
     else:
-        desc += f"• **Trend:** 21 EMA `${ema_21:.2f}`\n"
+        desc += f"• **Trend:** 21 EMA `{ema_21_str}`\n"
+    # 6. VWAP relationship
     desc += f"• **VWAP:** `{vwap_str}`\n"
+    desc += f"• **Volume:** `{vol_str}`\n\n"
 
-    vol_dir   = "Buying" if signal.get("is_bullish") else "Selling"
-    vol_label = ("Heavy" if rel_vol > 2.0
-                 else "Strong" if rel_vol > 1.2 else "Normal")
-    desc += f"• **Volume:** `{rel_vol:.1f}x` ({vol_label} {vol_dir})\n\n"
-
+    # Signal Reasons — unchanged
     desc += "📝 **Signal Reasons**\n"
     for r in signal.get("reasons", []):
         desc += f"• {r}\n"
@@ -888,7 +950,7 @@ def send_discord_alert(ticker: str, signal: dict, rel_vol: float,
     payload = {
         "content": f"🚨 **ALERT: {ticker}** | Mode: **{mode}**",
         "embeds": [{
-            "title":       f"{rating} — {ticker} (Score: {signal.get('score', 0)})",
+            "title":       f"{rating} — {ticker} (Score: {score})",
             "description": desc,
             "color":       color,
             "fields": [{
@@ -897,7 +959,7 @@ def send_discord_alert(ticker: str, signal: dict, rel_vol: float,
                 "inline": False,
             }],
             "footer": {
-                "text": f"Alert Bot v3.0 | Funnel Architecture | ATR: {signal['atr_source']}"
+                "text": f"Alert Bot v3.0 | ATR: {signal['atr_source']}"
             },
         }],
     }
@@ -954,6 +1016,7 @@ def check_market():
 
     # VTI Regime Check — extracted from same bulk pull, no extra API call
     regime_penalty = time_penalty
+    regime_bullish = True   # Passed to alert for display — default bullish
     try:
         vti_df = extract_ticker_daily(bulk_data, 'VTI')
         if vti_df is not None and len(vti_df) >= 200:
@@ -961,6 +1024,7 @@ def check_market():
             vti_price = float(vti_df['Close'].iloc[-1])
             if vti_price < vti_sma:
                 regime_penalty += 1
+                regime_bullish  = False
                 print(f"⚠️ Regime: BEARISH (VTI ${vti_price:.2f} < 200 SMA ${vti_sma:.2f}) → penalty +1")
             else:
                 print(f"✅ Regime: BULLISH (VTI ${vti_price:.2f} > 200 SMA ${vti_sma:.2f})")
@@ -1143,6 +1207,7 @@ def check_market():
                 rel_vol         = rel_vol,
                 earnings_msg    = earnings_msg,
                 elapsed_minutes = elapsed_minutes,
+                regime_bullish  = regime_bullish,
             )
 
             # State machine + cooldown write — DISABLED (allow repeat alerts)
