@@ -596,24 +596,27 @@ def run_swing_engine(df_daily: pd.DataFrame, regime_penalty: int) -> dict | None
     # RSI cap (< 65) prevents flagging overbought momentum stocks as dip buys
     wick_to_21 = (daily_low <= ema_21 * 1.005) and (daily_close > ema_21) and (rsi < 65)
 
-    # Support hold: price is currently sitting near EMA-21 (no wick needed)
-    near_21 = abs(daily_close - ema_21) / ema_21 < 0.015
+    # Support hold: direction-aware — abs() removed (same bug as 50 EMA)
+    pct_from_21 = (daily_close - ema_21) / ema_21   # Signed: positive = above, negative = below
+    near_21     = 0 <= pct_from_21 < 0.015           # Above EMA within 1.5%
+    below_21    = -0.015 <= pct_from_21 < 0          # Just broken below EMA
 
     if wick_to_21 and not near_21:
         # Price wicked down and bounced hard away — buying demand already confirmed
-        # Strongest setup: support tested AND rejected decisively
         score += 3
         reasons.append(f"⚡ Daily Wick to 21 EMA + Strong Recovery (Low ${daily_low:.2f} → Close ${daily_close:.2f})")
     elif wick_to_21 and near_21:
         # Price wicked and is still close to EMA — bounce just beginning
-        # Support tested but not yet confirmed by follow-through
         score += 2
         reasons.append(f"⚡ Daily Wick to 21 EMA — Early Bounce (${ema_21:.2f})")
     elif near_21 and rsi < 55:
-        # No wick — price hovering at EMA without having tested below
-        # Weakest of the three: support respected but not actively tested
+        # No wick — price hovering just above EMA, support respected
         score += 2
         reasons.append(f"📈 Daily 21 EMA Support Hold (${ema_21:.2f})")
+    elif below_21 and rsi < 55:
+        # Price just broken below 21 EMA — EMA now overhead resistance
+        score += 1
+        reasons.append(f"⚠️ Below 21 EMA — Testing as Support (${ema_21:.2f})")
 
     # D. 50 EMA proximity — direction-aware (abs() was a bug: fired above AND below equally)
     pct_from_50 = (price - ema_50) / ema_50  # Signed: positive = above, negative = below
