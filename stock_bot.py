@@ -51,19 +51,39 @@ import pytz
 TICKERS = [
     'VTI',          # Market proxy — regime check
 
-    # Safe Foundation
+    # ── Safe Foundation (ETFs) ────────────────────────────────────────────────
     'VFV.TO', 'ZSP.TO', 'XEF.TO', 'SPLG', 'QQQM',
 
-    # Sector ETFs
+    # ── Sector ETFs ───────────────────────────────────────────────────────────
     'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'URA',
 
-    # US Swings
-    'PLTR', 'SOFI', 'SHOP', 'CCL', 'AMD', 'TSLA', 'HOOD', 'NVDA',
-    'AAPL', 'MSFT', 'NFLX', 'ORCL', 'MARA', 'F', 'LCID', 'DKNG',
-    'UBER', 'RIVN', 'CLSK', 'RIOT', 'MSTR', 'PANW', 'ARM', 'SMCI', 'COIN',
+    # ── Tier 1 — Safest (Mega Cap, Deep Liquidity) ────────────────────────────
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',   # Big Tech
+    'JPM', 'BAC',                                # Financials
+    'XOM',                                       # Energy
+    'ABBV', 'COST',                              # Defensive
 
-    # Canadian Growth & Swings
-    'HUT.TO', 'BITF.TO', 'CVE.TO', 'AC.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO',
+    # ── Tier 2 — Moderate Risk (Higher Beta, Sector Sensitive) ───────────────
+    'NVDA', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX',  # Semiconductors
+    'NFLX', 'ORCL', 'CRM', 'NOW', 'PANW',           # Software & Cloud
+    'SHOP', 'UBER', 'PYPL',                          # Consumer Tech
+    'GS', 'SQ',                                      # Financials
+    'OXY', 'DVN',                                    # Energy
+    'LLY',                                           # Healthcare
+    'CCL', 'DKNG',                                   # Consumer
+
+    # ── Tier 3 — High Risk (High Beta, Momentum Driven) ──────────────────────
+    'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI',      # High-beta tech
+    'SOFI', 'HOOD', 'AFRM',                     # Fintech
+    'COIN', 'MSTR',                             # Crypto proxy
+    'SNOW',                                     # High-growth unprofitable
+    
+    # ── Very High Risk (Speculative / Crypto Mining) ──────────────────────────
+    'MARA', 'RIOT',                             # Crypto miners
+    'BABA',                                     # China geopolitical risk
+
+    # ── Canadian Growth & Swings (TSX) ───────────────────────────────────────
+    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO',
 ]
 
 WEBHOOK_URL = os.getenv('DISCORD_URL')
@@ -881,8 +901,7 @@ def send_discord_alert(ticker: str, signal: dict, rel_vol: float,
             "color":       color,
             "fields": [{
                 "name":   "🔗 Links",
-                "value":  (f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker}) | "
-                           f"[TradingView](https://tradingview.com/chart/?symbol={ticker})"),
+                "value":  f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})",
                 "inline": False,
             }],
             "footer": {
