@@ -86,7 +86,7 @@ WEBHOOK_URL = os.getenv('DISCORD_URL')
 
 # Scoring thresholds
 DAY_SCORE_THRESHOLD   = 6
-SWING_SCORE_THRESHOLD = 5
+SWING_SCORE_THRESHOLD = 8
 
 # Risk parameters
 MAX_STOP_PCT = {
