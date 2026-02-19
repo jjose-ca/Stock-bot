@@ -615,11 +615,17 @@ def run_swing_engine(df_daily: pd.DataFrame, regime_penalty: int) -> dict | None
         score += 2
         reasons.append(f"📈 Daily 21 EMA Support Hold (${ema_21:.2f})")
 
-    # D. 50 EMA proximity — now always reliable with 1y data
-    near_50 = abs(price - ema_50) / ema_50 < 0.02
-    if near_50:
+    # D. 50 EMA proximity — direction-aware (abs() was a bug: fired above AND below equally)
+    pct_from_50 = (price - ema_50) / ema_50  # Signed: positive = above, negative = below
+
+    if 0 <= pct_from_50 < 0.02:
+        # Price above 50 EMA pulling back toward it — support structure intact
         score += 2
-        reasons.append(f"📊 Testing Daily 50 EMA (${ema_50:.2f})")
+        reasons.append(f"📊 Pulling Back to 50 EMA Support (${ema_50:.2f})")
+    elif -0.02 <= pct_from_50 < 0:
+        # Price has broken below 50 EMA — weakened structure, reduced score
+        score += 1
+        reasons.append(f"⚠️ Below 50 EMA — Testing as Support (${ema_50:.2f})")
 
     # E. Broader trend: price above 50 EMA
     if price > ema_50:
