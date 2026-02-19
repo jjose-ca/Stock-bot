@@ -881,10 +881,6 @@ def send_discord_alert(ticker: str, signal: dict, rel_vol: float,
                  else "Strong" if rel_vol > 1.2 else "Normal")
     desc += f"• **Volume:** `{rel_vol:.1f}x` ({vol_label} {vol_dir})\n\n"
 
-    desc += "🎯 **Execution Guidance**\n"
-    desc += f"• **Size:** {signal.get('size_guidance', 'Standard')}\n"
-    desc += f"• **Hold:** {signal.get('hold_guidance', '')}\n\n"
-
     desc += "📝 **Signal Reasons**\n"
     for r in signal.get("reasons", []):
         desc += f"• {r}\n"
