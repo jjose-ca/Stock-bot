@@ -52,36 +52,32 @@ TICKERS = [
     'VTI',          # Market proxy — regime check
 
     # ── Safe Foundation (ETFs) ────────────────────────────────────────────────
-    'VFV.TO', 'ZSP.TO', 'XEF.TO', 'SPLG', 'QQQM',
+    'SPY', 'ZSP.TO', 'XEF.TO', 'SPLG', 'QQQM', 'QQQ', 'IWM',
 
     # ── Sector ETFs ───────────────────────────────────────────────────────────
-    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'URA',
+    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 
 
     # ── Tier 1 — Safest (Mega Cap, Deep Liquidity) ────────────────────────────
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',   # Big Tech
     'JPM', 'BAC',                                # Financials
     'XOM',                                       # Energy
-    'ABBV', 'COST',                              # Defensive
+    'ABBV',                                      # Defensive
 
     # ── Tier 2 — Moderate Risk (Higher Beta, Sector Sensitive) ───────────────
     'NVDA', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX',  # Semiconductors
     'NFLX', 'ORCL', 'CRM', 'NOW', 'PANW',           # Software & Cloud
     'SHOP', 'UBER', 'PYPL',                          # Consumer Tech
-    'GS', 'SQ',                                      # Financials
+    'TGT', 'SQ',                                      # Financials
     'OXY', 'DVN',                                    # Energy
-    'LLY',                                           # Healthcare
     'CCL', 'DKNG',                                   # Consumer
+    'ITB', 'XLK', 'SMH', 'GLD', 'SLV', 
 
     # ── Tier 3 — High Risk (High Beta, Momentum Driven) ──────────────────────
     'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI',      # High-beta tech
-    'SOFI', 'HOOD', 'AFRM',                     # Fintech
+    'SOFI', 'HOOD',                     # Fintech
     'COIN', 'MSTR',                             # Crypto proxy
     'SNOW',                                     # High-growth unprofitable
     
-    # ── Very High Risk (Speculative / Crypto Mining) ──────────────────────────
-    'MARA', 'RIOT',                             # Crypto miners
-    'BABA',                                     # China geopolitical risk
-
     # ── Canadian Growth & Swings (TSX) ───────────────────────────────────────
     'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO',
 ]
