@@ -8,16 +8,12 @@ on:
     - cron: '45 12 * * 1-5'
     - cron: '45 13 * * 1-5'
 
-    # Intraday: every hour at :30, covering 9:30am–2:30pm ET
-    #   EDT (Summer): 9:30am = 13:30 UTC, 2:30pm = 18:30 UTC
-    #   EST (Winter): 9:30am = 14:30 UTC, 2:30pm = 19:30 UTC
-    #   13-19 UTC as wide net safely covers both seasons
-    - cron: '30 13-19 * * 1-5'
+    # Intraday: every hour at :30, 9:30am–2:30pm ET
+    #   Using 14-18 UTC avoids overlap with premarket and power hour
+    - cron: '30 14-18 * * 1-5'
 
     # Power Hour: every 15 min, 3:00–4:00pm ET
-    #   EDT (Summer): 3pm = 19:00 UTC, 4pm = 20:00 UTC
-    #   EST (Winter): 3pm = 20:00 UTC, 4pm = 21:00 UTC
-    #   19-21 UTC as wide net safely covers both seasons
+    #   EDT: 19:00–20:00 UTC | EST: 20:00–21:00 UTC
     - cron: '*/15 19-21 * * 1-5'
 
   workflow_dispatch:
@@ -25,9 +21,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # Give the job permission to write back to the repo
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Fetch with a token that can push back
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -41,3 +45,12 @@ jobs:
         env:
           DISCORD_URL: ${{ secrets.DISCORD_URL }}
         run: python stock_bot.py
+
+      - name: Commit trade log
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add trade_log.json
+          # Only commit if the file actually changed
+          git diff --staged --quiet || git commit -m "chore: update trade log [skip ci]"
+          git push
