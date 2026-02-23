@@ -491,7 +491,7 @@ def run_day_engine(df_today: pd.DataFrame, total_penalty: int,
         daily_atr:      ATR from the daily timeframe, used for stop/target.
                         Falls back to 5m ATR if not provided (not recommended).
     """
-    if df_today is None or len(df_today) < 16:  # RSI(14) needs 15 bars min; 16 gives one bar of headroom
+    if df_today is None or len(df_today) < 20:  # RSI(14) needs ≥15 bars; 20 gives safe headroom
         return None
 
     df = df_today.copy()
