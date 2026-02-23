@@ -22,7 +22,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # Give the job permission to write back to the repo
     permissions:
       contents: write
 
@@ -30,7 +29,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Fetch with a token that can push back
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
@@ -50,6 +48,8 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Create empty log if bot never fired an alert this run
+          [ -f trade_log.json ] || echo "[]" > trade_log.json
           git add trade_log.json
           # Only commit if the file actually changed
           git diff --staged --quiet || git commit -m "chore: update trade log [skip ci]"
