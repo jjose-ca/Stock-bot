@@ -56,6 +56,7 @@ import yfinance as yf
 from datetime import datetime
 from pathlib import Path
 
+
 # =============================================================================
 #  SECTION 1 — CONFIGURATION
 #  ✏️  Edit this section to customize the bot for your needs.
@@ -185,10 +186,6 @@ TIMEZONE = "US/Eastern"
 
 def get_scan_mode(et_now: datetime) -> str:
     """Returns the appropriate scan mode based on current ET time."""
-    if et_now.weekday() > 4:
-        print("📅 Weekend — markets are closed.")
-        return "off_hours"
-
     t = et_now.hour + et_now.minute / 60.0
 
     if 8.5  <= t < 9.5:  return "premarket"
