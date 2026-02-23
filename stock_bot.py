@@ -787,6 +787,40 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int) -> dict | None:
         penalty = 2
         reasons.append(f"⚠️ BB Squeeze (width {bb_width:.3f}) — reduced edge")
 
+    # ── ROC Deceleration Penalty (Malik-style trend velocity check) ───────────
+    # Inspired by: rate-of-change deceleration signals a trend running out of
+    # steam even when price is still above all EMAs. If the trend is slowing,
+    # reduce conviction before it reverses.
+    #
+    # ROC_10  = velocity of the current trend (last 10 days)
+    # ROC_ref = velocity 10 days ago (rolling comparison)
+    # If price is in bullish structure but ROC is meaningfully decelerating:
+    #   Mild deceleration  (ROC dropped > 30%): -1 point
+    #   Sharp deceleration (ROC dropped > 60%): -2 points
+    roc_penalty = 0
+    try:
+        if len(df) >= 21:
+            roc_10  = (price - float(df['Close'].iloc[-11])) / float(df['Close'].iloc[-11]) * 100
+            roc_ref = (float(df['Close'].iloc[-11]) - float(df['Close'].iloc[-21])) / float(df['Close'].iloc[-21]) * 100
+
+            # Only penalise when price is above 50 EMA (bullish structure but decelerating)
+            if price > ema_50 and roc_ref > 0 and roc_10 < roc_ref:
+                decel_pct = (roc_ref - roc_10) / roc_ref  # how much velocity dropped
+                if decel_pct >= 0.60:
+                    roc_penalty = 2
+                    reasons.append(
+                        f"⚠️ Trend Sharply Decelerating — ROC {roc_ref:.1f}% → {roc_10:.1f}% (−{decel_pct*100:.0f}%)"
+                    )
+                elif decel_pct >= 0.30:
+                    roc_penalty = 1
+                    reasons.append(
+                        f"⚠️ Trend Decelerating — ROC {roc_ref:.1f}% → {roc_10:.1f}% (−{decel_pct*100:.0f}%)"
+                    )
+    except Exception:
+        pass
+
+    penalty += roc_penalty
+
     # ── Final score ───────────────────────────────────────────────────────────
     score     = trend_score + momentum_score - penalty
     threshold = SWING_SCORE_THRESHOLD + total_penalty
@@ -857,6 +891,59 @@ def signals_conflict(day_signal: dict | None, swing_signal: dict | None) -> bool
     return day_long != swing_long
 
 
+def calculate_position_size(scenario: str, score: int, threshold: int,
+                             price: float, atr: float) -> dict:
+    """
+    Calculates a suggested portfolio allocation % based on:
+      1. Scenario  — A/B/C sets the base conviction level
+      2. Score margin — how far above threshold boosts size
+      3. Volatility  — ATR as % of price shrinks size on wild movers
+
+    Returns a dict with 'pct' (float) and 'label' (display string).
+
+    Sizing philosophy (inspired by Malik's dynamic allocation approach):
+      - Never output a vague label like "Half Size" — give a concrete number
+      - High volatility (ATR > 3% of price) automatically reduces exposure
+      - Strong conviction (score well above threshold) increases exposure
+      - Hard caps per scenario prevent over-concentration
+    """
+    # Base allocation by scenario
+    base = {"A": 10.0, "B": 4.0, "C": 6.0}.get(scenario, 5.0)
+
+    # Conviction boost: +1% for each point above threshold, capped at +4%
+    margin       = max(score - threshold, 0)
+    conviction   = min(margin * 1.0, 4.0)
+
+    # Volatility adjustment: ATR as % of price
+    # Low vol  (< 1.5%): no reduction
+    # Mid vol  (1.5–3%): scale down proportionally
+    # High vol (> 3%):   cap at 60% of base
+    atr_pct = (atr / price) * 100 if price > 0 else 2.0
+    if atr_pct <= 1.5:
+        vol_factor = 1.0
+    elif atr_pct <= 3.0:
+        vol_factor = 1.0 - ((atr_pct - 1.5) / 1.5) * 0.4   # linear 1.0 → 0.6
+    else:
+        vol_factor = 0.6
+
+    raw_pct = (base + conviction) * vol_factor
+
+    # Hard caps per scenario
+    caps = {"A": 15.0, "B": 6.0, "C": 10.0}
+    pct  = round(min(raw_pct, caps.get(scenario, 10.0)), 1)
+
+    # Human-readable volatility tag
+    if atr_pct <= 1.5:   vol_tag = "low vol"
+    elif atr_pct <= 3.0: vol_tag = "mid vol"
+    else:                vol_tag = "high vol ⚠️"
+
+    label = (
+        f"{pct}% of portfolio "
+        f"(score +{margin} above min · ATR {atr_pct:.1f}% · {vol_tag})"
+    )
+    return {"pct": pct, "label": label}
+
+
 def build_final_signal(
     day_signal:   dict | None,
     swing_signal: dict | None,
@@ -874,10 +961,16 @@ def build_final_signal(
     # Scenario A: Both engines agree
     if day_ok and swing_ok:
         sig = swing_signal.copy()
+        combined_score = day_signal["score"] + swing_signal["score"]
+        combined_threshold = day_signal["threshold"] + swing_signal["threshold"]
+        pos_a = calculate_position_size(
+            "A", combined_score, combined_threshold,
+            swing_signal["price"], swing_signal["atr"]
+        )
         sig.update({
             "scenario":       "A",
             "scenario_label": "⚡ SCENARIO A — DAY + SWING FULLY ALIGNED",
-            "size_guidance":  "Full Size — Both timeframes confirmed",
+            "size_guidance":  pos_a["label"],
             "hold_guidance":  (
                 f"Day target: ${day_signal['take_profit']:.2f} (daily ATR × {DAY_ATR_TARGET_MULT}). "
                 f"Trail remainder with daily ATR stop for multi-day hold."
@@ -899,10 +992,14 @@ def build_final_signal(
     # Scenario B: Day engine only
     if day_ok and not swing_ok:
         sig = day_signal.copy()
+        pos_b = calculate_position_size(
+            "B", day_signal["score"], day_signal["threshold"],
+            day_signal["price"], day_signal["atr"]
+        )
         sig.update({
             "scenario":       "B",
             "scenario_label": "⚡ SCENARIO B — INTRADAY SCALP ONLY",
-            "size_guidance":  "Small Size — No daily structure confirmation",
+            "size_guidance":  pos_b["label"],
             "hold_guidance":  "Must exit before 3:45pm ET. No overnight hold.",
             "mode":           "DAY TRADE",
         })
@@ -911,10 +1008,14 @@ def build_final_signal(
     # Scenario C: Swing engine only
     if swing_ok and not day_ok:
         sig = swing_signal.copy()
+        pos_c = calculate_position_size(
+            "C", swing_signal["score"], swing_signal["threshold"],
+            swing_signal["price"], swing_signal["atr"]
+        )
         sig.update({
             "scenario":       "C",
             "scenario_label": "📅 SCENARIO C — SWING (Awaiting Intraday Confirmation)",
-            "size_guidance":  "Half Size — Add on VWAP reclaim with volume",
+            "size_guidance":  pos_c["label"],
             "hold_guidance":  (
                 "Daily structure valid. Best entry: next open or VWAP reclaim "
                 "with 1.5x+ relative volume on the 5m chart."
