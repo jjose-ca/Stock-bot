@@ -192,8 +192,10 @@ def get_scan_mode(et_now: datetime) -> str:
     if 9.5  <= t < 15.0: return "intraday"
     if 15.0 <= t < 16.0: return "power_hour"
 
-    print("🌙 Outside scan windows — nothing to do.")
-    return "off_hours"
+    # Outside defined windows — default to intraday so manual and
+    # scheduled triggers always run a scan rather than exiting silently.
+    print("🌙 Outside normal scan windows — defaulting to intraday mode.")
+    return "intraday"
 
 
 def get_time_penalty(et_now: datetime) -> tuple[int, list[str]]:
