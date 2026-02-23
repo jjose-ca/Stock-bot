@@ -1501,14 +1501,28 @@ def check_market(mode: str, tickers_override: list | None = None):
                 df = extract_ticker_daily(bulk_data, ticker)
                 if df is None or len(df) < 2: continue
 
-                # Use live pre-market price if available; fall back to last daily close.
-                # bulk daily data lags during pre-market so fast_info gives a real gap.
-                prev = float(df['Close'].iloc[-1])
+                # prev = yesterday's close (iloc[-1] is the last completed daily bar)
+                # price = today's live pre-market price from fast_info
+                # On weekends fast_info returns Friday's close, same as iloc[-1],
+                # so we compare against iloc[-2] (the prior close) to always get
+                # a meaningful gap regardless of when the bot runs.
+                prev_close  = float(df['Close'].iloc[-1])   # last completed session
+                prior_close = float(df['Close'].iloc[-2])   # session before that
+
                 try:
-                    price = yf.Ticker(ticker).fast_info.get("last_price") or prev
-                    price = float(price)
+                    live_price = yf.Ticker(ticker).fast_info.get("last_price")
+                    live_price = float(live_price) if live_price else None
                 except Exception:
-                    price = prev
+                    live_price = None
+
+                # If fast_info returned the same value as prev_close (weekend/stale),
+                # fall back to comparing prev_close vs prior_close for a real gap.
+                if live_price and abs(live_price - prev_close) / prev_close > 0.0001:
+                    price = live_price
+                    prev  = prev_close    # genuine pre-market gap vs yesterday
+                else:
+                    price = prev_close
+                    prev  = prior_close   # fallback: yesterday vs day before
 
                 gap_pct = (price - prev) / prev * 100
                 currency = get_currency(ticker)
