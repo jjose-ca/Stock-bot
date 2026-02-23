@@ -334,15 +334,23 @@ def fetch_targeted_intraday(ticker: str) -> pd.DataFrame | None:
             return None
 
         # Guard against yfinance silently returning stale data.
-        # If the newest bar is more than 12 minutes old during market hours,
-        # the feed is lagging and signals would be based on stale prices.
+        # Only applied during live market hours (weekdays 9:30am–4:00pm ET).
+        # Skipped on weekends and outside hours so testing always works.
         try:
             tz          = pytz.timezone(TIMEZONE)
-            newest_bar  = df_rth.index[-1]
-            age_minutes = (datetime.now(tz) - newest_bar).total_seconds() / 60.0
-            if age_minutes > 12:
-                print(f"   ⚠️ [{ticker}] Stale data: newest bar is {age_minutes:.0f}min old. Skipping.")
-                return None
+            now_et      = datetime.now(tz)
+            is_market_hours = (
+                now_et.weekday() < 5 and
+                now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+                <= now_et <=
+                now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+            )
+            if is_market_hours:
+                newest_bar  = df_rth.index[-1]
+                age_minutes = (now_et - newest_bar).total_seconds() / 60.0
+                if age_minutes > 12:
+                    print(f"   ⚠️ [{ticker}] Stale data: newest bar is {age_minutes:.0f}min old. Skipping.")
+                    return None
         except Exception:
             pass  # Don't block on age check errors — let caller decide
 
