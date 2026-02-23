@@ -23,8 +23,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 680.94,
-    "min_price": 680.94
+    "max_price": 690.0,
+    "min_price": 680.3709716796875
   },
   {
     "id": "IWM_20260223_1508",
@@ -52,8 +52,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 259.82,
-    "min_price": 259.82
+    "max_price": 264.3699951171875,
+    "min_price": 258.1050109863281
   },
   {
     "id": "GDX_20260223_1508",
@@ -75,11 +75,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "15:08 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
-    "max_price": 110.12,
-    "min_price": 110.12
+    "status": "LOST",
+    "outcome_date": "2026-02-23",
+    "outcome_pct": -2.0,
+    "max_price": 110.54000091552734,
+    "min_price": 107.62000274658203
   },
   {
     "id": "SIL_20260223_1508",
@@ -105,8 +105,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 110.12,
-    "min_price": 110.12
+    "max_price": 111.44999694824219,
+    "min_price": 108.5999984741211
   },
   {
     "id": "GLD_20260223_1508",
@@ -132,8 +132,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 479.76,
-    "min_price": 479.76
+    "max_price": 480.67999267578125,
+    "min_price": 474.6099853515625
   },
   {
     "id": "SLV_20260223_1508",
@@ -155,11 +155,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "15:08 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
-    "max_price": 79.64,
-    "min_price": 79.64
+    "status": "LOST",
+    "outcome_date": "2026-02-23",
+    "outcome_pct": -2.0,
+    "max_price": 80.51930236816406,
+    "min_price": 77.91000366210938
   },
   {
     "id": "ITB_20260223_1508",
@@ -182,11 +182,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "15:08 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
-    "max_price": 109.58,
-    "min_price": 109.58
+    "status": "LOST",
+    "outcome_date": "2026-02-23",
+    "outcome_pct": -1.27,
+    "max_price": 111.2300033569336,
+    "min_price": 108.12000274658203
   },
   {
     "id": "XOM_20260223_1508",
@@ -208,11 +208,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "15:08 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
-    "max_price": 150.91,
-    "min_price": 150.91
+    "status": "LOST",
+    "outcome_date": "2026-02-23",
+    "outcome_pct": -1.19,
+    "max_price": 151.25,
+    "min_price": 148.1300048828125
   },
   {
     "id": "LRCX_20260223_1508",
@@ -238,8 +238,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 240.47,
-    "min_price": 240.47
+    "max_price": 249.39999389648438,
+    "min_price": 237.37010192871094
   },
   {
     "id": "TOU.TO_20260223_1508",
@@ -264,7 +264,245 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 62.78,
-    "min_price": 62.78
+    "max_price": 63.880001068115234,
+    "min_price": 62.380001068115234
+  },
+  {
+    "id": "SPY_20260223_1541",
+    "ticker": "SPY",
+    "currency": "USD",
+    "scenario": "C",
+    "mode": "SWING",
+    "entry": 681.56,
+    "stop_loss": 671.15,
+    "take_profit": 701.76,
+    "rr_ratio": 1.94,
+    "score": 6,
+    "threshold": 6,
+    "atr": 8.0787,
+    "reasons": [
+      "\u26a0\ufe0f Below 21 EMA \u2014 Testing as Support ($687.08)",
+      "\u26a0\ufe0f Below 50 EMA \u2014 Testing as Support ($685.13)",
+      "\ud83d\udcc9 Daily RSI Oversold (44.7)",
+      "\ud83d\udee1\ufe0f Closed at Daily BB Lower ($677.61)"
+    ],
+    "alert_date": "2026-02-23",
+    "alert_time": "15:41 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 681.56,
+    "min_price": 681.56
+  },
+  {
+    "id": "SOXQ_20260223_1541",
+    "ticker": "SOXQ",
+    "currency": "USD",
+    "scenario": "B",
+    "mode": "DAY TRADE",
+    "entry": 64.42,
+    "stop_loss": 63.49,
+    "take_profit": 66.27,
+    "rr_ratio": 1.99,
+    "score": 5,
+    "threshold": 5,
+    "atr": 1.8542,
+    "reasons": [
+      "\u2705 Price Above VWAP ($64.36)",
+      "\ud83d\ude80 Bullish EMA Stack (9 > 21)",
+      "\u26a1 VWAP Reclaim \u2014 Intraday Bounce Confirmed",
+      "\ud83d\udee1\ufe0f 5m BB Lower Band Touch ($64.00)"
+    ],
+    "alert_date": "2026-02-23",
+    "alert_time": "15:41 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 64.42,
+    "min_price": 64.42
+  },
+  {
+    "id": "GDX_20260223_1541",
+    "ticker": "GDX",
+    "currency": "USD",
+    "scenario": "B",
+    "mode": "DAY TRADE",
+    "entry": 110.01,
+    "stop_loss": 107.81,
+    "take_profit": 114.89,
+    "rr_ratio": 2.22,
+    "score": 5,
+    "threshold": 5,
+    "atr": 4.875,
+    "reasons": [
+      "\u2705 Price Above VWAP ($109.57)",
+      "\ud83d\ude80 Bullish EMA Stack (9 > 21)",
+      "\ud83d\udee1\ufe0f 5m BB Lower Band Touch ($109.65)"
+    ],
+    "alert_date": "2026-02-23",
+    "alert_time": "15:41 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 110.01,
+    "min_price": 110.01
+  },
+  {
+    "id": "SIL_20260223_1541",
+    "ticker": "SIL",
+    "currency": "USD",
+    "scenario": "B",
+    "mode": "DAY TRADE",
+    "entry": 110.1,
+    "stop_loss": 107.9,
+    "take_profit": 115.73,
+    "rr_ratio": 2.56,
+    "score": 5,
+    "threshold": 5,
+    "atr": 5.6289,
+    "reasons": [
+      "\u2705 Price Above VWAP ($109.95)",
+      "\ud83d\ude80 Bullish EMA Stack (9 > 21)",
+      "\ud83d\udee1\ufe0f 5m BB Lower Band Touch ($109.72)"
+    ],
+    "alert_date": "2026-02-23",
+    "alert_time": "15:41 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 110.1,
+    "min_price": 110.1
+  },
+  {
+    "id": "SMH_20260223_1541",
+    "ticker": "SMH",
+    "currency": "USD",
+    "scenario": "B",
+    "mode": "DAY TRADE",
+    "entry": 411.78,
+    "stop_loss": 406.04,
+    "take_profit": 423.27,
+    "rr_ratio": 2.0,
+    "score": 5,
+    "threshold": 5,
+    "atr": 11.4881,
+    "reasons": [
+      "\u2705 Price Above VWAP ($411.54)",
+      "\ud83d\ude80 Bullish EMA Stack (9 > 21)",
+      "\u26a1 VWAP Reclaim \u2014 Intraday Bounce Confirmed",
+      "\ud83d\udee1\ufe0f 5m BB Lower Band Touch ($409.44)"
+    ],
+    "alert_date": "2026-02-23",
+    "alert_time": "15:41 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 411.78,
+    "min_price": 411.78
+  },
+  {
+    "id": "GLD_20260223_1541",
+    "ticker": "GLD",
+    "currency": "USD",
+    "scenario": "B",
+    "mode": "DAY TRADE",
+    "entry": 480.55,
+    "stop_loss": 473.62,
+    "take_profit": 494.42,
+    "rr_ratio": 2.0,
+    "score": 6,
+    "threshold": 5,
+    "atr": 13.8669,
+    "reasons": [
+      "\u2705 Price Above VWAP ($478.05)",
+      "\ud83d\ude80 Bullish EMA Stack (9 > 21)",
+      "\ud83d\udee1\ufe0f 5m BB Lower Band Touch ($478.33)",
+      "\ud83d\udcc8 5m Higher High + Higher Low"
+    ],
+    "alert_date": "2026-02-23",
+    "alert_time": "15:41 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 480.55,
+    "min_price": 480.55
+  },
+  {
+    "id": "ITB_20260223_1541",
+    "ticker": "ITB",
+    "currency": "USD",
+    "scenario": "B",
+    "mode": "DAY TRADE",
+    "entry": 109.67,
+    "stop_loss": 108.28,
+    "take_profit": 112.45,
+    "rr_ratio": 2.0,
+    "score": 5,
+    "threshold": 5,
+    "atr": 2.7805,
+    "reasons": [
+      "\u2705 Price Above VWAP ($109.09)",
+      "\ud83d\ude80 Bullish EMA Stack (9 > 21)",
+      "\ud83d\udee1\ufe0f 5m BB Lower Band Touch ($109.13)"
+    ],
+    "alert_date": "2026-02-23",
+    "alert_time": "15:41 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 109.67,
+    "min_price": 109.67
+  },
+  {
+    "id": "XOM_20260223_1541",
+    "ticker": "XOM",
+    "currency": "USD",
+    "scenario": "B",
+    "mode": "DAY TRADE",
+    "entry": 150.77,
+    "stop_loss": 148.98,
+    "take_profit": 154.36,
+    "rr_ratio": 2.01,
+    "score": 5,
+    "threshold": 5,
+    "atr": 3.5859,
+    "reasons": [
+      "\u2705 Price Above VWAP ($150.21)",
+      "\ud83d\ude80 Bullish EMA Stack (9 > 21)",
+      "\ud83d\udee1\ufe0f 5m BB Lower Band Touch ($149.98)"
+    ],
+    "alert_date": "2026-02-23",
+    "alert_time": "15:41 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 150.77,
+    "min_price": 150.77
+  },
+  {
+    "id": "ABBV_20260223_1541",
+    "ticker": "ABBV",
+    "currency": "USD",
+    "scenario": "B",
+    "mode": "DAY TRADE",
+    "entry": 228.54,
+    "stop_loss": 225.45,
+    "take_profit": 234.7,
+    "rr_ratio": 1.99,
+    "score": 5,
+    "threshold": 5,
+    "atr": 6.1687,
+    "reasons": [
+      "\ud83d\ude80 Bullish EMA Stack (9 > 21)",
+      "\ud83c\udf0a Momentum Reset (RSI 53.1)",
+      "\ud83d\udee1\ufe0f 5m BB Lower Band Touch ($227.86)"
+    ],
+    "alert_date": "2026-02-23",
+    "alert_time": "15:41 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 228.54,
+    "min_price": 228.54
   }
 ]
