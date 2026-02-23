@@ -136,6 +136,11 @@ MAX_STOP_PCT = {
 }
 MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 
+# ── Portfolio value ───────────────────────────────────────────────────────────
+# Set this to your total trading capital in USD.
+# Alerts will show exact dollar amounts to invest per signal.
+PORTFOLIO_VALUE = 360.0   # ← Update this whenever your account size changes
+
 # Day trade stops now use DAILY ATR (v4.1) — 5m ATR was too tight and got
 # stopped out by normal noise. Daily ATR gives structurally meaningful levels.
 DAY_ATR_STOP_MULT     = 0.5    # Day trade stop = price − (daily_ATR × 0.5)
@@ -937,11 +942,21 @@ def calculate_position_size(scenario: str, score: int, threshold: int,
     elif atr_pct <= 3.0: vol_tag = "mid vol"
     else:                vol_tag = "high vol ⚠️"
 
+    dollar_amount = round(PORTFOLIO_VALUE * pct / 100, 2)
+    shares        = int(dollar_amount // price) if price > 0 else 0
+
+    if shares < 1:
+        share_note = "⚠️ < 1 share at current price — consider fractional shares"
+    elif shares == 1:
+        share_note = f"≈ 1 share"
+    else:
+        share_note = f"≈ {shares} shares"
+
     label = (
-        f"{pct}% of portfolio "
-        f"(score +{margin} above min · ATR {atr_pct:.1f}% · {vol_tag})"
+        f"{pct}% of portfolio = **${dollar_amount:.2f}** ({share_note}) "
+        f"[score +{margin} above min · ATR {atr_pct:.1f}% · {vol_tag}]"
     )
-    return {"pct": pct, "label": label}
+    return {"pct": pct, "dollar": dollar_amount, "shares": shares, "label": label}
 
 
 def build_final_signal(
