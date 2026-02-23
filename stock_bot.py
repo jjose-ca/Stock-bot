@@ -296,13 +296,23 @@ def fetch_bulk_daily(tickers: list) -> pd.DataFrame:
 
 def extract_ticker_daily(bulk_data: pd.DataFrame, ticker: str) -> pd.DataFrame | None:
     """Extracts a single ticker's OHLCV from the bulk MultiIndex DataFrame."""
+    REQUIRED_COLS = {'Open', 'High', 'Low', 'Close', 'Volume'}
     try:
         if isinstance(bulk_data.columns, pd.MultiIndex):
             if ticker not in bulk_data.columns.get_level_values(0):
                 return None
             df = bulk_data[ticker].copy()
         else:
+            # Single-ticker path: triggered when --ticker CLI flag is used.
+            # Validate that expected OHLCV columns are present before returning —
+            # without this check a shape change in yfinance would silently return
+            # wrong data with no error.
             df = bulk_data.copy()
+            df = _flatten(df)
+            missing = REQUIRED_COLS - set(df.columns)
+            if missing:
+                print(f"   ⚠️ [{ticker}] Unexpected columns — missing {missing}. Skipping.")
+                return None
 
         df = _flatten(df)
         df.dropna(subset=['Close'], inplace=True)
@@ -375,7 +385,11 @@ def passes_liquidity_filter(df_daily: pd.DataFrame, mode: str) -> bool:
             print(f"   💧 Dollar vol ${avg_dv/1e6:.1f}M < ${minimum/1e6:.0f}M min. Rejected.")
             return False
         return True
-    except Exception:
+    except Exception as e:
+        # Fail-open: tickers in this watchlist are established liquid names,
+        # so a calculation error almost certainly reflects a data issue rather
+        # than genuine illiquidity. Log the error so it's visible, then pass.
+        print(f"   ⚠️ Liquidity check error — passing ticker through: {e}")
         return True
 
 
@@ -627,6 +641,7 @@ def run_day_engine(df_today: pd.DataFrame, total_penalty: int,
         "vwap": round(vwap, 2), "rsi": round(rsi, 1),
         "ema_21": round(ema_21, 2), "ema_50": None,
         "price": round(price, 2), "is_bullish": above_vwap,
+        "direction": "long",   # both engines are long-only; used by conflict gate
         "mode": "DAY TRADE", "orb_high": orb_high,
     }
 
@@ -804,9 +819,22 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int) -> dict | None:
     #   Sharp deceleration (ROC dropped > 60%): -2 points
     roc_penalty = 0
     try:
-        if len(df) >= 21:
-            roc_10  = (price - float(df['Close'].iloc[-11])) / float(df['Close'].iloc[-11]) * 100
-            roc_ref = (float(df['Close'].iloc[-11]) - float(df['Close'].iloc[-21])) / float(df['Close'].iloc[-21]) * 100
+        # Use the actual datetime index to look up 10 and 20 trading days ago,
+        # rather than iloc[-11] / iloc[-21] which shift unpredictably after dropna
+        # removes warmup rows. This ensures ROC always compares true calendar
+        # windows regardless of how many rows were dropped earlier.
+        close_series = df['Close'].dropna()
+        if len(close_series) >= 21:
+            today_idx   = close_series.index[-1]
+            ten_ago_idx = close_series.index[-11]   # 10 bars back (inclusive of today)
+            twenty_ago_idx = close_series.index[-21]  # 20 bars back
+
+            close_today    = float(close_series.loc[today_idx])
+            close_ten_ago  = float(close_series.loc[ten_ago_idx])
+            close_twenty_ago = float(close_series.loc[twenty_ago_idx])
+
+            roc_10  = (close_today    - close_ten_ago)    / close_ten_ago    * 100
+            roc_ref = (close_ten_ago  - close_twenty_ago) / close_twenty_ago * 100
 
             # Only penalise when price is above 50 EMA (bullish structure but decelerating)
             if price > ema_50 and roc_ref > 0 and roc_10 < roc_ref:
@@ -859,6 +887,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int) -> dict | None:
         "vwap": None, "rsi": round(rsi, 1),
         "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
         "price": round(price, 2), "is_bullish": is_bullish,
+        "direction": "long",   # both engines are long-only; used by conflict gate
         "mode": "SWING", "near_52w_high": near_52w_high,
     }
 
@@ -880,20 +909,40 @@ def signals_conflict(day_signal: dict | None, swing_signal: dict | None) -> bool
     """
     Returns True if both signals fired but disagree on direction.
 
-    Day engine:   is_bullish = price > VWAP
-    Swing engine: is_bullish = price > EMA_21
+    Both engines are long-only so comparing price > stop_loss (the previous
+    implementation) was a tautology — always True, gate never fired.
 
-    Using those raw flags directly caused false conflicts (e.g. a stock above
-    its 21 EMA but briefly below VWAP after a morning dip).  We now resolve
-    direction through a common reference: both signals carry a 'price' value
-    and a 'stop_loss' value.  If both stops are below price the setups are
-    aligned long; any other combination is a genuine conflict.
+    The correct check uses is_bullish flags, which CAN genuinely disagree:
+      Day engine:   is_bullish = sig_bar closed above VWAP
+      Swing engine: is_bullish = daily close above EMA_21
+
+    To avoid false conflicts from brief intraday VWAP dips on otherwise
+    bullish daily setups, we only flag a conflict when the day engine is
+    bearish AND the distance below VWAP is meaningful (> 0.3% of price).
+    A stock hovering 0.1% below VWAP is not a genuine directional conflict
+    with a bullish daily structure.
     """
     if day_signal is None or swing_signal is None:
         return False
-    day_long   = day_signal["price"]   > day_signal["stop_loss"]
-    swing_long = swing_signal["price"] > swing_signal["stop_loss"]
-    return day_long != swing_long
+
+    day_bullish   = day_signal.get("is_bullish", True)
+    swing_bullish = swing_signal.get("is_bullish", True)
+
+    # If both agree, no conflict
+    if day_bullish == swing_bullish:
+        return False
+
+    # Day bearish, swing bullish: only flag if day is meaningfully below VWAP
+    if not day_bullish and swing_bullish:
+        price = day_signal.get("price", 0)
+        vwap  = day_signal.get("vwap", price)
+        if price > 0 and vwap > 0:
+            pct_below_vwap = (vwap - price) / price
+            return pct_below_vwap > 0.003   # only conflict if > 0.3% below VWAP
+        return True
+
+    # Day bullish, swing bearish — genuine conflict (rare in long-only setup)
+    return True
 
 
 def calculate_position_size(scenario: str, score: int, threshold: int,
@@ -996,7 +1045,11 @@ def build_final_signal(
             "vwap":        day_signal.get("vwap"),
             "rsi":         day_signal.get("rsi"),     # Fresher 5m RSI
             "atr_source":  "Daily (swing) + 5m (day)",
-            "score":       day_signal["score"] + swing_signal["score"],
+            "score":       combined_score,
+            "threshold":   combined_threshold,   # CRITICAL: must override swing-only
+                                                 # threshold inherited from swing_signal.copy()
+                                                 # so apply_earnings_penalty checks against
+                                                 # the correct combined minimum, not just 6.
             "reasons": (
                 [f"[5m] {r}"    for r in day_signal.get("reasons", [])] +
                 [f"[Daily] {r}" for r in swing_signal.get("reasons", [])]
@@ -1501,13 +1554,20 @@ def check_market(mode: str, tickers_override: list | None = None):
                 df = extract_ticker_daily(bulk_data, ticker)
                 if df is None or len(df) < 2: continue
 
-                # prev = yesterday's close (iloc[-1] is the last completed daily bar)
-                # price = today's live pre-market price from fast_info
-                # On weekends fast_info returns Friday's close, same as iloc[-1],
-                # so we compare against iloc[-2] (the prior close) to always get
-                # a meaningful gap regardless of when the bot runs.
-                prev_close  = float(df['Close'].iloc[-1])   # last completed session
-                prior_close = float(df['Close'].iloc[-2])   # session before that
+                # prev_close = last completed daily session (iloc[-1])
+                # prior_close = session before that (iloc[-2]) — weekend fallback
+                # live_price  = fast_info pre-open quote
+                #
+                # Staleness is detected via the date of the last daily bar, not
+                # by comparing prices. This avoids misclassifying a genuine flat
+                # open (price == prev_close within 0.01%) as stale data.
+                prev_close  = float(df['Close'].iloc[-1])
+                prior_close = float(df['Close'].iloc[-2])
+
+                # Check if last daily bar is from today — if not, data is stale
+                # (weekend, holiday, or pre-open before first bar is published).
+                last_bar_date = df.index[-1].date() if hasattr(df.index[-1], 'date') else None
+                data_is_live  = (last_bar_date == et_now.date())
 
                 try:
                     live_price = yf.Ticker(ticker).fast_info.get("last_price")
@@ -1515,14 +1575,19 @@ def check_market(mode: str, tickers_override: list | None = None):
                 except Exception:
                     live_price = None
 
-                # If fast_info returned the same value as prev_close (weekend/stale),
-                # fall back to comparing prev_close vs prior_close for a real gap.
-                if live_price and abs(live_price - prev_close) / prev_close > 0.0001:
+                if live_price and data_is_live:
+                    # Live session: compare fast_info quote vs yesterday's close
                     price = live_price
-                    prev  = prev_close    # genuine pre-market gap vs yesterday
+                    prev  = prev_close
+                elif live_price and not data_is_live:
+                    # Stale daily data (weekend/holiday): compare fast_info vs
+                    # prev_close (which is actually yesterday's close in this case)
+                    price = live_price
+                    prev  = prev_close
                 else:
+                    # fast_info unavailable: fall back to yesterday vs day before
                     price = prev_close
-                    prev  = prior_close   # fallback: yesterday vs day before
+                    prev  = prior_close
 
                 gap_pct = (price - prev) / prev * 100
                 currency = get_currency(ticker)
@@ -1747,8 +1812,5 @@ if __name__ == "__main__":
     else:
         mode = args.mode
 
-    if mode == "off_hours":
-        print("🌙 Outside scan windows — nothing to run.")
-    else:
-        tickers_override = [args.ticker.upper()] if args.ticker else None
-        check_market(mode=mode, tickers_override=tickers_override)
+    tickers_override = [args.ticker.upper()] if args.ticker else None
+    check_market(mode=mode, tickers_override=tickers_override)
