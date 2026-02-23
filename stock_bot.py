@@ -173,6 +173,13 @@ COOLDOWN_FILE    = "/tmp/alert_cooldowns.json"
 STATE_FILE       = "/tmp/setup_states.json"
 COOLDOWN_MINUTES = {"DAY TRADE": 30, "SWING": 240, "DAY TRADE + SWING": 30}
 
+# ── Trade outcome log ─────────────────────────────────────────────────────────
+# Persisted in the repo so outcomes survive between GitHub Actions runs.
+# Each alert is logged on fire; outcomes are auto-checked on every subsequent run.
+TRADE_LOG_FILE        = "trade_log.json"
+OUTCOME_CHECK_DAYS    = 10    # Stop checking a trade after this many calendar days
+OUTCOME_DISCORD_DAILY = True  # Send a daily summary of open/closed trades to Discord
+
 # ── Discord embed colors ──────────────────────────────────────────────────────
 COLOR_GREEN  = 5763719    # Scenario A — full alignment
 COLOR_YELLOW = 16776960   # Scenario B/C — partial signal
@@ -491,7 +498,7 @@ def run_day_engine(df_today: pd.DataFrame, total_penalty: int,
         daily_atr:      ATR from the daily timeframe, used for stop/target.
                         Falls back to 5m ATR if not provided (not recommended).
     """
-    if df_today is None or len(df_today) < 20:  # RSI(14) needs ≥15 bars; 20 gives safe headroom
+    if df_today is None or len(df_today) < 16:  # RSI(14) needs 15 bars min; 16 gives one bar of headroom
         return None
 
     df = df_today.copy()
@@ -1546,6 +1553,14 @@ def check_market(mode: str, tickers_override: list | None = None):
     print(f"📊 Total threshold penalty: +{total_penalty} "
           f"(time +{time_penalty}, regime +{regime_penalty})\n")
 
+    # ── Check open trade outcomes ─────────────────────────────────────────────
+    # Runs on every scan using the bulk daily data already downloaded —
+    # no extra API calls needed.
+    print("📋 Checking open trade outcomes...")
+    resolved = check_open_trades(bulk_data)
+    if resolved or OUTCOME_DISCORD_DAILY:
+        send_outcome_summary(resolved, bulk_data)
+
     # Pre-market: just send gap summary and exit
     if mode == "premarket":
         summaries = []
@@ -1772,6 +1787,9 @@ def check_market(mode: str, tickers_override: list | None = None):
             )
             alerts_sent += 1
 
+            # Log the trade for outcome tracking
+            log_new_trade(ticker, currency, final_signal)
+
             # ── OPTIONAL: Write state + cooldown (disabled by default) ──────────
             # Uncomment both lines below to activate state tracking:
             # set_state(ticker, "TRIGGERED", stop_loss=final_signal["stop_loss"], mode=final_signal["mode"])
@@ -1789,6 +1807,238 @@ def check_market(mode: str, tickers_override: list | None = None):
     if alerts_sent == 0:
         send_no_signals_notice(mode, len(candidates))
 
+
+
+# =============================================================================
+#  SECTION 13 — TRADE OUTCOME TRACKER
+#
+#  Every alert that fires is logged to trade_log.json in the repo root.
+#  On each subsequent bot run, open trades are automatically checked against
+#  the latest daily close to see if they hit target, stop, or are still open.
+#
+#  Log structure (per trade):
+#    id          — unique trade ID (ticker + timestamp)
+#    ticker      — stock symbol
+#    scenario    — A / B / C
+#    mode        — DAY TRADE / SWING / DAY TRADE + SWING
+#    entry       — price at alert time
+#    stop_loss   — stop level
+#    take_profit — target level
+#    rr_ratio    — theoretical R/R
+#    score       — signal score at alert time
+#    reasons     — list of signal reasons
+#    alert_date  — date alert fired (YYYY-MM-DD)
+#    alert_time  — time alert fired (HH:MM ET)
+#    status      — OPEN / WON / LOST / EXPIRED
+#    outcome_date— date outcome was determined
+#    outcome_pct — % gain/loss from entry to outcome price
+#    max_price   — highest price seen while open (for tracking near-misses)
+#    min_price   — lowest price seen while open (for stop tracking)
+# =============================================================================
+
+def load_trade_log() -> list:
+    """Loads the trade log from the repo. Returns empty list if not found."""
+    try:
+        p = Path(TRADE_LOG_FILE)
+        if p.exists():
+            with open(p) as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"⚠️ Trade log load failed: {e}")
+    return []
+
+
+def save_trade_log(trades: list):
+    """Saves the trade log back to the repo file."""
+    try:
+        with open(TRADE_LOG_FILE, "w") as f:
+            json.dump(trades, f, indent=2)
+    except Exception as e:
+        print(f"⚠️ Trade log save failed: {e}")
+
+
+def log_new_trade(ticker: str, currency: str, signal: dict):
+    """Appends a new alert to the trade log."""
+    try:
+        trades = load_trade_log()
+        tz     = pytz.timezone(TIMEZONE)
+        now    = datetime.now(tz)
+        # Cast all numerics to plain Python float — signal values from yfinance
+        # are numpy.float64 which json.dump cannot serialize, causing a silent
+        # TypeError that swallows the entire log write.
+        trade  = {
+            "id":           f"{ticker}_{now.strftime('%Y%m%d_%H%M')}",
+            "ticker":       ticker,
+            "currency":     currency,
+            "scenario":     signal.get("scenario", "?"),
+            "mode":         signal.get("mode", "?"),
+            "entry":        float(signal["price"]),
+            "stop_loss":    float(signal["stop_loss"]),
+            "take_profit":  float(signal["take_profit"]),
+            "rr_ratio":     float(signal.get("rr_ratio", 0)),
+            "score":        int(signal.get("score", 0)),
+            "threshold":    int(signal.get("threshold", 0)),
+            "atr":          float(signal.get("atr", 0)),
+            "reasons":      [str(r) for r in signal.get("reasons", [])],
+            "alert_date":   now.strftime("%Y-%m-%d"),
+            "alert_time":   now.strftime("%H:%M ET"),
+            "status":       "OPEN",
+            "outcome_date": None,
+            "outcome_pct":  None,
+            "max_price":    float(signal["price"]),
+            "min_price":    float(signal["price"]),
+        }
+        trades.append(trade)
+        save_trade_log(trades)
+        print(f"   📝 Trade logged: {trade['id']}")
+    except Exception as e:
+        print(f"   ⚠️ Trade log error: {e}")
+
+
+def check_open_trades(bulk_data) -> list:
+    """
+    Checks all OPEN trades against the latest daily close.
+    Marks each as WON, LOST, or EXPIRED if past OUTCOME_CHECK_DAYS.
+    Returns list of newly resolved trades for the Discord summary.
+    """
+    trades   = load_trade_log()
+    resolved = []
+    tz       = pytz.timezone(TIMEZONE)
+    today    = datetime.now(tz).date()
+    changed  = False
+
+    for trade in trades:
+        if trade["status"] != "OPEN":
+            continue
+
+        try:
+            alert_date = datetime.strptime(trade["alert_date"], "%Y-%m-%d").date()
+            days_open  = (today - alert_date).days
+
+            # Expire trades older than OUTCOME_CHECK_DAYS
+            if days_open > OUTCOME_CHECK_DAYS:
+                trade["status"]       = "EXPIRED"
+                trade["outcome_date"] = str(today)
+                trade["outcome_pct"]  = round(
+                    (trade["max_price"] - trade["entry"]) / trade["entry"] * 100, 2
+                )
+                resolved.append(trade)
+                changed = True
+                print(f"   ⏰ {trade['ticker']} EXPIRED after {days_open} days "
+                      f"(max reached: ${trade['max_price']:.2f})")
+                continue
+
+            # Get latest price from bulk data
+            df = extract_ticker_daily(bulk_data, trade["ticker"])
+            if df is None or df.empty:
+                continue
+
+            latest_high  = float(df['High'].iloc[-1])
+            latest_low   = float(df['Low'].iloc[-1])
+            latest_close = float(df['Close'].iloc[-1])
+
+            # Update high/low watermarks — explicit float() to avoid numpy types
+            trade["max_price"] = float(max(trade["max_price"], latest_high))
+            trade["min_price"] = float(min(trade["min_price"], latest_low))
+            changed = True
+
+            entry  = trade["entry"]
+            target = trade["take_profit"]
+            stop   = trade["stop_loss"]
+
+            # Check stop hit (using daily low)
+            if latest_low <= stop:
+                trade["status"]       = "LOST"
+                trade["outcome_date"] = str(today)
+                trade["outcome_pct"]  = round((stop - entry) / entry * 100, 2)
+                resolved.append(trade)
+                print(f"   🛑 {trade['ticker']} LOST — stop ${stop:.2f} hit "
+                      f"(low: ${latest_low:.2f})")
+
+            # Check target hit (using daily high)
+            elif latest_high >= target:
+                trade["status"]       = "WON"
+                trade["outcome_date"] = str(today)
+                trade["outcome_pct"]  = round((target - entry) / entry * 100, 2)
+                resolved.append(trade)
+                print(f"   ✅ {trade['ticker']} WON — target ${target:.2f} hit "
+                      f"(high: ${latest_high:.2f})")
+
+            else:
+                pct_to_target = (target - latest_close) / entry * 100
+                pct_to_stop   = (latest_close - stop) / entry * 100
+                print(f"   📊 {trade['ticker']} OPEN — "
+                      f"close ${latest_close:.2f} | "
+                      f"+{pct_to_target:.1f}% to target | "
+                      f"-{pct_to_stop:.1f}% to stop")
+
+        except Exception as e:
+            print(f"   ⚠️ Outcome check error on {trade['ticker']}: {e}")
+
+    if changed:
+        save_trade_log(trades)
+
+    return resolved
+
+
+def send_outcome_summary(resolved: list, bulk_data):
+    """Sends a Discord embed showing open positions and newly resolved trades."""
+    try:
+        trades    = load_trade_log()
+        open_tr   = [t for t in trades if t["status"] == "OPEN"]
+        won_tr    = [t for t in trades if t["status"] == "WON"]
+        lost_tr   = [t for t in trades if t["status"] == "LOST"]
+        expired   = [t for t in trades if t["status"] == "EXPIRED"]
+
+        total_closed = len(won_tr) + len(lost_tr)
+        win_rate     = (len(won_tr) / total_closed * 100) if total_closed > 0 else 0
+
+        avg_win  = (sum(t["outcome_pct"] for t in won_tr)  / len(won_tr))  if won_tr  else 0
+        avg_loss = (sum(t["outcome_pct"] for t in lost_tr) / len(lost_tr)) if lost_tr else 0
+
+        desc  = f"**Overall Win Rate:** `{win_rate:.0f}%` "
+        desc += f"({len(won_tr)}W / {len(lost_tr)}L / {len(expired)} expired)\n"
+        desc += f"**Avg Win:** `+{avg_win:.1f}%` | **Avg Loss:** `{avg_loss:.1f}%`\n"
+
+        if open_tr:
+            desc += f"\n📂 **Open Positions ({len(open_tr)})**\n"
+            for t in open_tr[-8:]:   # Show last 8 to avoid embed limits
+                days = (datetime.now(pytz.timezone(TIMEZONE)).date() -
+                        datetime.strptime(t["alert_date"], "%Y-%m-%d").date()).days
+                desc += (f"• **{t['ticker']}** {t['scenario']} — "
+                         f"Entry ${t['entry']:.2f} | "
+                         f"Target ${t['take_profit']:.2f} | "
+                         f"Stop ${t['stop_loss']:.2f} | "
+                         f"Day {days}\n")
+
+        if resolved:
+            desc += f"\n🔔 **Just Resolved ({len(resolved)})**\n"
+            for t in resolved:
+                icon = "✅" if t["status"] == "WON" else ("🛑" if t["status"] == "LOST" else "⏰")
+                desc += (f"• {icon} **{t['ticker']}** {t['scenario']} — "
+                         f"{t['status']} `{t['outcome_pct']:+.1f}%` "
+                         f"(entry ${t['entry']:.2f})\n")
+
+        # Scenario breakdown
+        for scenario in ["A", "B", "C"]:
+            s_won  = [t for t in won_tr  if t["scenario"] == scenario]
+            s_lost = [t for t in lost_tr if t["scenario"] == scenario]
+            s_tot  = len(s_won) + len(s_lost)
+            if s_tot > 0:
+                s_wr = len(s_won) / s_tot * 100
+                desc += f"\n**Scenario {scenario}:** {len(s_won)}W/{len(s_lost)}L `{s_wr:.0f}%`"
+
+        payload = {"embeds": [{
+            "title":       "📈 Trade Outcome Tracker",
+            "description": desc[:4096],
+            "color":       5763719 if win_rate >= 50 else 15548997,
+            "footer":      {"text": f"Stock Alert Bot v4.1 | {len(trades)} total trades logged"},
+        }]}
+        _post_discord(payload)
+        print(f"   📊 Outcome summary sent ({len(open_tr)} open, {len(resolved)} resolved)")
+
+    except Exception as e:
+        print(f"⚠️ Outcome summary error: {e}")
 
 # =============================================================================
 #  ENTRY POINT
