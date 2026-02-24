@@ -582,7 +582,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
             roc_ref = (close_ten_ago  - close_twenty_ago) / close_twenty_ago * 100
 
             # Only penalise when price is above 50 EMA (bullish structure but decelerating)
-            if price > ema_50 and roc_ref > 0 and roc_10 < roc_ref:
+            if price > ema_50 and roc_ref > 1.0 and roc_10 < roc_ref:
                 decel_pct = (roc_ref - roc_10) / roc_ref  # how much velocity dropped
                 if decel_pct >= 0.60:
                     roc_penalty = 2
