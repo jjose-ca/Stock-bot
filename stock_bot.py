@@ -24,8 +24,8 @@ v4.1 CHANGES:
 HOW TO RUN MANUALLY:
   python bot.py                        # Auto-detects mode from time of day
   python bot.py --mode premarket       # Morning gap summary
-  python bot.py --mode intraday        # Day trade scan
-  python bot.py --mode power_hour      # 3pm swing buy window
+  python bot.py --mode swing           # Swing scan (3:00–3:45pm ET)
+  python bot.py --mode swing           # Swing scan (3:00–3:45pm ET)
   python bot.py --ticker NVDA          # Scan one ticker only
 
 HOW TO SET UP:
@@ -99,40 +99,22 @@ TICKERS_CAD = [
 DISCORD_WEBHOOK_URL = os.getenv('DISCORD_URL')
 
 # ── Scoring thresholds ────────────────────────────────────────────────────────
-# Lowered from 6/8 after adding category caps (v4.1).
-# Category caps prevent correlated signals from stacking unboundedly,
-# so thresholds need to be lower to compensate for the reduced max score.
-DAY_SCORE_THRESHOLD   = 5
 SWING_SCORE_THRESHOLD = 6
 
-# ── Category caps (v4.1) ─────────────────────────────────────────────────────
-# Each scoring signal belongs to a category. Each category has a hard cap.
-# This forces setups to show alignment ACROSS different market dynamics
-# before firing, rather than stacking points from one correlated cluster.
-#
-#   Day Engine (max possible = 8):
-#     Trend/Structure      — Max 3: VWAP position, EMA 9>21, VWAP reclaim
-#     Momentum/Reversion   — Max 3: RSI level, BB lower touch, RSI curling
-#     Confirmation         — Max 2: Higher high/low, Opening range breakout
-#
-#   Swing Engine (max possible = 8, before BB squeeze penalty):
-#     Trend/Structure      — Max 4: EMA 21 wick/support, EMA 50 proximity,
-#                                    bullish structure, 52-week high
-#     Momentum/Reversion   — Max 4: RSI level, BB lower band close, MACD
-DAY_CATEGORY_CAPS   = {"trend": 3, "momentum": 3, "confirmation": 2}
+# ── Swing category caps ───────────────────────────────────────────────────────
+# Trend/Structure   — Max 4: EMA 21 wick/support, EMA 50 proximity,
+#                             bullish structure, 52-week high
+# Momentum/Reversion — Max 4: RSI level, BB lower band close, MACD
 SWING_CATEGORY_CAPS = {"trend": 4, "momentum": 4}
 
 # ── Liquidity gates (minimum average daily dollar volume) ─────────────────────
 MIN_DOLLAR_VOLUME = {
-    "DAY TRADE": 10_000_000,   # $10M avg daily dollar volume
-    "SWING":      2_000_000,   # $2M avg daily dollar volume
+    "SWING": 2_000_000,   # $2M avg daily dollar volume
 }
 
 # ── Risk parameters ───────────────────────────────────────────────────────────
 MAX_STOP_PCT = {
-    "DAY TRADE":         0.02,   # Stop can't be more than 2% away on day trades
-    "SWING":             0.06,   # 6% max stop on swings
-    "DAY TRADE + SWING": 0.03,   # 3% when both engines agree
+    "SWING": 0.06,   # Stop can't be more than 6% away on swing trades
 }
 MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 
@@ -141,12 +123,8 @@ MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 # Alerts will show exact dollar amounts to invest per signal.
 PORTFOLIO_VALUE = 360.0   # ← Update this whenever your account size changes
 
-# Day trade stops now use DAILY ATR (v4.1) — 5m ATR was too tight and got
-# stopped out by normal noise. Daily ATR gives structurally meaningful levels.
-DAY_ATR_STOP_MULT     = 0.5    # Day trade stop = price − (daily_ATR × 0.5)
-DAY_ATR_TARGET_MULT   = 1.0    # Day trade target = price + (daily_ATR × 1.0)
-SWING_ATR_STOP_MULT   = 0.8    # Swing stop relative to support level
-SWING_ATR_TARGET_MULT = 2.5    # Swing target ATR multiplier
+SWING_ATR_STOP_MULT   = 0.8    # Swing stop = support − (ATR × 0.8)
+SWING_ATR_TARGET_MULT = 2.5    # Swing target = price + (ATR × 2.5)
 
 # ── Volume thresholds ─────────────────────────────────────────────────────────
 VOLUME_STRONG   = 2.0    # 2x relative volume = strong institutional activity
@@ -171,13 +149,13 @@ LATE_FRIDAY_MINUTES   = 300  # After 2:30pm Friday: threshold +1 (9:30am + 300mi
 # an external store. For now they're ready to use but disabled by default.
 COOLDOWN_FILE    = "/tmp/alert_cooldowns.json"
 STATE_FILE       = "/tmp/setup_states.json"
-COOLDOWN_MINUTES = {"DAY TRADE": 30, "SWING": 240, "DAY TRADE + SWING": 30}
+COOLDOWN_MINUTES = {"SWING": 240}
 
 # ── Trade outcome log ─────────────────────────────────────────────────────────
 # Persisted in the repo so outcomes survive between GitHub Actions runs.
 # Each alert is logged on fire; outcomes are auto-checked on every subsequent run.
 TRADE_LOG_FILE        = "trade_log.json"
-OUTCOME_CHECK_DAYS    = 10    # Stop checking a trade after this many calendar days
+OUTCOME_CHECK_DAYS    = 21    # Extended from 10 — swing trades need room to develop
 OUTCOME_DISCORD_DAILY = True  # Send outcome summary to Discord whenever there are
                               # open positions or newly resolved trades.
                               # Set False to suppress all outcome messages.
@@ -203,13 +181,11 @@ def get_scan_mode(et_now: datetime) -> str:
     t = et_now.hour + et_now.minute / 60.0
 
     if 8.5  <= t < 9.5:  return "premarket"
-    if 9.5  <= t < 15.0: return "intraday"
-    if 15.0 <= t < 16.0: return "power_hour"
+    if 9.5  <= t < 16.0: return "swing"
 
-    # Outside defined windows — default to intraday so manual and
-    # scheduled triggers always run a scan rather than exiting silently.
-    print("🌙 Outside normal scan windows — defaulting to intraday mode.")
-    return "intraday"
+    # Outside defined windows — default to swing scan.
+    print("🌙 Outside normal scan windows — defaulting to swing mode.")
+    return "swing"
 
 
 def get_time_penalty(et_now: datetime) -> tuple[int, list[str]]:
@@ -243,8 +219,7 @@ def get_elapsed_minutes(et_now: datetime) -> float:
     return min((et_now - mkt_open).total_seconds() / 60.0, 390.0)
 
 
-def is_power_hour(et_now: datetime) -> bool:
-    return 15 <= et_now.hour < 16
+# is_power_hour removed — swing-only bot
 
 
 # =============================================================================
@@ -331,57 +306,7 @@ def extract_ticker_daily(bulk_data: pd.DataFrame, ticker: str) -> pd.DataFrame |
         return None
 
 
-def fetch_targeted_intraday(ticker: str) -> pd.DataFrame | None:
-    """
-    Stage 3: Fetches 5 days of 5-minute bars for a single ticker.
-    Called ONLY after a ticker passes the swing filter.
-    RTH filtered to 09:30–16:00 ET.
-    """
-    try:
-        # period="1mo" gives ~19 comparison days per time slot for RVAT median
-        # calculations, versus only 4 days with "5d". Zero extra API calls —
-        # just a wider window on the same targeted per-ticker fetch.
-        df = yf.download(ticker, period="1mo", interval="5m",
-                         auto_adjust=True, progress=False,
-                         multi_level_index=False)   # Requires yfinance ≥ 0.2.38
-        if df is None or df.empty:
-            return None
-
-        df = _flatten(df)
-
-        if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC')
-        df.index = df.index.tz_convert(TIMEZONE)
-
-        df_rth = df.between_time('09:30', '15:55').copy()
-        if df_rth.empty:
-            return None
-
-        # Guard against yfinance silently returning stale data.
-        # Only applied during live market hours (weekdays 9:30am–4:00pm ET).
-        # Skipped on weekends and outside hours so testing always works.
-        try:
-            tz          = pytz.timezone(TIMEZONE)
-            now_et      = datetime.now(tz)
-            is_market_hours = (
-                now_et.weekday() < 5 and
-                now_et.replace(hour=9, minute=30, second=0, microsecond=0)
-                <= now_et <=
-                now_et.replace(hour=16, minute=0, second=0, microsecond=0)
-            )
-            if is_market_hours:
-                newest_bar  = df_rth.index[-1]
-                age_minutes = (now_et - newest_bar).total_seconds() / 60.0
-                if age_minutes > 12:
-                    print(f"   ⚠️ [{ticker}] Stale data: newest bar is {age_minutes:.0f}min old. Skipping.")
-                    return None
-        except Exception:
-            pass  # Don't block on age check errors — let caller decide
-
-        return df_rth
-    except Exception as e:
-        print(f"   ⚠️ [{ticker}] Intraday fetch failed: {e}")
-        return None
+# fetch_targeted_intraday removed — swing-only bot uses daily bars exclusively
 
 
 def passes_liquidity_filter(df_daily: pd.DataFrame, mode: str) -> bool:
@@ -402,34 +327,23 @@ def passes_liquidity_filter(df_daily: pd.DataFrame, mode: str) -> bool:
         return True
 
 
-def calculate_relative_volume(df_intraday: pd.DataFrame) -> float:
+# calculate_relative_volume removed — no intraday data in swing-only bot
+
+
+def calculate_daily_relative_volume(df_daily: pd.DataFrame) -> float:
     """
-    Relative Volume At Time (RVAT).
-    Compares last completed bar's volume to the median volume at the same
-    5-minute time slot across prior days. Uses iloc[-2] to avoid partial-bar bias.
+    Today's volume vs 20-day average volume.
+    Uses iloc[-2] for the SMA baseline to exclude today from its own average.
+    Returns 1.0 as a neutral fallback on any error.
     """
     try:
-        if df_intraday is None or len(df_intraday) < 2:
+        if df_daily is None or len(df_daily) < 21:
             return 1.0
-
-        df               = df_intraday.copy()
-        df['time_slot']  = df.index.time
-        df['date']       = df.index.date
-
-        last_bar   = df.iloc[-2]
-        check_time = last_bar.name.time()
-        check_date = last_bar.name.date()
-        check_vol  = float(last_bar['Volume'])
-
-        historical = df[(df['time_slot'] == check_time) & (df['date'] != check_date)]
-        if historical.empty:
+        vol_sma   = ta.sma(df_daily['Volume'].astype(float), length=20).iloc[-2]
+        today_vol = float(df_daily['Volume'].iloc[-1])
+        if pd.isna(vol_sma) or vol_sma == 0:
             return 1.0
-
-        median_vol = historical['Volume'].median()
-        if median_vol == 0 or pd.isna(median_vol):
-            return 1.0
-
-        return round(check_vol / median_vol, 2)
+        return round(today_vol / vol_sma, 2)
     except Exception:
         return 1.0
 
@@ -466,193 +380,7 @@ def check_market_regime(bulk_data: pd.DataFrame) -> tuple[int, bool]:
         return 0, True
 
 
-# =============================================================================
-#  SECTION 5 — DAY TRADE ENGINE (5-Minute Bars)
-#
-#  v4.1 CHANGES:
-#    1. Signals on COMPLETED bars (iloc[-2]) to avoid partial-bar false triggers.
-#       iloc[-1] is only used for the live price reference in the output dict.
-#    2. Scoring uses category caps to prevent correlated signals from stacking.
-#    3. Stops use DAILY ATR (passed in) instead of 5m ATR, which was too tight.
-#
-#  Categories (capped independently):
-#    TREND/STRUCTURE (max 3):
-#      A. VWAP position (+3)              — primary intraday direction filter
-#      C. 5m EMA 9 > 21 (+2)             — short-term bullish momentum
-#      D. VWAP reclaim (+2)              — dipped below VWAP and recovered
-#    MOMENTUM/REVERSION (max 3):
-#      B. 5m RSI oversold (+1 to +3)     — deeply oversold = stronger signal
-#      F. BB lower band touch (+2)       — mean reversion setup
-#      G. RSI curling upward (+2)        — direction of momentum from oversold
-#    CONFIRMATION (max 2):
-#      E. Higher high + higher low (+1)  — momentum shift confirmation
-#      H. Opening range breakout (+1)    — price breaks first 30-min high
-# =============================================================================
-
-def run_day_engine(df_today: pd.DataFrame, total_penalty: int,
-                   daily_atr: float | None = None) -> dict | None:
-    """
-    Scores today's 5m bars. Returns signal dict or None if score < threshold.
-
-    Args:
-        df_today:      Today's 5m RTH bars.
-        total_penalty:  Sum of time + regime penalties.
-        daily_atr:      ATR from the daily timeframe, used for stop/target.
-                        Falls back to 5m ATR if not provided (not recommended).
-    """
-    if df_today is None or len(df_today) < 16:  # RSI(14) needs 15 bars min; 16 gives one bar of headroom
-        return None
-
-    df = df_today.copy()
-
-    df['EMA_9']  = ta.ema(df['Close'], length=9)
-    df['EMA_21'] = ta.ema(df['Close'], length=21)
-    df['RSI']    = ta.rsi(df['Close'], length=14)
-    df['ATR']    = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-    df['VWAP']   = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
-
-    bb = ta.bbands(df['Close'], length=20, std=2)
-    if bb is not None and not bb.empty:
-        bbl_col = [c for c in bb.columns if c.startswith('BBL')]
-        if bbl_col: df['BBL'] = bb[bbl_col[0]]
-
-    df.dropna(subset=['RSI', 'EMA_9', 'EMA_21', 'VWAP', 'ATR'], inplace=True)
-    if len(df) < 4:
-        return None
-
-    # ── Completed-bar signaling (v4.1) ────────────────────────────────────────
-    # Signal bar = last COMPLETED 5m candle (iloc[-2]).
-    # Current bar (iloc[-1]) is in-progress and can reverse before close.
-    # We only use iloc[-1] for the live entry price in the output dict.
-    sig_bar  = df.iloc[-2]   # last completed bar — all signals read from here
-    prev_bar = df.iloc[-3]   # bar before signal bar — for comparisons
-    live_bar = df.iloc[-1]   # current in-progress bar — entry price only
-
-    price  = float(live_bar['Close'])   # live price for entry reference
-    vwap   = float(sig_bar['VWAP'])
-    rsi    = float(sig_bar['RSI'])
-    ema_9  = float(sig_bar['EMA_9'])
-    ema_21 = float(sig_bar['EMA_21'])
-    atr_5m = float(sig_bar['ATR'])
-
-    # Use daily ATR for stops (v4.1); fall back to 5m ATR only if unavailable
-    atr_for_stops = daily_atr if daily_atr is not None else atr_5m
-    atr_source    = "Daily" if daily_atr is not None else "5m (fallback)"
-
-    reasons = []
-
-    # ── Category: TREND / STRUCTURE (cap at 3) ────────────────────────────────
-    trend_score = 0
-    trend_cap   = DAY_CATEGORY_CAPS["trend"]
-
-    # A. VWAP position (signal bar closed above VWAP)
-    sig_close  = float(sig_bar['Close'])
-    above_vwap = sig_close > vwap
-    if above_vwap:
-        trend_score += 3
-        reasons.append(f"✅ Price Above VWAP (${vwap:.2f})")
-
-    # C. 5m EMA stack (on signal bar)
-    if ema_9 > ema_21:
-        trend_score += 2
-        reasons.append("🚀 Bullish EMA Stack (9 > 21)")
-
-    # D. VWAP reclaim (recent dip below VWAP, signal bar closed above)
-    low_recent = df['Low'].iloc[-4:-1].min()  # 3 completed bars
-    if low_recent < vwap and sig_close > vwap:
-        trend_score += 2
-        reasons.append("⚡ VWAP Reclaim — Intraday Bounce Confirmed")
-
-    trend_score = min(trend_score, trend_cap)
-
-    # ── Category: MOMENTUM / MEAN REVERSION (cap at 3) ───────────────────────
-    momentum_score = 0
-    momentum_cap   = DAY_CATEGORY_CAPS["momentum"]
-
-    # B. 5m RSI (on signal bar)
-    if rsi < 35:
-        momentum_score += 3
-        reasons.append(f"💎 Deeply Oversold (RSI {rsi:.1f})")
-    elif rsi < 45:
-        momentum_score += 2
-        reasons.append(f"📉 Oversold (RSI {rsi:.1f})")
-    elif rsi < 55:
-        momentum_score += 1
-        reasons.append(f"🌊 Momentum Reset (RSI {rsi:.1f})")
-
-    # F. BB lower band touch (on signal bar)
-    if 'BBL' in df.columns and not pd.isna(sig_bar.get('BBL', float('nan'))):
-        bbl = float(sig_bar['BBL'])
-        if sig_close <= bbl * 1.01:
-            momentum_score += 2
-            reasons.append(f"🛡️ 5m BB Lower Band Touch (${bbl:.2f})")
-
-    # G. RSI curling upward — three consecutive higher RSI on COMPLETED bars.
-    rsi_prev1 = float(df['RSI'].iloc[-3])
-    rsi_prev2 = float(df['RSI'].iloc[-4])
-
-    if (rsi > rsi_prev1 > rsi_prev2) and (rsi < 50):
-        momentum_score += 2
-        reasons.append(
-            f"🔄 RSI Curling Up from Oversold "
-            f"({rsi_prev2:.0f} → {rsi_prev1:.0f} → {rsi:.0f})"
-        )
-
-    momentum_score = min(momentum_score, momentum_cap)
-
-    # ── Category: CONFIRMATION (cap at 2) ─────────────────────────────────────
-    confirm_score = 0
-    confirm_cap   = DAY_CATEGORY_CAPS["confirmation"]
-
-    # E. Higher high + higher low (signal bar vs previous completed bar)
-    if (float(sig_bar['High']) > float(prev_bar['High']) and
-            float(sig_bar['Low']) > float(prev_bar['Low'])):
-        confirm_score += 1
-        reasons.append("📈 5m Higher High + Higher Low")
-
-    # H. Opening range breakout (signal bar close broke first-30min high)
-    orb_high = None
-    try:
-        today_date = df.index[-1].date()
-        orb_bars   = df[df.index.date == today_date].between_time('09:30', '09:55')
-        if not orb_bars.empty:
-            orb_high = float(orb_bars['High'].max())
-            if sig_close > orb_high:
-                confirm_score += 1
-                reasons.append(f"🚀 Opening Range Breakout (above ${orb_high:.2f})")
-    except Exception:
-        pass
-
-    confirm_score = min(confirm_score, confirm_cap)
-
-    # ── Final score ───────────────────────────────────────────────────────────
-    score     = trend_score + momentum_score + confirm_score
-    threshold = DAY_SCORE_THRESHOLD + total_penalty
-    if score < threshold:
-        return None
-
-    # ── Stop / target using DAILY ATR (v4.1) ─────────────────────────────────
-    # Daily ATR gives structurally meaningful levels that survive normal
-    # 5-minute noise. The old 5m ATR × 1.5 stop was ~0.5–1% and got hit
-    # constantly even on directionally correct trades.
-    stop_loss   = round(price - (atr_for_stops * DAY_ATR_STOP_MULT), 2)
-    take_profit = round(price + (atr_for_stops * DAY_ATR_TARGET_MULT), 2)
-
-    return {
-        "score": score, "threshold": threshold, "reasons": reasons,
-        "score_breakdown": {
-            "trend": trend_score, "momentum": momentum_score,
-            "confirmation": confirm_score,
-        },
-        "stop_loss": stop_loss, "take_profit": take_profit,
-        "atr": round(atr_for_stops, 4), "atr_5m": round(atr_5m, 4),
-        "atr_source": atr_source,
-        "vwap": round(vwap, 2), "rsi": round(rsi, 1),
-        "ema_21": round(ema_21, 2), "ema_50": None,
-        "price": round(price, 2), "is_bullish": above_vwap,
-        "direction": "long",   # both engines are long-only; used by conflict gate
-        "mode": "DAY TRADE", "orb_high": orb_high,
-    }
+# Section 5 (Day Trade Engine) removed — swing-only bot
 
 
 # =============================================================================
@@ -914,47 +642,10 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int) -> dict | None:
 #    C: Swing engine only  → Half size, wait for VWAP reclaim at next open
 # =============================================================================
 
-def signals_conflict(day_signal: dict | None, swing_signal: dict | None) -> bool:
-    """
-    Returns True if both signals fired but disagree on direction.
-
-    Both engines are long-only so comparing price > stop_loss (the previous
-    implementation) was a tautology — always True, gate never fired.
-
-    The correct check uses is_bullish flags, which CAN genuinely disagree:
-      Day engine:   is_bullish = sig_bar closed above VWAP
-      Swing engine: is_bullish = daily close above EMA_21
-
-    To avoid false conflicts from brief intraday VWAP dips on otherwise
-    bullish daily setups, we only flag a conflict when the day engine is
-    bearish AND the distance below VWAP is meaningful (> 0.3% of price).
-    A stock hovering 0.1% below VWAP is not a genuine directional conflict
-    with a bullish daily structure.
-    """
-    if day_signal is None or swing_signal is None:
-        return False
-
-    day_bullish   = day_signal.get("is_bullish", True)
-    swing_bullish = swing_signal.get("is_bullish", True)
-
-    # If both agree, no conflict
-    if day_bullish == swing_bullish:
-        return False
-
-    # Day bearish, swing bullish: only flag if day is meaningfully below VWAP
-    if not day_bullish and swing_bullish:
-        price = day_signal.get("price", 0)
-        vwap  = day_signal.get("vwap", price)
-        if price > 0 and vwap > 0:
-            pct_below_vwap = (vwap - price) / price
-            return pct_below_vwap > 0.003   # only conflict if > 0.3% below VWAP
-        return True
-
-    # Day bullish, swing bearish — genuine conflict (rare in long-only setup)
-    return True
+# signals_conflict removed — no day engine to conflict with
 
 
-def calculate_position_size(scenario: str, score: int, threshold: int,
+def calculate_position_size(score: int, threshold: int,
                              price: float, atr: float) -> dict:
     """
     Calculates a suggested portfolio allocation % based on:
@@ -971,11 +662,11 @@ def calculate_position_size(scenario: str, score: int, threshold: int,
       - Hard caps per scenario prevent over-concentration
     """
     # Base allocation by scenario
-    base = {"A": 10.0, "B": 4.0, "C": 6.0}.get(scenario, 5.0)
+    base = 8.0  # Flat base for all swing trades
 
     # Conviction boost: +1% for each point above threshold, capped at +4%
-    margin       = max(score - threshold, 0)
-    conviction   = min(margin * 1.0, 4.0)
+    margin     = max(score - threshold, 0)
+    conviction = min(margin * 1.0, 4.0)
 
     # Volatility adjustment: ATR as % of price
     # Low vol  (< 1.5%): no reduction
@@ -991,9 +682,8 @@ def calculate_position_size(scenario: str, score: int, threshold: int,
 
     raw_pct = (base + conviction) * vol_factor
 
-    # Hard caps per scenario
-    caps = {"A": 15.0, "B": 6.0, "C": 10.0}
-    pct  = round(min(raw_pct, caps.get(scenario, 10.0)), 1)
+    # Hard cap for swing trades
+    pct = round(min(raw_pct, 12.0), 1)
 
     # Human-readable volatility tag
     if atr_pct <= 1.5:   vol_tag = "low vol"
@@ -1017,97 +707,30 @@ def calculate_position_size(scenario: str, score: int, threshold: int,
     return {"pct": pct, "dollar": dollar_amount, "shares": shares, "label": label}
 
 
-def build_final_signal(
-    day_signal:   dict | None,
-    swing_signal: dict | None,
-    rel_vol:      float,
-    elapsed_min:  float,
-    mode:         str,
-) -> dict | None:
-    """Combines engine outputs into one actionable signal. Returns None if no setup."""
-    day_ok   = day_signal   is not None
-    swing_ok = swing_signal is not None
-
-    if not day_ok and not swing_ok:
+def build_final_signal(swing_signal: dict | None) -> dict | None:
+    """Wraps swing signal as a Scenario C alert. Returns None if no swing signal."""
+    if swing_signal is None:
         return None
 
-    # Scenario A: Both engines agree
-    if day_ok and swing_ok:
-        sig = swing_signal.copy()
-        combined_score = day_signal["score"] + swing_signal["score"]
-        combined_threshold = day_signal["threshold"] + swing_signal["threshold"]
-        pos_a = calculate_position_size(
-            "A", combined_score, combined_threshold,
-            swing_signal["price"], swing_signal["atr"]
-        )
-        sig.update({
-            "scenario":       "A",
-            "scenario_label": "⚡ SCENARIO A — DAY + SWING FULLY ALIGNED",
-            "size_guidance":  pos_a["label"],
-            "hold_guidance":  (
-                f"Strong setup — both timeframes aligned. "
-                f"Enter before 4:00pm close. Primary exit: next open (9:30am ET). "
-                f"If opens strong with volume, trail stop and hold for swing target ${swing_signal['take_profit']:.2f}."
-            ),
-            "day_stop":    day_signal["stop_loss"],
-            "day_target":  day_signal["take_profit"],
-            "mode":        "DAY TRADE + SWING",
-            "vwap":        day_signal.get("vwap"),
-            "rsi":         day_signal.get("rsi"),     # Fresher 5m RSI
-            "atr_source":  "Daily (swing) + 5m (day)",
-            "score":       combined_score,
-            "threshold":   combined_threshold,   # CRITICAL: must override swing-only
-                                                 # threshold inherited from swing_signal.copy()
-                                                 # so apply_earnings_penalty checks against
-                                                 # the correct combined minimum, not just 6.
-            "reasons": (
-                [f"[5m] {r}"    for r in day_signal.get("reasons", [])] +
-                [f"[Daily] {r}" for r in swing_signal.get("reasons", [])]
-            ),
-        })
-        return sig
-
-    # Scenario B removed — day-only scalps excluded, swing structure required
-    # for all alerts. This ensures every signal has daily structure behind it.
-    if day_ok and not swing_ok:
-        return None
-
-    # Scenario C: Swing engine only
-    if swing_ok and not day_ok:
-        sig = swing_signal.copy()
-        pos_c = calculate_position_size(
-            "C", swing_signal["score"], swing_signal["threshold"],
-            swing_signal["price"], swing_signal["atr"]
-        )
-        sig.update({
-            "scenario":       "C",
-            "scenario_label": "📅 SCENARIO C — SWING (Awaiting Intraday Confirmation)",
-            "size_guidance":  pos_c["label"],
-            "hold_guidance":  (
-                "Enter before 4:00pm close. Sell at next morning open (9:30am ET). "
-                "Stop active overnight — if price gaps below stop, exit immediately at open."
-            ),
-            "mode": "SWING",
-        })
-        return sig
-
-    return None
+    sig   = swing_signal.copy()
+    pos_c = calculate_position_size(
+        swing_signal["score"], swing_signal["threshold"],
+        swing_signal["price"], swing_signal["atr"]
+    )
+    sig.update({
+        "scenario":       "SWING",
+        "scenario_label": "📅 SWING SETUP",
+        "size_guidance":  pos_c["label"],
+        "hold_guidance":  (
+            "Enter before 4:00pm close. Sell at next morning open (9:30am ET). "
+            "Stop active overnight — if price gaps below stop, exit immediately at open."
+        ),
+        "mode": "SWING",
+    })
+    return sig
 
 
-def should_buy_now(signal: dict, rel_vol: float, mode: str) -> bool:
-    """
-    Determines whether to show the 'buy before close' power hour banner.
-    Only fires on Scenario A or C, with strong volume, during power hour.
-    """
-    if mode != "power_hour":
-        return False
-    if signal.get("scenario") not in ("A", "C"):
-        return False
-    if rel_vol < POWER_HOUR_MIN_VOL_RATIO:
-        return False
-    price  = signal["price"]
-    ema_50 = signal.get("ema_50", price)
-    return ema_50 is not None and price > ema_50
+# should_buy_now removed — no intraday volume data in swing-only bot
 
 
 # =============================================================================
@@ -1117,23 +740,23 @@ def should_buy_now(signal: dict, rel_vol: float, mode: str) -> bool:
 #  Step 2: Check R/R ratio meets minimum. Reject if not.
 # =============================================================================
 
-def validate_risk(signal: dict, mode: str) -> dict | None:
-    price     = signal["price"]
-    stop_loss = signal["stop_loss"]
-    target    = signal["take_profit"]
-
-    mode_key  = mode  # "DAY TRADE + SWING" is a distinct key — don't collapse it
-    max_stop  = MAX_STOP_PCT.get(mode_key, 0.05)
+def validate_risk(signal: dict) -> dict | None:
+    """
+    Strictly rejects signals where the stop is too wide.
+    No artificial tightening — moving a stop closer to price to satisfy
+    a % cap destroys the structural logic behind where the stop was placed
+    and can push it into normal market noise, guaranteeing a stop-out.
+    """
+    price      = signal["price"]
+    stop_loss  = signal["stop_loss"]
+    target     = signal["take_profit"]
     actual_pct = (price - stop_loss) / price
 
-    if actual_pct > max_stop:
-        signal["stop_loss"]     = round(price * (1 - max_stop), 2)
-        signal["stop_adjusted"] = True
-        print(f"   ⚙️  Stop tightened to {max_stop*100:.0f}% max: ${stop_loss:.2f} → ${signal['stop_loss']:.2f}")
-    else:
-        signal["stop_adjusted"] = False
+    if actual_pct > MAX_STOP_PCT:
+        print(f"   ❌ Stop too wide ({actual_pct*100:.1f}% > {MAX_STOP_PCT*100:.0f}% max). Rejected.")
+        return None
 
-    risk   = price - signal["stop_loss"]
+    risk   = price - stop_loss
     reward = target - price
 
     if risk <= 0:
@@ -1196,7 +819,7 @@ def apply_earnings_penalty(signal: dict, total_penalty: int) -> dict | None:
     # Use the threshold already stored in the signal rather than re-deriving it
     # from scratch.  For Scenario A the score is the *sum* of both engines, so
     # recalculating from a single base threshold was too lenient.
-    stored_threshold = signal.get("threshold", DAY_SCORE_THRESHOLD + total_penalty)
+    stored_threshold = signal.get("threshold", SWING_SCORE_THRESHOLD + total_penalty)
     signal["score"] -= EARNINGS_SCORE_PENALTY
     print(f"   ⚠️ Earnings penalty: score {signal['score'] + EARNINGS_SCORE_PENALTY} → {signal['score']} "
           f"(min {stored_threshold})")
@@ -1315,29 +938,27 @@ def _post_discord(payload: dict):
         print(f"❌ Discord error: {e}")
 
 
-def send_setup_alert(ticker, currency, signal, rel_vol,
-                     elapsed_minutes, mode, regime_bullish,
-                     earnings_msg="", buy_now=False):
-    """Sends a full trade setup embed to Discord."""
-    et_now    = datetime.now(pytz.timezone(TIMEZONE))
-    curr_sym  = 'CA$' if currency == 'CAD' else '$'
-    scenario  = signal.get("scenario", "?")
+def send_setup_alert(ticker, currency, signal,
+                     rel_vol, elapsed_minutes, mode, regime_bullish,
+                     earnings_msg=""):
+    """Sends a swing trade setup embed to Discord."""
+    et_now     = datetime.now(pytz.timezone(TIMEZONE))
+    curr_sym   = 'CA$' if currency == 'CAD' else '$'
+    scenario   = signal.get("scenario", "?")
     trade_mode = signal.get("mode", "UNKNOWN")
-    price     = signal["price"]
-    stop_loss = signal["stop_loss"]
-    target    = signal["take_profit"]
-    rr        = signal.get("rr_ratio", 0.0)
-    atr_val   = signal.get("atr", 0.0)
-    score     = signal.get("score", 0)
-    threshold = signal.get("threshold", 0)
-    stop_pct  = (price - stop_loss) / price * 100
-    tgt_pct   = (target - price)    / price * 100
+    price      = signal["price"]
+    stop_loss  = signal["stop_loss"]
+    target     = signal["take_profit"]
+    rr         = signal.get("rr_ratio", 0.0)
+    atr_val    = signal.get("atr", 0.0)
+    score      = signal.get("score", 0)
+    threshold  = signal.get("threshold", 0)
+    stop_pct   = (price - stop_loss) / price * 100
+    tgt_pct    = (target - price)    / price * 100
     risk_share = price - stop_loss
 
-    color_map  = {"A": COLOR_GREEN, "B": COLOR_YELLOW, "C": COLOR_BLUE}
-    rating_map = {"A": "🔥 HIGH CONVICTION", "B": "⚡ INTRADAY SCALP", "C": "📅 SWING SETUP"}
-    color  = color_map.get(scenario, COLOR_RED)
-    rating = rating_map.get(scenario, "🚨 ALERT")
+    color  = COLOR_BLUE   # All swing alerts use blue
+    rating = "📅 SWING SETUP"
 
     # RSI label
     rsi_val = signal.get("rsi", 0.0)
@@ -1353,58 +974,18 @@ def send_setup_alert(ticker, currency, signal, rel_vol,
         pct = (price - val) / val * 100
         return f"{curr_sym}{val:.2f} ({abs(pct):.1f}% {'above' if pct >= 0 else 'below'})"
 
-    # VWAP
-    vwap = signal.get("vwap")
-    if vwap:
-        vwap_pct = (price - vwap) / vwap * 100
-        vwap_str = f"{curr_sym}{vwap:.2f} ({abs(vwap_pct):.1f}% {'above' if vwap_pct >= 0 else 'below'})"
-    else:
-        vwap_str = "N/A"
-
-    # Volume label
-    vol_dir   = "Buying" if signal.get("is_bullish") else "Selling"
-    if rel_vol > 2.0:    vol_label = "🔥 Heavy"
-    elif rel_vol > 1.2:  vol_label = "💪 Strong"
-    else:                vol_label = "😐 Normal"
-    vol_str = f"{rel_vol:.1f}x · {vol_label} {vol_dir}"
-
     # Session label
-    if elapsed_minutes < 20:       session = "⏰ Opening (noisy)"
-    elif elapsed_minutes > 360:    session = "🕒 Late Session"
-    else:                          session = "✅ Normal Hours"
+    if elapsed_minutes < 20:    session = "⏰ Opening (noisy)"
+    elif elapsed_minutes > 360: session = "🕒 Near Close — entry window"
+    else:                       session = "✅ Normal Hours"
 
     regime_label = "🟢 Bullish Market" if regime_bullish else "🔴 Bearish Market"
-
-    # Power hour banner
-    buy_banner = ""
-    if buy_now:
-        buy_banner = (
-            "\n🔔 **POWER HOUR — BUY BEFORE CLOSE**\n"
-            "> Strong volume + high confidence. Consider entering **today** "
-            "to avoid a gap-up tomorrow. Set stop immediately after entry.\n"
-        )
-    elif mode == "power_hour" and not buy_now:
-        buy_banner = (
-            "\n⏳ **3pm Scan — Wait for tomorrow's open.**\n"
-            "> Volume or confidence not sufficient for pre-close entry.\n"
-        )
-
-    # Stop adjusted notice
-    stop_adj_msg = ""
-    if signal.get("stop_adjusted"):
-        # Use trade_mode directly — MAX_STOP_PCT has all three keys:
-        # "DAY TRADE", "SWING", "DAY TRADE + SWING".
-        # The old "DAY" substring check incorrectly mapped "DAY TRADE + SWING"
-        # to "DAY TRADE", showing 2% in the message when the actual cap was 3%.
-        pct          = MAX_STOP_PCT.get(trade_mode, 0.05) * 100
-        stop_adj_msg = f"\n⚙️ *Stop auto-tightened to {pct:.0f}% max for {trade_mode}.*\n"
 
     # Build the embed description
     desc  = f"*Triggered at {et_now.strftime('%I:%M %p ET')}*\n"
     desc += f"**{signal.get('scenario_label', '')}**\n"
     desc += f"{regime_label} · {session} · `{currency}`\n"
     desc += f"📊 **Score:** `{score}` / min `{threshold}` (+{score - threshold} above)\n"
-    desc += buy_banner + stop_adj_msg
 
     if earnings_msg:
         desc += f"\n{earnings_msg}\n"
@@ -1419,35 +1000,28 @@ def send_setup_alert(ticker, currency, signal, rel_vol,
     desc += f"• **Size:**       `{signal.get('size_guidance', '—')}`\n"
     desc += f"• **Hold:**       {signal.get('hold_guidance', '—')}\n"
 
-    # Scenario A: show dual stops
-    if scenario == "A" and "day_stop" in signal:
-        desc += f"\n📌 **Intraday Scale-Out Plan**\n"
-        desc += f"• **Day Stop:**   `{curr_sym}{signal['day_stop']:.2f}` (daily ATR × {DAY_ATR_STOP_MULT})\n"
-        desc += f"• **Day Target:** `{curr_sym}{signal['day_target']:.2f}` (daily ATR × {DAY_ATR_TARGET_MULT})\n"
-
     desc += "\n📉 **Technicals**\n"
     desc += f"• **RSI:**    `{rsi_val:.1f}` {rsi_label}\n"
     desc += f"• **21 EMA:** `{ema_str(signal.get('ema_21'))}`\n"
     if signal.get('ema_50'):
         desc += f"• **50 EMA:** `{ema_str(signal.get('ema_50'))}`\n"
-    desc += f"• **VWAP:**   `{vwap_str}`\n"
-    desc += f"• **Volume:** `{vol_str}`\n"
+    if rel_vol > 2.0:    vol_label = "🔥 Heavy"
+    elif rel_vol > 1.2:  vol_label = "💪 Above Average"
+    else:                vol_label = "😐 Below Average"
+    desc += f"• **Volume:** `{rel_vol:.1f}x` 20-day avg · {vol_label}\n"
 
     desc += "\n📝 **Why This Signal**\n"
     for r in signal.get("reasons", []):
         desc += f"• {r}\n"
 
-    # ── Discord embed safety: description is capped at 4096 chars ─────────────
-    # Reasons are trimmed first since the trade plan above is more important.
-    # Scenario A can accumulate 10+ reasons which regularly exceeds the limit.
+    # Trim if over Discord 4096 char embed limit
     DISCORD_EMBED_LIMIT = 4096
     if len(desc) > DISCORD_EMBED_LIMIT:
-        # Rebuild reasons section, trimming until it fits
         base_desc = desc[:desc.index("\n📝 **Why This Signal**\n")]
         base_desc += "\n📝 **Why This Signal**\n"
         for r in signal.get("reasons", []):
             candidate = base_desc + f"• {r}\n"
-            if len(candidate) > DISCORD_EMBED_LIMIT - 40:  # 40 char buffer for overflow note
+            if len(candidate) > DISCORD_EMBED_LIMIT - 40:
                 base_desc += "_...additional reasons trimmed for length_\n"
                 break
             base_desc = candidate
@@ -1455,11 +1029,9 @@ def send_setup_alert(ticker, currency, signal, rel_vol,
 
     # Badges
     badges = []
-    if signal.get("near_52w_high"):  badges.append("📈 52W HIGH ZONE")
-    if signal.get("orb_high"):       badges.append("🚀 ORB BREAKOUT")
-    if buy_now:                      badges.append("🔔 POWER HOUR BUY")
-    if currency == "CAD":            badges.append("🍁 TSX LISTED")
-    if not regime_bullish:           badges.append("⚠️ BEARISH REGIME")
+    if signal.get("near_52w_high"): badges.append("📈 52W HIGH ZONE")
+    if currency == "CAD":           badges.append("🍁 TSX LISTED")
+    if not regime_bullish:          badges.append("⚠️ BEARISH REGIME")
     if badges:
         desc += f"\n🏷️ {' | '.join(badges)}"
 
@@ -1656,15 +1228,15 @@ def check_market(mode: str, tickers_override: list | None = None):
     print(f"   ✅ {len(candidates)} swing setups advance to Stage 3\n")
 
     # ═════════════════════════════════════════════════════════════════════════
-    #  STAGE 3: TARGETED INTRADAY (5m fetch for Stage 2 survivors only)
     # ═════════════════════════════════════════════════════════════════════════
-    print(f"⚡ STAGE 3: Intraday analysis for {len(candidates)} tickers...\n")
+    print(f"⚡ STAGE 3: Signal validation for {len(candidates)} swing candidates...\n")
     alerts_sent = 0
 
     for ticker, swing_signal, _ in candidates:
         try:
             currency = get_currency(ticker)
             print(f"── {ticker} ({currency}) ──")
+            print(f"   Swing Engine: Score {swing_signal['score']}/{swing_signal['threshold']} ✅")
 
             # ── OPTIONAL: State machine check (disabled by default) ────────────
             # Uncomment to suppress re-alerts on active setups:
@@ -1674,61 +1246,11 @@ def check_market(mode: str, tickers_override: list | None = None):
             #     print(f"   🔒 State machine suppressed")
             #     continue
 
-            # Targeted 5m fetch
-            df_intraday = fetch_targeted_intraday(ticker)
-            if df_intraday is None:
-                print(f"   ⚠️ No intraday data available.")
-                continue
-
-            today_date = et_now.date()
-            df_today   = df_intraday[df_intraday.index.date == today_date].copy()
-
-            if df_today.empty:
-                print(f"   ⚠️ No today bars (pre-open or market closed).")
-                if swing_signal is None:
-                    continue
-
-            # Extract daily ATR for day trade stops (v4.1)
-            daily_atr = None
-            try:
-                df_d = extract_ticker_daily(bulk_data, ticker)
-                if df_d is not None and len(df_d) >= 14:
-                    daily_atr_series = ta.atr(df_d['High'], df_d['Low'],
-                                              df_d['Close'], length=14)
-                    if daily_atr_series is not None and not daily_atr_series.empty:
-                        daily_atr = float(daily_atr_series.iloc[-1])
-            except Exception:
-                pass
-
-            # Day engine (now receives daily ATR for structurally meaningful stops)
-            day_signal = (run_day_engine(df_today, total_penalty, daily_atr=daily_atr)
-                          if not df_today.empty else None)
-            print(f"   Day Engine:   " + (
-                f"Score {day_signal['score']}/{day_signal['threshold']} ✅"
-                if day_signal else "❌ Below threshold"
-            ))
-
-            print(f"   Swing Engine: " + (
-                f"Score {swing_signal['score']}/{swing_signal['threshold']} ✅"
-                if swing_signal else "N/A"
-            ))
-
-            # Conflict gate
-            if signals_conflict(day_signal, swing_signal):
-                print(f"   ⚔️  Direction conflict — suppressed.")
-                continue
-
-            # Relative volume
-            rel_vol = calculate_relative_volume(df_intraday)
-
-            # Decision matrix
-            final_signal = build_final_signal(day_signal, swing_signal,
-                                              rel_vol, elapsed_min, mode)
+            # Build final signal (swing only)
+            final_signal = build_final_signal(swing_signal)
             if final_signal is None:
-                print(f"   ➖ No qualifying scenario.")
+                print(f"   ➖ No qualifying signal.")
                 continue
-
-            print(f"   🎯 Scenario {final_signal['scenario']} | {final_signal['mode']}")
 
             # ── OPTIONAL: Cooldown check (disabled by default) ─────────────────
             # Uncomment to suppress repeat alerts within the cooldown window:
@@ -1736,7 +1258,7 @@ def check_market(mode: str, tickers_override: list | None = None):
             #     continue
 
             # Risk validation
-            final_signal = validate_risk(final_signal, final_signal["mode"])
+            final_signal = validate_risk(final_signal)
             if final_signal is None:
                 continue
 
@@ -1753,15 +1275,16 @@ def check_market(mode: str, tickers_override: list | None = None):
             else:
                 earnings_msg = ""
 
-            # Power hour buy recommendation
-            buy_now = should_buy_now(final_signal, rel_vol, mode)
+            # Daily relative volume — today vs 20-day average
+            df_d    = extract_ticker_daily(bulk_data, ticker)
+            rel_vol = calculate_daily_relative_volume(df_d) if df_d is not None else 1.0
+            print(f"   📊 Rel Vol: {rel_vol:.1f}x daily average")
 
             # Fire the alert
             send_setup_alert(
                 ticker=ticker, currency=currency, signal=final_signal,
                 rel_vol=rel_vol, elapsed_minutes=elapsed_min, mode=mode,
-                regime_bullish=regime_bullish, earnings_msg=earnings_msg,
-                buy_now=buy_now
+                regime_bullish=regime_bullish, earnings_msg=earnings_msg
             )
             alerts_sent += 1
 
@@ -1997,14 +1520,7 @@ def send_outcome_summary(resolved: list, bulk_data):
                          f"{t['status']} `{t['outcome_pct']:+.1f}%` "
                          f"(entry ${t['entry']:.2f})\n")
 
-        # Scenario breakdown
-        for scenario in ["A", "B", "C"]:
-            s_won  = [t for t in won_tr  if t["scenario"] == scenario]
-            s_lost = [t for t in lost_tr if t["scenario"] == scenario]
-            s_tot  = len(s_won) + len(s_lost)
-            if s_tot > 0:
-                s_wr = len(s_won) / s_tot * 100
-                desc += f"\n**Scenario {scenario}:** {len(s_won)}W/{len(s_lost)}L `{s_wr:.0f}%`"
+
 
         payload = {"embeds": [{
             "title":       "📈 Trade Outcome Tracker",
@@ -2025,7 +1541,7 @@ def send_outcome_summary(resolved: list, bulk_data):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Stock Alert Bot v4.1")
     parser.add_argument('--mode',
-        choices=['auto', 'premarket', 'intraday', 'power_hour'],
+        choices=['auto', 'premarket', 'swing'],
         default='auto',
         help='Scan mode. Default: auto (detects from time of day)')
     parser.add_argument('--ticker',
