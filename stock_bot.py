@@ -178,7 +178,9 @@ COOLDOWN_MINUTES = {"DAY TRADE": 30, "SWING": 240, "DAY TRADE + SWING": 30}
 # Each alert is logged on fire; outcomes are auto-checked on every subsequent run.
 TRADE_LOG_FILE        = "trade_log.json"
 OUTCOME_CHECK_DAYS    = 10    # Stop checking a trade after this many calendar days
-OUTCOME_DISCORD_DAILY = True  # Send a daily summary of open/closed trades to Discord
+OUTCOME_DISCORD_DAILY = True  # Send outcome summary to Discord whenever there are
+                              # open positions or newly resolved trades.
+                              # Set False to suppress all outcome messages.
 
 # ── Discord embed colors ──────────────────────────────────────────────────────
 COLOR_GREEN  = 5763719    # Scenario A — full alignment
@@ -1390,8 +1392,11 @@ def send_setup_alert(ticker, currency, signal, rel_vol,
     # Stop adjusted notice
     stop_adj_msg = ""
     if signal.get("stop_adjusted"):
-        mode_key = "DAY TRADE" if "DAY" in trade_mode else trade_mode
-        pct      = MAX_STOP_PCT.get(mode_key, 0.05) * 100
+        # Use trade_mode directly — MAX_STOP_PCT has all three keys:
+        # "DAY TRADE", "SWING", "DAY TRADE + SWING".
+        # The old "DAY" substring check incorrectly mapped "DAY TRADE + SWING"
+        # to "DAY TRADE", showing 2% in the message when the actual cap was 3%.
+        pct          = MAX_STOP_PCT.get(trade_mode, 0.05) * 100
         stop_adj_msg = f"\n⚙️ *Stop auto-tightened to {pct:.0f}% max for {trade_mode}.*\n"
 
     # Build the embed description
@@ -1548,8 +1553,16 @@ def check_market(mode: str, tickers_override: list | None = None):
     # no extra API calls needed.
     print("📋 Checking open trade outcomes...")
     resolved = check_open_trades(bulk_data)
-    if resolved or OUTCOME_DISCORD_DAILY:
-        send_outcome_summary(resolved, bulk_data)
+
+    # Only send Discord outcome summary when there is actually something to show:
+    #   - Newly resolved trades (WON/LOST/EXPIRED this run), OR
+    #   - Open positions that need monitoring
+    # This prevents 5 identical "no change" messages per day when the bot runs
+    # every 15 minutes. An empty trade log or all-closed log stays silent.
+    if OUTCOME_DISCORD_DAILY:
+        open_trades = [t for t in load_trade_log() if t["status"] == "OPEN"]
+        if resolved or open_trades:
+            send_outcome_summary(resolved, bulk_data)
 
     # Pre-market: just send gap summary and exit
     if mode == "premarket":
@@ -1581,14 +1594,16 @@ def check_market(mode: str, tickers_override: list | None = None):
                     live_price = None
 
                 if live_price and data_is_live:
-                    # Live session: compare fast_info quote vs yesterday's close
+                    # Live session: fast_info quote vs yesterday's completed close
                     price = live_price
                     prev  = prev_close
                 elif live_price and not data_is_live:
-                    # Stale daily data (weekend/holiday): compare fast_info vs
-                    # prev_close (which is actually yesterday's close in this case)
+                    # Stale daily data (weekend/holiday): fast_info quote vs the
+                    # completed close before that (prev_close IS Friday's close,
+                    # prior_close is Thursday's — we want Friday vs prior_close
+                    # to show the true overnight/weekend gap correctly).
                     price = live_price
-                    prev  = prev_close
+                    prev  = prior_close
                 else:
                     # fast_info unavailable: fall back to yesterday vs day before
                     price = prev_close
