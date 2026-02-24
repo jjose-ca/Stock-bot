@@ -24,7 +24,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 690.0,
-    "min_price": 680.3699951171875
+    "min_price": 680.0
   },
   {
     "id": "IWM_20260223_1508",
@@ -102,11 +102,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "15:08 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-02-24",
+    "outcome_pct": -2.0,
     "max_price": 111.5,
-    "min_price": 108.5999984741211
+    "min_price": 106.91999816894531
   },
   {
     "id": "GLD_20260223_1508",
@@ -129,11 +129,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "15:08 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-02-24",
+    "outcome_pct": -1.44,
     "max_price": 481.4599914550781,
-    "min_price": 474.6099853515625
+    "min_price": 469.5950012207031
   },
   {
     "id": "SLV_20260223_1508",
@@ -265,7 +265,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 63.880001068115234,
-    "min_price": 62.380001068115234
+    "min_price": 62.34000015258789
   },
   {
     "id": "SPY_20260223_1541",
@@ -292,7 +292,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 690.0,
-    "min_price": 680.3699951171875
+    "min_price": 680.0
   },
   {
     "id": "SOXQ_20260223_1541",
@@ -318,7 +318,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 65.30999755859375,
+    "max_price": 65.77999877929688,
     "min_price": 63.97100067138672
   },
   {
@@ -367,11 +367,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "15:41 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-02-24",
+    "outcome_pct": -2.0,
     "max_price": 111.5,
-    "min_price": 108.5999984741211
+    "min_price": 106.91999816894531
   },
   {
     "id": "SMH_20260223_1541",
@@ -397,7 +397,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 417.70001220703125,
+    "max_price": 419.1499938964844,
     "min_price": 409.2749938964844
   },
   {
@@ -421,11 +421,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "15:41 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-02-24",
+    "outcome_pct": -1.44,
     "max_price": 481.4599914550781,
-    "min_price": 474.6099853515625
+    "min_price": 469.5950012207031
   },
   {
     "id": "ITB_20260223_1541",
@@ -531,7 +531,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 690.0,
-    "min_price": 680.3699951171875
+    "min_price": 680.0
   },
   {
     "id": "IWM_20260223_1630",
@@ -583,7 +583,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 65.30999755859375,
+    "max_price": 65.77999877929688,
     "min_price": 63.97100067138672
   },
   {
@@ -635,11 +635,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "16:30 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-02-24",
+    "outcome_pct": -2.0,
     "max_price": 111.5,
-    "min_price": 108.5999984741211
+    "min_price": 106.91999816894531
   },
   {
     "id": "SMH_20260223_1630",
@@ -665,7 +665,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 417.70001220703125,
+    "max_price": 419.1499938964844,
     "min_price": 409.2749938964844
   },
   {
@@ -689,11 +689,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "16:30 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-02-24",
+    "outcome_pct": -1.45,
     "max_price": 481.4599914550781,
-    "min_price": 474.6099853515625
+    "min_price": 469.5950012207031
   },
   {
     "id": "ITB_20260223_1630",
@@ -806,7 +806,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 63.880001068115234,
-    "min_price": 62.380001068115234
+    "min_price": 62.34000015258789
   },
   {
     "id": "SPY_20260223_1824",
@@ -834,7 +834,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 690.0,
-    "min_price": 680.3699951171875
+    "min_price": 680.0
   },
   {
     "id": "IWM_20260223_1824",
@@ -886,7 +886,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 65.30999755859375,
+    "max_price": 65.77999877929688,
     "min_price": 63.97100067138672
   },
   {
@@ -938,11 +938,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "18:24 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-02-24",
+    "outcome_pct": -2.0,
     "max_price": 111.5,
-    "min_price": 108.5999984741211
+    "min_price": 106.91999816894531
   },
   {
     "id": "SMH_20260223_1824",
@@ -968,7 +968,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 417.70001220703125,
+    "max_price": 419.1499938964844,
     "min_price": 409.2799987792969
   },
   {
@@ -992,11 +992,11 @@
     ],
     "alert_date": "2026-02-23",
     "alert_time": "18:24 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-02-24",
+    "outcome_pct": -1.45,
     "max_price": 481.4599914550781,
-    "min_price": 474.6099853515625
+    "min_price": 469.5950012207031
   },
   {
     "id": "ITB_20260223_1824",
@@ -1109,6 +1109,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 63.880001068115234,
-    "min_price": 62.380001068115234
+    "min_price": 62.34000015258789
   }
 ]
