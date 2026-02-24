@@ -73,13 +73,13 @@ TICKERS_USD = [
 
     # Mega Cap
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
-    'JPM', 'BAC', 'XOM', 'ABBV',
+    'JPM', 'BAC', 'XOM', 'ABBV', 'JPM',
 
     # Mid-risk
     'NVDA', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX',
     'NFLX', 'ORCL', 'CRM', 'NOW', 'PANW',
     'SHOP', 'UBER', 'PYPL', 'TGT', 'SQ',
-    'OXY', 'DVN', 'CCL', 'DKNG',
+    'OXY', 'DVN', 'CCL', 'DKNG','OXY',
 
     # High beta
     'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI',
