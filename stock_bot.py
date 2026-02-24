@@ -404,11 +404,12 @@ def check_market_regime(bulk_data: pd.DataFrame) -> tuple[int, bool]:
 #      BB squeeze (−2)                      — no edge when bands too narrow
 # =============================================================================
 
-def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int) -> dict | None:
+def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "?") -> dict | None:
     """
     Scores the daily timeframe. Returns signal dict or None if score < threshold.
     """
     if df_daily is None or len(df_daily) < 50:
+        print(f"   [{ticker}] ❌ Insufficient data ({len(df_daily) if df_daily is not None else 0} bars < 50)")
         return None
 
     df = df_daily.copy()
@@ -593,8 +594,12 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int) -> dict | None:
     score     = trend_score + momentum_score - penalty
     threshold = SWING_SCORE_THRESHOLD + total_penalty
     if score < threshold:
+        print(f"   [{ticker}] ❌ Score {score}/{threshold} — "
+              f"trend={trend_score} momentum={momentum_score} penalty=-{penalty}")
         return None
 
+    print(f"   [{ticker}] ✅ Score {score}/{threshold} — "
+          f"trend={trend_score} momentum={momentum_score} penalty=-{penalty}")
     is_bullish = price > ema_21
 
     # Support-aware stop: use the nearest support level as reference
@@ -738,7 +743,7 @@ def build_final_signal(swing_signal: dict | None) -> dict | None:
 #  Step 2: Check R/R ratio meets minimum. Reject if not.
 # =============================================================================
 
-def validate_risk(signal: dict) -> dict | None:
+def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
     """
     Strictly rejects signals where the stop is too wide.
     No artificial tightening — moving a stop closer to price to satisfy
@@ -751,21 +756,21 @@ def validate_risk(signal: dict) -> dict | None:
     actual_pct = (price - stop_loss) / price
 
     if actual_pct > MAX_STOP_PCT:
-        print(f"   ❌ Stop too wide ({actual_pct*100:.1f}% > {MAX_STOP_PCT*100:.0f}% max). Rejected.")
+        print(f"   [{ticker}] ❌ Stop too wide ({actual_pct*100:.1f}% > {MAX_STOP_PCT*100:.0f}% max). Rejected.")
         return None
 
     risk   = price - stop_loss
     reward = target - price
 
     if risk <= 0:
-        print(f"   ❌ Invalid stop (risk ≤ 0). Rejected.")
+        print(f"   [{ticker}] ❌ Invalid stop (risk ≤ 0). Rejected.")
         return None
 
     rr = round(reward / risk, 2)
     signal["rr_ratio"] = rr
 
     if rr < MIN_RR_RATIO:
-        print(f"   📉 R/R {rr:.2f} below minimum {MIN_RR_RATIO}. Rejected.")
+        print(f"   [{ticker}] ❌ R/R {rr:.2f} below minimum {MIN_RR_RATIO}. Rejected.")
         return None
 
     return signal
@@ -1208,12 +1213,13 @@ def check_market(mode: str, tickers_override: list | None = None):
         try:
             df_daily = extract_ticker_daily(bulk_data, ticker)
             if df_daily is None:
+                print(f"   [{ticker}] ❌ No daily data")
                 continue
 
             if not passes_liquidity_filter(df_daily, "SWING"):
-                continue
+                continue  # passes_liquidity_filter already prints reason
 
-            swing_signal = run_swing_engine(df_daily, total_penalty)
+            swing_signal = run_swing_engine(df_daily, total_penalty, ticker=ticker)
 
             if swing_signal is not None:
                 candidates.append((ticker, swing_signal, False))
@@ -1254,7 +1260,7 @@ def check_market(mode: str, tickers_override: list | None = None):
             #     continue
 
             # Risk validation
-            final_signal = validate_risk(final_signal)
+            final_signal = validate_risk(final_signal, ticker=ticker)
             if final_signal is None:
                 continue
 
@@ -1267,6 +1273,7 @@ def check_market(mode: str, tickers_override: list | None = None):
             if has_earnings:
                 final_signal = apply_earnings_penalty(final_signal, total_penalty)
                 if final_signal is None:
+                    print(f"   [{ticker}] ❌ Rejected after earnings penalty")
                     continue
             else:
                 earnings_msg = ""
