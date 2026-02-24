@@ -73,13 +73,13 @@ TICKERS_USD = [
 
     # Mega Cap
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
-    'JPM', 'BAC', 'XOM', 'ABBV', 'JPM',
+    'JPM', 'BAC', 'XOM', 'ABBV',
 
     # Mid-risk
     'NVDA', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX',
     'NFLX', 'ORCL', 'CRM', 'NOW', 'PANW',
     'SHOP', 'UBER', 'PYPL', 'TGT', 'SQ',
-    'OXY', 'DVN', 'CCL', 'DKNG','OXY',
+    'OXY', 'DVN', 'CCL', 'DKNG',
 
     # High beta
     'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI',
@@ -113,9 +113,7 @@ MIN_DOLLAR_VOLUME = {
 }
 
 # ── Risk parameters ───────────────────────────────────────────────────────────
-MAX_STOP_PCT = {
-    "SWING": 0.06,   # Stop can't be more than 6% away on swing trades
-}
+MAX_STOP_PCT = 0.06   # Max 6% stop on swing trades — wider stops are rejected outright
 MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 
 # ── Portfolio value ───────────────────────────────────────────────────────────
