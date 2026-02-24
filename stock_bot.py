@@ -1043,8 +1043,9 @@ def build_final_signal(
             "scenario_label": "⚡ SCENARIO A — DAY + SWING FULLY ALIGNED",
             "size_guidance":  pos_a["label"],
             "hold_guidance":  (
-                f"Day target: ${day_signal['take_profit']:.2f} (daily ATR × {DAY_ATR_TARGET_MULT}). "
-                f"Trail remainder with daily ATR stop for multi-day hold."
+                f"Strong setup — both timeframes aligned. "
+                f"Enter before 4:00pm close. Primary exit: next open (9:30am ET). "
+                f"If opens strong with volume, trail stop and hold for swing target ${swing_signal['take_profit']:.2f}."
             ),
             "day_stop":    day_signal["stop_loss"],
             "day_target":  day_signal["take_profit"],
@@ -1064,21 +1065,10 @@ def build_final_signal(
         })
         return sig
 
-    # Scenario B: Day engine only
+    # Scenario B removed — day-only scalps excluded, swing structure required
+    # for all alerts. This ensures every signal has daily structure behind it.
     if day_ok and not swing_ok:
-        sig = day_signal.copy()
-        pos_b = calculate_position_size(
-            "B", day_signal["score"], day_signal["threshold"],
-            day_signal["price"], day_signal["atr"]
-        )
-        sig.update({
-            "scenario":       "B",
-            "scenario_label": "⚡ SCENARIO B — INTRADAY SCALP ONLY",
-            "size_guidance":  pos_b["label"],
-            "hold_guidance":  "Must exit before 3:45pm ET. No overnight hold.",
-            "mode":           "DAY TRADE",
-        })
-        return sig
+        return None
 
     # Scenario C: Swing engine only
     if swing_ok and not day_ok:
@@ -1092,8 +1082,8 @@ def build_final_signal(
             "scenario_label": "📅 SCENARIO C — SWING (Awaiting Intraday Confirmation)",
             "size_guidance":  pos_c["label"],
             "hold_guidance":  (
-                "Daily structure valid. Best entry: next open or VWAP reclaim "
-                "with 1.5x+ relative volume on the 5m chart."
+                "Enter before 4:00pm close. Sell at next morning open (9:30am ET). "
+                "Stop active overnight — if price gaps below stop, exit immediately at open."
             ),
             "mode": "SWING",
         })
@@ -1622,15 +1612,13 @@ def check_market(mode: str, tickers_override: list | None = None):
 
     # ═════════════════════════════════════════════════════════════════════════
     #  STAGE 2: SWING FILTER (daily data — no extra API calls)
-    #  Two types advance to Stage 3:
-    #    Type 1: swing_signal is valid (Scenario C or A possible)
-    #    Type 2: swing_signal is None BUT daily structure is bullish enough
-    #            for a pure intraday scalp (Scenario B only)
+    #  Only tickers with a valid swing signal advance to Stage 3.
+    #  Scenario B (day-only) removed — swing structure required for all alerts.
     # ═════════════════════════════════════════════════════════════════════════
     scan_tickers = [t for t in all_tickers if t != 'VTI']
     print(f"🔍 STAGE 2: Swing filter on {len(scan_tickers)} tickers...")
 
-    # candidates: list of (ticker, swing_signal | None, day_only_eligible: bool)
+    # candidates: list of (ticker, swing_signal, day_only_eligible=False)
     candidates = []
 
     for ticker in scan_tickers:
@@ -1646,31 +1634,11 @@ def check_market(mode: str, tickers_override: list | None = None):
 
             if swing_signal is not None:
                 candidates.append((ticker, swing_signal, False))
-            else:
-                # Check if basic daily structure qualifies for day-only Scenario B
-                try:
-                    df_tmp = df_daily.copy()
-                    df_tmp['EMA_50'] = ta.ema(df_tmp['Close'], length=50)
-                    df_tmp['RSI']    = ta.rsi(df_tmp['Close'], length=14)
-                    df_tmp.dropna(subset=['EMA_50', 'RSI'], inplace=True)
-                    if not df_tmp.empty:
-                        last_close = float(df_tmp['Close'].iloc[-1])
-                        last_ema50 = float(df_tmp['EMA_50'].iloc[-1])
-                        last_rsi   = float(df_tmp['RSI'].iloc[-1])
-                        # Bullish structure + not overbought = day-only eligible
-                        if last_close > last_ema50 and last_rsi < 65:
-                            if passes_liquidity_filter(df_daily, "DAY TRADE"):
-                                candidates.append((ticker, None, True))
-                except Exception:
-                    pass
 
         except Exception as e:
             print(f"   ⚠️ [{ticker}] Stage 2 error: {e}")
 
-    type1 = sum(1 for _, s, _ in candidates if s is not None)
-    type2 = sum(1 for _, s, d in candidates if s is None and d)
-    print(f"   ✅ {type1} swing setups + {type2} day-only = "
-          f"{len(candidates)}/{len(scan_tickers)} advance to Stage 3\n")
+    print(f"   ✅ {len(candidates)} swing setups advance to Stage 3\n")
 
     # ═════════════════════════════════════════════════════════════════════════
     #  STAGE 3: TARGETED INTRADAY (5m fetch for Stage 2 survivors only)
@@ -1678,10 +1646,10 @@ def check_market(mode: str, tickers_override: list | None = None):
     print(f"⚡ STAGE 3: Intraday analysis for {len(candidates)} tickers...\n")
     alerts_sent = 0
 
-    for ticker, swing_signal, day_only_eligible in candidates:
+    for ticker, swing_signal, _ in candidates:
         try:
             currency = get_currency(ticker)
-            print(f"── {ticker} ({currency}) {'[day-only]' if day_only_eligible else ''} ──")
+            print(f"── {ticker} ({currency}) ──")
 
             # ── OPTIONAL: State machine check (disabled by default) ────────────
             # Uncomment to suppress re-alerts on active setups:
@@ -1725,14 +1693,9 @@ def check_market(mode: str, tickers_override: list | None = None):
                 if day_signal else "❌ Below threshold"
             ))
 
-            # Enforce day-only constraint
-            if day_only_eligible and day_signal is None:
-                print(f"   ➖ Day-only ticker with no day signal. Skipping.")
-                continue
-
             print(f"   Swing Engine: " + (
                 f"Score {swing_signal['score']}/{swing_signal['threshold']} ✅"
-                if swing_signal else "N/A (day-only eligible)"
+                if swing_signal else "N/A"
             ))
 
             # Conflict gate
