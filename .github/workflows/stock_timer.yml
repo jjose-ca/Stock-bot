@@ -51,6 +51,11 @@ jobs:
           # Create empty log if bot never fired an alert this run
           [ -f trade_log.json ] || echo "[]" > trade_log.json
           git add trade_log.json
-          # Only commit if the file actually changed
-          git diff --staged --quiet || git commit -m "chore: update trade log [skip ci]"
-          git push
+          # Only commit+push if the file actually changed.
+          # Pull --rebase first to avoid rejection when concurrent runs
+          # (e.g. 3:00pm and 3:15pm) both try to push at the same time.
+          git diff --staged --quiet || (
+            git pull --rebase origin master &&
+            git commit -m "chore: update trade log [skip ci]" &&
+            git push
+          )
