@@ -68,7 +68,7 @@ TICKERS_USD = [
     'VTI',          # ← Keep this — used for market regime check, not traded
 
     # ETFs
-    'SPY', 'SPLG', 'QQQM', 'QQQ', 'IWM',
+    'SPY', 'QQQM', 'QQQ', 'IWM',
     'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB',
 
     # Mega Cap
@@ -78,7 +78,7 @@ TICKERS_USD = [
     # Mid-risk
     'NVDA', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX',
     'NFLX', 'ORCL', 'CRM', 'NOW', 'PANW',
-    'SHOP', 'UBER', 'PYPL', 'TGT', 'SQ',
+    'SHOP', 'UBER', 'PYPL', 'TGT',
     'OXY', 'DVN', 'CCL', 'DKNG',
 
     # High beta
