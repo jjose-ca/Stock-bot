@@ -1331,8 +1331,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 228.14,
-    "min_price": 228.14
+    "max_price": 230.6699981689453,
+    "min_price": 227.6699981689453
   },
   {
     "id": "TOU.TO_20260224_1333",
@@ -1359,7 +1359,33 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 62.44,
-    "min_price": 62.44
+    "max_price": 62.900001525878906,
+    "min_price": 62.279998779296875
+  },
+  {
+    "id": "ABBV_20260224_1411",
+    "ticker": "ABBV",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "entry": 228.15,
+    "stop_loss": 218.51,
+    "take_profit": 243.58,
+    "rr_ratio": 1.6,
+    "score": 6,
+    "threshold": 6,
+    "atr": 6.1709,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA + Strong Recovery (Low $225.79 \u2192 Close $229.48)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83d\ude80 Daily MACD: Positive Histogram"
+    ],
+    "alert_date": "2026-02-24",
+    "alert_time": "14:11 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 228.15,
+    "min_price": 228.15
   }
 ]
