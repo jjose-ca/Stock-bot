@@ -996,7 +996,6 @@ def send_setup_alert(ticker, currency, signal,
     desc += f"• **R/R:**        `1:{rr:.2f}` ⚖️\n"
     desc += f"• **Risk/Share:** `{curr_sym}{risk_share:.2f}` | ATR `{curr_sym}{atr_val:.2f}`\n"
     desc += f"• **Size:**       `{signal.get('size_guidance', '—')}`\n"
-    desc += f"• **Hold:**       {signal.get('hold_guidance', '—')}\n"
 
     desc += "\n📉 **Technicals**\n"
     desc += f"• **RSI:**    `{rsi_val:.1f}` {rsi_label}\n"
@@ -1028,7 +1027,6 @@ def send_setup_alert(ticker, currency, signal,
     # Badges
     badges = []
     if signal.get("near_52w_high"): badges.append("📈 52W HIGH ZONE")
-    if currency == "CAD":           badges.append("🍁 TSX LISTED")
     if not regime_bullish:          badges.append("⚠️ BEARISH REGIME")
     if badges:
         desc += f"\n🏷️ {' | '.join(badges)}"
