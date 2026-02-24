@@ -52,10 +52,10 @@ jobs:
           [ -f trade_log.json ] || echo "[]" > trade_log.json
           git add trade_log.json
           # Only commit+push if the file actually changed.
-          # Pull --rebase first to avoid rejection when concurrent runs
-          # (e.g. 3:00pm and 3:15pm) both try to push at the same time.
+          # Commit first, then pull --rebase, then push.
+          # Rebasing with staged changes causes exit 128 — commit must come first.
           git diff --staged --quiet || (
-            git pull --rebase origin master &&
             git commit -m "chore: update trade log [skip ci]" &&
+            git pull --rebase origin master &&
             git push
           )
