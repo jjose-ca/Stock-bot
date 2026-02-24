@@ -113,7 +113,8 @@ MIN_DOLLAR_VOLUME = {
 }
 
 # ── Risk parameters ───────────────────────────────────────────────────────────
-MAX_STOP_PCT = 0.06   # Max 6% stop on swing trades — wider stops are rejected outright
+BASE_MAX_STOP_PCT     = 0.06   # Floor — never tighter than 6% even for low-vol stocks
+ABSOLUTE_MAX_STOP_PCT = 0.15   # Ceiling — never wider than 15% even for extreme high-beta
 MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 
 # ── Portfolio value ───────────────────────────────────────────────────────────
@@ -437,21 +438,29 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
             df['BB_WIDTH'] = (df['BBU'] - df['BBL']) / df['BBM']
 
     df.dropna(subset=['RSI', 'EMA_50', 'ATR'], inplace=True)
-    if len(df) < 2:
+    if len(df) < 3:
         return None
 
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+    # ── Anti-repainting: score on yesterday's COMPLETED bar ───────────────────
+    # iloc[-1] is today's in-progress candle — its Close, RSI, BBL etc. will
+    # keep changing until 4:00pm. Scoring on it mid-session creates false signals
+    # that look nothing like the final daily close.
+    # iloc[-2] is yesterday's confirmed, final, never-changing bar — safe to score.
+    # iloc[-1].Close is used only for the entry price (what you actually pay today).
+    scored = df.iloc[-2]   # yesterday — completed bar, all signal logic
+    prev   = df.iloc[-3]   # day before yesterday — MACD direction comparison
+    today  = df.iloc[-1]   # today — incomplete bar, entry price only
 
-    price    = float(last['Close'])
-    ema_21   = float(last['EMA_21'])
-    ema_50   = float(last['EMA_50'])
-    rsi      = float(last['RSI'])
-    atr      = float(last['ATR'])
-    bbl      = float(last['BBL'])      if 'BBL'      in df.columns else None
-    bb_width = float(last['BB_WIDTH']) if 'BB_WIDTH' in df.columns else 0.0
-    macd_h   = float(last['MACD_H'])   if 'MACD_H'   in df.columns else 0.0
-    prev_mh  = float(prev['MACD_H'])   if 'MACD_H'   in df.columns else 0.0
+    entry_price = float(today['Close'])   # actual price you pay at today's close
+    price    = float(scored['Close'])     # yesterday's close — all scoring based on this
+    ema_21   = float(scored['EMA_21'])
+    ema_50   = float(scored['EMA_50'])
+    rsi      = float(scored['RSI'])
+    atr      = float(scored['ATR'])
+    bbl      = float(scored['BBL'])      if 'BBL'      in df.columns else None
+    bb_width = float(scored['BB_WIDTH']) if 'BB_WIDTH' in df.columns else 0.0
+    macd_h   = float(scored['MACD_H'])   if 'MACD_H'   in df.columns else 0.0
+    prev_mh  = float(prev['MACD_H'])     if 'MACD_H'   in df.columns else 0.0
 
     reasons = []
 
@@ -460,8 +469,8 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     trend_cap   = SWING_CATEGORY_CAPS["trend"]
 
     # C. 21 EMA wick detection
-    daily_low   = float(last['Low'])
-    daily_close = float(last['Close'])
+    daily_low   = float(scored['Low'])
+    daily_close = float(scored['Close'])  # same as price — yesterday's confirmed close
     wick_to_21  = (daily_low <= ema_21 * 1.005) and (daily_close > ema_21) and (rsi < 65)
 
     pct_from_21 = (daily_close - ema_21) / ema_21
@@ -559,9 +568,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         # rather than iloc[-11] / iloc[-21] which shift unpredictably after dropna
         # removes warmup rows. This ensures ROC always compares true calendar
         # windows regardless of how many rows were dropped earlier.
-        close_series = df['Close'].dropna()
+        close_series = df['Close'].iloc[:-1].dropna()  # exclude today's incomplete bar
         if len(close_series) >= 21:
-            today_idx   = close_series.index[-1]
+            today_idx   = close_series.index[-1]  # = yesterday's close
             ten_ago_idx = close_series.index[-11]   # 10 bars back (inclusive of today)
             twenty_ago_idx = close_series.index[-21]  # 20 bars back
 
@@ -602,7 +611,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
           f"trend={trend_score} momentum={momentum_score} penalty=-{penalty}")
     is_bullish = price > ema_21
 
-    # Support-aware stop: use the nearest support level as reference
+    # Stop/target use entry_price (today's close) — that's your actual fill.
+    # Support levels come from yesterday's scored bar (structurally grounded).
+    # ATR also comes from yesterday's completed bar.
     if bbl is not None and price <= bbl * 1.02:
         support = bbl
     elif near_21:
@@ -610,11 +621,15 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     else:
         support = ema_50
 
-    stop_loss   = support - (atr * SWING_ATR_STOP_MULT)
-    take_profit = price   + (atr * SWING_ATR_TARGET_MULT)
+    stop_loss   = support      - (atr * SWING_ATR_STOP_MULT)
+    take_profit = entry_price  + (atr * SWING_ATR_TARGET_MULT)
 
-    if stop_loss >= price:
-        stop_loss = price - atr
+    if stop_loss >= entry_price:
+        stop_loss = entry_price - atr
+
+    gap_pct = (entry_price - price) / price * 100  # how much today moved vs yesterday
+    print(f"   [{ticker}] 📍 Scored on yesterday ${price:.2f} | Entry today ${entry_price:.2f} "
+          f"({'↑' if gap_pct >= 0 else '↓'}{abs(gap_pct):.1f}% gap)")
 
     return {
         "score": score, "threshold": threshold, "reasons": reasons,
@@ -626,8 +641,8 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         "atr": round(atr, 4), "atr_source": "Daily",
         "vwap": None, "rsi": round(rsi, 1),
         "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
-        "price": round(price, 2), "is_bullish": is_bullish,
-        "direction": "long",   # both engines are long-only; used by conflict gate
+        "price": round(entry_price, 2), "is_bullish": is_bullish,
+        "direction": "long",
         "mode": "SWING", "near_52w_high": near_52w_high,
     }
 
@@ -745,18 +760,33 @@ def build_final_signal(swing_signal: dict | None) -> dict | None:
 
 def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
     """
-    Strictly rejects signals where the stop is too wide.
-    No artificial tightening — moving a stop closer to price to satisfy
-    a % cap destroys the structural logic behind where the stop was placed
-    and can push it into normal market noise, guaranteeing a stop-out.
+    Validates stop width dynamically based on the stock's own ATR.
+    
+    Formula: dynamic_max = max(BASE, min(ATR% × 2.0, ABSOLUTE_CAP))
+    
+    This gives each stock room proportional to its natural daily movement:
+      - Low-vol stock  (ATR 0.8%): dynamic max = max(6%, 1.6%)  = 6.0%
+      - Mid-vol stock  (ATR 3.0%): dynamic max = max(6%, 6.0%)  = 6.0%
+      - High-vol stock (ATR 4.5%): dynamic max = max(6%, 9.0%)  = 9.0%
+      - Extreme stock  (ATR 9.0%): dynamic max = max(6%, 18%) → capped = 15.0%
+    
+    The 2.0× multiplier aligns with the stop formula (support - ATR × 0.8),
+    giving enough buffer above it without being reckless.
+    No manual per-ticker overrides needed — self-calibrates with market conditions.
     """
     price      = signal["price"]
     stop_loss  = signal["stop_loss"]
     target     = signal["take_profit"]
-    actual_pct = (price - stop_loss) / price
+    atr        = signal.get("atr", 0)
 
-    if actual_pct > MAX_STOP_PCT:
-        print(f"   [{ticker}] ❌ Stop too wide ({actual_pct*100:.1f}% > {MAX_STOP_PCT*100:.0f}% max). Rejected.")
+    atr_pct          = atr / price if price > 0 else 0
+    dynamic_max_stop = max(BASE_MAX_STOP_PCT, min(atr_pct * 2.0, ABSOLUTE_MAX_STOP_PCT))
+    actual_pct       = (price - stop_loss) / price
+
+    if actual_pct > dynamic_max_stop:
+        print(f"   [{ticker}] ❌ Stop too wide "
+              f"({actual_pct*100:.1f}% > {dynamic_max_stop*100:.1f}% dynamic max "
+              f"[ATR {atr_pct*100:.1f}% × 2.0]). Rejected.")
         return None
 
     risk   = price - stop_loss
