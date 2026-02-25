@@ -69,27 +69,30 @@ TICKERS_USD = [
 
     # ETFs
     'SPY', 'QQQM', 'QQQ', 'IWM',
-    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB', 'VWO', 'VEA', 'KO', 'PG', 'JNJ', 'QQQM', 'SPMO', 
+    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB',
+    'VWO', 'VEA', 'SPMO',
 
-    # Mega Cap
+    # Mega Cap / Defensive
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
     'JPM', 'BAC', 'XOM', 'ABBV',
+    'KO', 'PG', 'JNJ', 'V', 'MA',
 
     # Mid-risk
     'NVDA', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX',
     'NFLX', 'ORCL', 'CRM', 'NOW', 'PANW',
-    'SHOP', 'UBER', 'PYPL', 'TGT', 
-    'OXY', 'DVN', 'CCL', 'DKNG', 'CVX', 'TSM', 'DIS', 
+    'SHOP', 'UBER', 'PYPL', 'TGT',
+    'OXY', 'DVN', 'CCL', 'DKNG', 'CVX', 'TSM', 'DIS',
 
     # High beta
     'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI',
-    'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW', 
+    'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW',
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
 TICKERS_CAD = [
     'ZSP.TO', 'XEF.TO',
-    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO', 'QQC.TO',
+    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO',
+    # QQC.TO removed — delisted, no price data available
 ]
 
 # ── Discord ───────────────────────────────────────────────────────────────────
@@ -843,7 +846,21 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
 # =============================================================================
 
 def check_earnings(ticker: str) -> tuple[bool, str]:
-    """Returns (has_warning, message_string)."""
+    """Returns (has_warning, message_string).
+    ETFs are skipped entirely — they don't report quarterly earnings.
+    """
+    # Known ETFs — no earnings to check, skip the API call entirely
+    ETF_TICKERS = {
+        'SPY', 'SPLG', 'QQQM', 'QQQ', 'IWM', 'VTI', 'SOXQ',
+        'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB',
+        'VWO', 'VEA', 'SPMO',
+        # CAD ETFs
+        'ZSP.TO', 'XEF.TO',
+        # Note: KO, PG, JNJ are stocks — they DO have earnings, not included here
+    }
+    if ticker in ETF_TICKERS:
+        return False, ""
+
     try:
         cal = yf.Ticker(ticker).calendar
         if cal is None:
