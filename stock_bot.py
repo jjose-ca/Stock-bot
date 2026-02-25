@@ -1,6 +1,6 @@
 """
 =============================================================================
-  STOCK ALERT BOT v4.1 — Single File Edition
+  STOCK ALERT BOT v5.0 — Single File Edition
 =============================================================================
 
 WHAT THIS BOT DOES:
@@ -9,7 +9,7 @@ WHAT THIS BOT DOES:
   Sends rich Discord alerts with entry, stop loss, target, and R/R ratio.
   Runs automatically via GitHub Actions — no server needed.
 
-v4.1 CHANGES:
+v5.0 CHANGES:
   1. COMPLETED-BAR SIGNALING — Day engine now signals on the last completed
      5m candle (iloc[-2]), not the in-progress bar. Prevents false triggers
      from partial candles that reverse before close.
@@ -396,7 +396,7 @@ def check_market_regime(bulk_data: pd.DataFrame) -> tuple[int, bool]:
 #  Runs on ~252 daily bars from the bulk download.
 #  EMA-50 is mathematically valid at this bar count (was broken in v2 with ~43 bars).
 #
-#  v4.1: Scoring uses category caps to decorrelate signals.
+#  v5.0: Scoring uses category caps to decorrelate signals.
 #
 #  Categories (capped independently):
 #    TREND/STRUCTURE (max 4):
@@ -1079,6 +1079,10 @@ def _post_discord(payload: dict):
         return
     try:
         r = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        if not r.ok:
+            # Print full Discord error response so we can diagnose exactly what's wrong
+            print(f"❌ Discord error: {r.status_code} — {r.text[:500]}")
+            return
         r.raise_for_status()
         time.sleep(0.5)   # Discord allows ~30 req/min; 0.5s gap prevents 429s on bulk alerts
     except Exception as e:
@@ -1189,7 +1193,7 @@ def send_setup_alert(ticker, currency, signal,
             "fields": [{"name": "🔗 Chart",
                         "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})",
                         "inline": False}],
-            "footer": {"text": f"Stock Alert Bot v4.1 | ATR: {signal.get('atr_source','—')}"},
+            "footer": {"text": f"Stock Alert Bot v5.0 | ATR: {signal.get('atr_source','—')}"},
         }],
     }
     _post_discord(payload)
@@ -1197,18 +1201,35 @@ def send_setup_alert(ticker, currency, signal,
 
 
 def send_premarket_summary(summaries: list[dict]):
-    """Morning gap/watchlist briefing — informational only."""
+    """Morning gap/watchlist briefing — informational only.
+    Only shows tickers with significant gaps (>=2%) to stay within
+    Discord's 4096 character embed limit. Flat tickers are counted
+    but not listed to keep the message concise and actionable.
+    """
     if not summaries:
         return
     et_now = datetime.now(pytz.timezone(TIMEZONE))
-    lines  = [
+
+    # Split into meaningful gaps and flat opens — sort by gap size descending
+    gap_items  = [s for s in summaries if abs(s.get('gap_pct', 0)) >= 2.0]
+    flat_count = len(summaries) - len(gap_items)
+    gap_items  = sorted(gap_items, key=lambda x: abs(x.get('gap_pct', 0)), reverse=True)
+
+    lines = [
         f"• **{s['ticker']}** "
         f"`{'CA$' if s['currency'] == 'CAD' else '$'}{s['price']:.2f}` — {s['note']}"
-        for s in summaries
+        for s in gap_items
     ]
-    payload = {"embeds": [{"title": f"📋 Pre-Market Watchlist — {et_now.strftime('%b %d, %Y')}",
-        "description": "Radar items only — no trade entries yet.\n\n" +
-                       "\n".join(lines) + "\n\n_Signals fire during market hours._",
+
+    if not lines:
+        desc = f"No significant gaps today — {flat_count} tickers flat.\n\n_Signals fire during market hours._"
+    else:
+        desc  = f"**{len(gap_items)} significant gaps** | {flat_count} tickers flat\n\n"
+        desc += "\n".join(lines)
+        desc += "\n\n_Signals fire during market hours._"
+
+    payload = {"embeds": [{"title": f"📋 Pre-Market Gap Summary — {et_now.strftime('%b %d, %Y')}",
+        "description": desc,
         "color": COLOR_BLUE}]}
     _post_discord(payload)
 
@@ -1232,7 +1253,7 @@ def check_market(mode: str, tickers_override: list | None = None):
     et_now = datetime.now(tz)
 
     print(f"\n{'='*60}")
-    print(f"  Stock Alert Bot v4.1 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
+    print(f"  Stock Alert Bot v5.0 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
     print(f"  Mode: {mode.upper()}")
     print(f"{'='*60}\n")
 
@@ -1335,7 +1356,7 @@ def check_market(mode: str, tickers_override: list | None = None):
                 else:
                     note = f"Flat open ({gap_pct:+.1f}%) — no significant gap"
                 summaries.append({'ticker': ticker, 'currency': currency,
-                                  'price': price, 'note': note})
+                                  'price': price, 'note': note, 'gap_pct': gap_pct})
                 print(f"   {ticker}: {note}")
             except Exception:
                 pass
@@ -1700,7 +1721,7 @@ def send_outcome_summary(resolved: list, bulk_data):
             "title":       "📈 Trade Outcome Tracker",
             "description": desc[:4096],
             "color":       5763719 if win_rate >= 50 else 15548997,
-            "footer":      {"text": f"Stock Alert Bot v4.1 | {len(trades)} total trades logged"},
+            "footer":      {"text": f"Stock Alert Bot v5.0 | {len(trades)} total trades logged"},
         }]}
         _post_discord(payload)
         print(f"   📊 Outcome summary sent ({len(open_tr)} open, {len(resolved)} resolved)")
@@ -1713,7 +1734,7 @@ def send_outcome_summary(resolved: list, bulk_data):
 # =============================================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Stock Alert Bot v4.1")
+    parser = argparse.ArgumentParser(description="Stock Alert Bot v5.0")
     parser.add_argument('--mode',
         choices=['auto', 'premarket', 'swing'],
         default='auto',
