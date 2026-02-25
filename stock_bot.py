@@ -814,13 +814,13 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
     atr        = signal.get("atr", 0)
 
     atr_pct          = atr / price if price > 0 else 0
-    dynamic_max_stop = max(BASE_MAX_STOP_PCT, min(atr_pct * 2.0, ABSOLUTE_MAX_STOP_PCT))
+    dynamic_max_stop = max(BASE_MAX_STOP_PCT, min(atr_pct * 2.5, ABSOLUTE_MAX_STOP_PCT))
     actual_pct       = (price - stop_loss) / price
 
     if actual_pct > dynamic_max_stop:
         print(f"   [{ticker}] ❌ Stop too wide "
               f"({actual_pct*100:.1f}% > {dynamic_max_stop*100:.1f}% dynamic max "
-              f"[ATR {atr_pct*100:.1f}% × 2.0]). Rejected.")
+              f"[ATR {atr_pct*100:.1f}% × 2.5]). Rejected.")
         return None
 
     risk   = price - stop_loss
