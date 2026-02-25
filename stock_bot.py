@@ -1524,7 +1524,30 @@ def check_market(mode: str, tickers_override: list | None = None):
             # Daily relative volume — today vs 20-day average
             df_d    = extract_ticker_daily(bulk_data, ticker)
             rel_vol = calculate_daily_relative_volume(df_d) if df_d is not None else 1.0
-            print(f"   📊 Rel Vol: {rel_vol:.1f}x daily average")
+
+            # ── Volume Pace Gate ──────────────────────────────────────────────
+            # Raw volume is meaningless without context of how much of the day
+            # has elapsed. 0.15x at 10am is actually strong (pacing at 1.9x);
+            # 0.4x at 3pm is weak (pacing at 0.47x). Projecting forward gives
+            # a single unified check that works correctly at all hours.
+            #
+            # Examples:
+            #   10:00am — elapsed 30min — 0.15x raw → 0.15/0.077 = 1.95x pace ✅
+            #   12:00pm — elapsed 150min — 0.35x raw → 0.35/0.385 = 0.91x pace ✅
+            #    3:00pm — elapsed 330min — 0.40x raw → 0.40/0.846 = 0.47x pace ❌
+            safe_elapsed      = max(elapsed_min, 1.0)          # prevent div/0 at open
+            pct_of_day        = min(safe_elapsed / 390.0, 1.0) # 390 min = full session
+            vol_pace          = rel_vol / pct_of_day
+            MIN_VOL_PACE      = 0.6
+
+            if vol_pace < MIN_VOL_PACE:
+                print(f"   [{ticker}] ❌ Dead volume pace "
+                      f"(tracking {vol_pace:.1f}x < {MIN_VOL_PACE}x min). "
+                      f"Bounce lacks institutional conviction. Rejected.")
+                continue
+
+            print(f"   📊 Volume Pace: {vol_pace:.1f}x projected "
+                  f"(actual {rel_vol:.2f}x so far, {pct_of_day*100:.0f}% of day elapsed)")
 
             # Fire the alert
             send_setup_alert(
