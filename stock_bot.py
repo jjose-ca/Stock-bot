@@ -639,36 +639,68 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     # Support levels come from yesterday's scored bar (structurally grounded).
     # ATR also comes from yesterday's completed bar.
     #
-    # Four support cases:
-    #   1. Near BB lower band        → anchor to BBL
-    #   2. Near/above 21 EMA         → anchor to 21 EMA
-    #   3. Between 21 and 50 EMA     → use entry-based volatility stop
-    #      (anchoring to 50 EMA would make stop too wide — the gap between
-    #       the two EMAs plus ATR buffer often exceeds the dynamic max)
-    #   4. Near 50 EMA               → anchor to 50 EMA
-    between_emas = (price < ema_21) and (price > ema_50)
+    # Five support cases — always anchor to the nearest level BELOW entry price:
+    #   1. Near BB lower band                    → anchor to BBL
+    #   2. Price above 21 EMA (near it)          → anchor to 21 EMA
+    #   3. Price above 21 EMA, below 50 EMA      → anchor to 21 EMA (50 EMA is above = resistance)
+    #   4. Price below 21 EMA, above 50 EMA      → volatility stop (neither EMA is clean support)
+    #   5. Price near/above 50 EMA (from below)  → anchor to 50 EMA
+
+    above_21  = price >= ema_21
+    above_50  = price >= ema_50
+    near_50   = abs(price - ema_50) / ema_50 < 0.03   # within 3% of 50 EMA
 
     if bbl is not None and price <= bbl * 1.02:
+        # Case 1: BB lower band is nearest support
         support        = bbl
         support_source = "BB Lower Band"
-    elif near_21:
+
+    elif above_21 and near_21:
+        # Case 2: Price sitting just above 21 EMA — classic pullback support
         support        = ema_21
         support_source = "21 EMA"
-    elif between_emas:
-        # Price is below broken 21 EMA but holding above 50 EMA.
-        # 21 EMA is now resistance, 50 EMA is too far to anchor cleanly.
-        # Use entry - ATR×1.5 as a volatility stop — sits just below the
-        # broken 21 EMA level, exits if price can't reclaim it.
-        support        = entry_price   # placeholder — stop calculated directly below
-        support_source = "Volatility Stop (between EMAs)"
-    else:
+
+    elif above_21 and not above_50:
+        # Case 3: Price above 21 EMA but below 50 EMA
+        # 50 EMA is ABOVE price = resistance not support
+        # Anchor to 21 EMA which is below price = actual support
+        support        = ema_21
+        support_source = "21 EMA (50 EMA above = resistance)"
+
+    elif not above_21 and above_50 and near_50:
+        # Case 4a: Price just below 21 EMA, near 50 EMA from above
+        # 50 EMA is the real support here
         support        = ema_50
         support_source = "50 EMA"
 
-    if support_source == "Volatility Stop (between EMAs)":
+    elif not above_21 and above_50:
+        # Case 4b: Price between EMAs — neither is clean support
+        # Use volatility stop: entry - ATR×1.5
+        support        = entry_price
+        support_source = "Volatility Stop (between EMAs)"
+
+    elif above_50 and near_50:
+        # Case 5: Price pulling back to 50 EMA from above
+        support        = ema_50
+        support_source = "50 EMA"
+
+    else:
+        # Fallback: use 21 EMA (nearest EMA to price in most cases)
+        support        = ema_21
+        support_source = "21 EMA (fallback)"
+
+    if support_source.startswith("Volatility Stop"):
         stop_loss = entry_price - (atr * SWING_ATR_STOP_MULT)
     else:
         stop_loss = support - (atr * SWING_ATR_STOP_MULT)
+
+    # Safety check — if support is above entry price the stop would be nonsensical.
+    # This happens when 50 EMA is above entry and slips through case logic.
+    # Reject explicitly rather than letting a broken stop reach validate_risk silently.
+    if support > entry_price and not support_source.startswith("Volatility Stop"):
+        print(f"   [{ticker}] ❌ Support {support_source} (${support:.2f}) is above entry "
+              f"(${entry_price:.2f}) — no valid stop placement. Rejected.")
+        return None
 
     take_profit = entry_price  + (atr * SWING_ATR_TARGET_MULT)
 
