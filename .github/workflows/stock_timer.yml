@@ -8,13 +8,25 @@ on:
     - cron: '45 12 * * 1-5'
     - cron: '45 13 * * 1-5'
 
-    # Intraday: every hour at :30, 9:30am–2:30pm ET
-    #   Using 14-18 UTC avoids overlap with premarket and power hour
-    - cron: '30 14-18 * * 1-5'
+    # Intraday: every hour at :30, 9:30am–2:30pm ET (informational — shows what's building)
+    #   EDT: 13:30–18:30 UTC | EST: 14:30–19:30 UTC
+    - cron: '30 13-18 * * 1-5'
 
-    # Power Hour: every 15 min, 3:00–4:00pm ET
-    #   EDT: 19:00–20:00 UTC | EST: 20:00–21:00 UTC
-    - cron: '*/15 19-21 * * 1-5'
+    # Power Hour: 3:00, 3:15, 3:30, 3:45, 4:00pm ET only
+    # Daily bar is 97-99% complete — most reliable window for swing signals
+    # EDT (Summer, Mar–Nov): UTC-4
+    #   3:00pm = 19:00 UTC | 3:15 = 19:15 | 3:30 = 19:30 | 3:45 = 19:45 | 4:00 = 20:00
+    - cron: '0 19 * * 1-5'
+    - cron: '15 19 * * 1-5'
+    - cron: '30 19 * * 1-5'
+    - cron: '45 19 * * 1-5'
+    - cron: '0 20 * * 1-5'
+    # EST (Winter, Nov–Mar): UTC-5
+    #   3:00pm = 20:00 UTC | 3:15 = 20:15 | 3:30 = 20:30 | 3:45 = 20:45 | 4:00 = 21:00
+    - cron: '15 20 * * 1-5'
+    - cron: '30 20 * * 1-5'
+    - cron: '45 20 * * 1-5'
+    - cron: '0 21 * * 1-5'
 
   workflow_dispatch:
 
