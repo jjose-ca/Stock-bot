@@ -62,7 +62,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # Create empty log if bot never fired an alert this run
           [ -f trade_log.json ] || echo "[]" > trade_log.json
-          git add trade_log.json
+          git add trade_log.json earnings_cache.json
           # Only commit+push if the file actually changed.
           # Commit first, then pull --rebase, then push.
           # Rebasing with staged changes causes exit 128 — commit must come first.
