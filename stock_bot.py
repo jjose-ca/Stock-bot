@@ -659,10 +659,20 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     # the support/resistance structure the signal was based on is broken.
     # A gap-up means you're chasing; a gap-down means support failed.
     # Either way the entry is structurally disconnected from the scored setup.
-    MAX_ENTRY_GAP_PCT = 3.0
-    if abs(gap_pct) > MAX_ENTRY_GAP_PCT:
-        print(f"   [{ticker}] ❌ Gap too large ({gap_pct:+.1f}% vs {MAX_ENTRY_GAP_PCT}% max). "
-              f"Entry disconnected from scored structure. Rejected.")
+    # Dynamic ATR-based gap filter — flat % is too strict for high-beta stocks
+    # (RBLX, AMD, IOT gap 3-5% routinely) and too loose for low-vol stocks
+    # (SPY gapping 3% is abnormal). Solution: allow up to 1.5× the stock's
+    # own ATR% as the max gap, with a floor of 2% and ceiling of 7%.
+    # Examples:
+    #   SPY   ATR 0.8% → max gap = max(2%, 1.2%)  = 2.0%  (floor)
+    #   ABBV  ATR 2.7% → max gap = max(2%, 4.1%)  = 4.1%
+    #   RBLX  ATR 5.0% → max gap = max(2%, 7.5%)  = 7.0%  (ceiling)
+    #   COIN  ATR 7.0% → max gap = max(2%, 10.5%) = 7.0%  (ceiling)
+    atr_pct_gap     = (atr / price) * 100
+    dynamic_max_gap = max(2.0, min(atr_pct_gap * 1.5, 7.0))
+    if abs(gap_pct) > dynamic_max_gap:
+        print(f"   [{ticker}] ❌ Gap too large ({gap_pct:+.1f}% vs {dynamic_max_gap:.1f}% dynamic max "
+              f"[ATR {atr_pct_gap:.1f}% × 1.5]). Entry disconnected from scored structure. Rejected.")
         return None
 
     return {
