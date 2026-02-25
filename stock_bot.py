@@ -69,7 +69,7 @@ TICKERS_USD = [
 
     # ETFs
     'SPY', 'QQQM', 'QQQ', 'IWM',
-    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB', 'QQC.TO',
+    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB', 'QQC.TO', 'VWO', 'VEA', 'KO', 'PG', 'JNJ', 'QQQM', 'SPMO', 
 
     # Mega Cap
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
@@ -79,7 +79,7 @@ TICKERS_USD = [
     'NVDA', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX',
     'NFLX', 'ORCL', 'CRM', 'NOW', 'PANW',
     'SHOP', 'UBER', 'PYPL', 'TGT', 
-    'OXY', 'DVN', 'CCL', 'DKNG',
+    'OXY', 'DVN', 'CCL', 'DKNG', 'CVX', 'TSM', 'DIS', 
 
     # High beta
     'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI',
