@@ -161,6 +161,7 @@ COOLDOWN_MINUTES = {"SWING": 240}
 # Persisted in the repo so outcomes survive between GitHub Actions runs.
 # Each alert is logged on fire; outcomes are auto-checked on every subsequent run.
 TRADE_LOG_FILE        = "trade_log.json"
+EARNINGS_CACHE_FILE   = "earnings_cache.json"
 OUTCOME_CHECK_DAYS    = 21    # Extended from 10 — swing trades need room to develop
 OUTCOME_DISCORD_DAILY = True  # Send outcome summary to Discord whenever there are
                               # open positions or newly resolved trades.
@@ -845,52 +846,118 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
 #  Re-checks threshold after penalty — rejects if score falls below.
 # =============================================================================
 
+# ── Earnings cache helpers ───────────────────────────────────────────────────
+
+def load_earnings_cache() -> dict:
+    """Loads earnings_cache.json. Returns empty dict if missing or corrupt."""
+    p = Path(EARNINGS_CACHE_FILE)
+    if p.exists():
+        try:
+            with open(p) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_earnings_cache(cache: dict) -> None:
+    """Saves earnings cache to disk."""
+    try:
+        with open(EARNINGS_CACHE_FILE, "w") as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        print(f"   ⚠️ Could not save earnings cache: {e}")
+
+
 def check_earnings(ticker: str) -> tuple[bool, str]:
     """Returns (has_warning, message_string).
-    ETFs are skipped entirely — they don't report quarterly earnings.
+
+    Uses a lazy rolling cache (earnings_cache.json) to avoid hammering
+    the yfinance API. Per-ticker TTL of 7 days — aligns with the earnings
+    warning window so a one-day stale result is never consequential.
+
+    Flow:
+      1. ETF?          → return False immediately (no earnings)
+      2. In cache AND fetched < 7 days ago? → use cached value (0 API calls)
+      3. Otherwise     → fetch from yfinance, update cache, use result (1 API call)
     """
-    # Known ETFs — no earnings to check, skip the API call entirely
+    # ── Step 1: ETFs never have earnings ─────────────────────────────────────
     ETF_TICKERS = {
         'SPY', 'SPLG', 'QQQM', 'QQQ', 'IWM', 'VTI', 'SOXQ',
         'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB',
         'VWO', 'VEA', 'SPMO',
-        # CAD ETFs
         'ZSP.TO', 'XEF.TO',
-        # Note: KO, PG, JNJ are stocks — they DO have earnings, not included here
     }
     if ticker in ETF_TICKERS:
         return False, ""
 
-    try:
-        cal = yf.Ticker(ticker).calendar
-        if cal is None:
+    eastern = pytz.timezone(TIMEZONE)
+    today   = datetime.now(eastern).date()
+
+    # ── Step 2: Check rolling cache ───────────────────────────────────────────
+    cache = load_earnings_cache()
+    entry = cache.get(ticker)
+    cache_hit = False
+
+    if entry:
+        fetched_date = datetime.strptime(entry["fetched"], "%Y-%m-%d").date()
+        age_days     = (today - fetched_date).days
+        if age_days < 7:
+            # Cache is fresh — use it without any API call
+            earnings_date_str = entry.get("earnings_date")
+            cache_hit = True
+            print(f"   💾 [{ticker}] Earnings cache hit (age {age_days}d)")
+            if earnings_date_str is None:
+                return False, ""
+            earnings_date = datetime.strptime(earnings_date_str, "%Y-%m-%d").date()
+            days_until = (earnings_date - today).days
+            if 0 <= days_until <= EARNINGS_WARNING_DAYS:
+                msg = (f"⚠️ **EARNINGS WARNING:** Report in "
+                       f"{days_until} day{'s' if days_until != 1 else ''} ({earnings_date})")
+                return True, msg
             return False, ""
 
-        eastern       = pytz.timezone(TIMEZONE)
+    # ── Step 3: Cache miss or stale — fetch from yfinance ────────────────────
+    try:
+        print(f"   🌐 [{ticker}] Fetching earnings date from yfinance...")
+        cal = yf.Ticker(ticker).calendar
         earnings_date = None
 
-        if isinstance(cal, dict) and 'Earnings Date' in cal:
-            earnings_date = cal['Earnings Date'][0]
-        elif isinstance(cal, pd.DataFrame):
-            if 'Earnings Date' in cal.columns:
-                earnings_date = cal.iloc[0]['Earnings Date']
-            elif not cal.empty:
-                earnings_date = cal.iloc[0, 0]
+        if cal is not None:
+            if isinstance(cal, dict) and 'Earnings Date' in cal:
+                earnings_date = cal['Earnings Date'][0]
+            elif isinstance(cal, pd.DataFrame):
+                if 'Earnings Date' in cal.columns:
+                    earnings_date = cal.iloc[0]['Earnings Date']
+                elif not cal.empty:
+                    earnings_date = cal.iloc[0, 0]
+
+        # Save to cache regardless of whether earnings found —
+        # a None result is also worth caching to avoid repeat calls
+        earnings_date_str = None
+        if earnings_date is not None:
+            earnings_date = pd.to_datetime(earnings_date).date()
+            earnings_date_str = str(earnings_date)
+
+        cache[ticker] = {
+            "earnings_date": earnings_date_str,
+            "fetched":       str(today),
+        }
+        save_earnings_cache(cache)
 
         if earnings_date is None:
             return False, ""
 
-        earnings_date = pd.to_datetime(earnings_date).date()
-        today         = datetime.now(eastern).date()
-        days_until    = (earnings_date - today).days
-
+        days_until = (earnings_date - today).days
         if 0 <= days_until <= EARNINGS_WARNING_DAYS:
             msg = (f"⚠️ **EARNINGS WARNING:** Report in "
                    f"{days_until} day{'s' if days_until != 1 else ''} ({earnings_date})")
             return True, msg
 
         return False, ""
-    except Exception:
+
+    except Exception as e:
+        print(f"   ⚠️ [{ticker}] Earnings fetch failed: {e}")
         return False, ""
 
 
