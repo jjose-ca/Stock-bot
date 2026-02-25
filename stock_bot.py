@@ -84,14 +84,14 @@ TICKERS_USD = [
     'OXY', 'DVN', 'CCL', 'DKNG', 'CVX', 'TSM', 'DIS',
 
     # High beta
-    'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI','RBLX', 'IOT', 
+    'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI',
     'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW',
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
 TICKERS_CAD = [
     'ZSP.TO', 'XEF.TO',
-    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO', 'ATZ.TO', 
+    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO',
     # QQC.TO removed — delisted, no price data available
 ]
 
@@ -482,8 +482,8 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     wick_to_21  = (daily_low <= ema_21 * 1.005) and (daily_close > ema_21) and (rsi < 65)
 
     pct_from_21 = (daily_close - ema_21) / ema_21
-    near_21     =  0.0   <= pct_from_21 < 0.015
-    below_21    = -0.015 <= pct_from_21 < 0.0
+    near_21     =  0.0   <= pct_from_21 < 0.025   # widened 1.5% → 2.5%
+    below_21    = -0.025 <= pct_from_21 < 0.0        # widened 1.5% → 2.5%
 
     if wick_to_21 and not near_21:
         trend_score += 3
@@ -503,10 +503,10 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     # D. 50 EMA proximity — direction-aware
     pct_from_50 = (price - ema_50) / ema_50
-    if 0 <= pct_from_50 < 0.02:
+    if 0 <= pct_from_50 < 0.03:   # widened 2% → 3%
         trend_score += 2
         reasons.append(f"📊 Pulling Back to 50 EMA Support (${ema_50:.2f})")
-    elif -0.02 <= pct_from_50 < 0:
+    elif -0.03 <= pct_from_50 < 0:   # widened 2% → 3%
         trend_score += 1
         reasons.append(f"⚠️ Below 50 EMA — Testing as Support (${ema_50:.2f})")
 
@@ -540,7 +540,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         reasons.append(f"🌊 Daily Momentum Reset ({rsi:.1f})")
 
     # B. BB lower band close
-    if bbl is not None and price <= bbl * 1.01:
+    if bbl is not None and price <= bbl * 1.02:   # widened 1% → 2% tolerance
         momentum_score += 3
         reasons.append(f"🛡️ Closed at Daily BB Lower (${bbl:.2f})")
 
