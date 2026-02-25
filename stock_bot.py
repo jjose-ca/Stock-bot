@@ -740,6 +740,10 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
         "atr": round(atr, 4), "atr_source": "Daily",
         "vwap": None, "rsi": round(rsi, 1),
+        "macd_h": round(float(macd_h), 4) if macd_h else None,
+        "bb_width": round(float(bb_width), 4) if bb_width else None,
+        "bbl": round(float(bbl), 2) if bbl is not None else None,
+        "gap_pct": round(gap_pct, 2),
         "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
         "price": round(entry_price, 2), "is_bullish": is_bullish,
         "direction": "long",
@@ -1557,6 +1561,11 @@ def check_market(mode: str, tickers_override: list | None = None):
             )
             alerts_sent += 1
 
+            # Inject runtime values into signal before logging
+            # (vol_pace and regime_bullish live in main loop, not signal dict)
+            final_signal["vol_pace"]      = round(float(vol_pace), 2)
+            final_signal["regime_bullish"] = bool(regime_bullish)
+
             # Log the trade for outcome tracking
             log_new_trade(ticker, currency, final_signal)
 
@@ -1646,22 +1655,46 @@ def log_new_trade(ticker: str, currency: str, signal: dict):
         # Cast all numerics to plain Python float — signal values from yfinance
         # are numpy.float64 which json.dump cannot serialize, causing a silent
         # TypeError that swallows the entire log write.
+        sb = signal.get("score_breakdown", {})
         trade  = {
+            # ── Identity ──────────────────────────────────────────────────────
             "id":           f"{ticker}_{now.strftime('%Y%m%d_%H%M')}",
             "ticker":       ticker,
             "currency":     currency,
             "scenario":     signal.get("scenario", "?"),
             "mode":         signal.get("mode", "?"),
+            "alert_date":   now.strftime("%Y-%m-%d"),
+            "alert_time":   now.strftime("%H:%M ET"),
+
+            # ── Trade plan ────────────────────────────────────────────────────
             "entry":        float(signal["price"]),
             "stop_loss":    float(signal["stop_loss"]),
             "take_profit":  float(signal["take_profit"]),
             "rr_ratio":     float(signal.get("rr_ratio", 0)),
+            "support":      float(signal.get("support", 0)),
+            "support_source": signal.get("support_source", ""),
+
+            # ── Scoring ───────────────────────────────────────────────────────
             "score":        int(signal.get("score", 0)),
             "threshold":    int(signal.get("threshold", 0)),
-            "atr":          float(signal.get("atr", 0)),
+            "trend_score":  int(sb.get("trend", 0)),
+            "momentum_score": int(sb.get("momentum", 0)),
+            "penalty":      int(abs(sb.get("penalty", 0))),
             "reasons":      [str(r) for r in signal.get("reasons", [])],
-            "alert_date":   now.strftime("%Y-%m-%d"),
-            "alert_time":   now.strftime("%H:%M ET"),
+
+            # ── Technical snapshot at time of alert ───────────────────────────
+            "rsi":          float(signal.get("rsi", 0)),
+            "macd_h":       float(signal["macd_h"]) if signal.get("macd_h") is not None else None,
+            "atr":          float(signal.get("atr", 0)),
+            "ema_21":       float(signal.get("ema_21", 0)),
+            "ema_50":       float(signal.get("ema_50", 0)),
+            "bbl":          float(signal["bbl"]) if signal.get("bbl") is not None else None,
+            "bb_width":     float(signal["bb_width"]) if signal.get("bb_width") is not None else None,
+            "gap_pct":      float(signal.get("gap_pct", 0)),
+            "near_52w_high": bool(signal.get("near_52w_high", False)),
+            "regime_bullish": bool(signal.get("regime_bullish", True)),
+
+            # ── Outcome tracking ──────────────────────────────────────────────
             "status":       "OPEN",
             "outcome_date": None,
             "outcome_pct":  None,
