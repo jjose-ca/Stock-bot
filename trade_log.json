@@ -1304,8 +1304,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 80.29,
-    "min_price": 80.29
+    "max_price": 81.18099975585938,
+    "min_price": 80.05999755859375
   },
   {
     "id": "ABBV_20260224_1333",
@@ -1463,7 +1463,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 228.44,
-    "min_price": 228.44
+    "max_price": 230.6699981689453,
+    "min_price": 227.6699981689453
   }
 ]
