@@ -68,7 +68,7 @@ TICKERS_USD = [
     'VTI',          # ← Keep this — used for market regime check, not traded
 
     # ETFs
-    'SPY', 'QQQM', 'QQQ', 'IWM',
+    'SPY', 'SPLG', 'QQQM', 'QQQ', 'IWM',
     'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB',
 
     # Mega Cap
@@ -78,7 +78,7 @@ TICKERS_USD = [
     # Mid-risk
     'NVDA', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX',
     'NFLX', 'ORCL', 'CRM', 'NOW', 'PANW',
-    'SHOP', 'UBER', 'PYPL', 'TGT',
+    'SHOP', 'UBER', 'PYPL', 'TGT', 'SQ',
     'OXY', 'DVN', 'CCL', 'DKNG',
 
     # High beta
@@ -101,11 +101,15 @@ DISCORD_WEBHOOK_URL = os.getenv('DISCORD_URL')
 # ── Scoring thresholds ────────────────────────────────────────────────────────
 SWING_SCORE_THRESHOLD = 6
 
-# ── Swing category caps ───────────────────────────────────────────────────────
+# ── Swing category caps and floors ───────────────────────────────────────────
 # Trend/Structure   — Max 4: EMA 21 wick/support, EMA 50 proximity,
 #                             bullish structure, 52-week high
 # Momentum/Reversion — Max 4: RSI level, BB lower band close, MACD
-SWING_CATEGORY_CAPS = {"trend": 4, "momentum": 4}
+# Floors ensure true trend-pullback alignment — a stock below both EMAs
+# cannot reach trend_min=3 using only "testing support" signals, preventing
+# falling-knife setups from passing on oversold momentum alone.
+SWING_CATEGORY_CAPS  = {"trend": 4, "momentum": 4}
+SWING_CATEGORY_FLOORS = {"trend": 3, "momentum": 2}  # both must be met
 
 # ── Liquidity gates (minimum average daily dollar volume) ─────────────────────
 MIN_DOLLAR_VOLUME = {
@@ -122,8 +126,8 @@ MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 # Alerts will show exact dollar amounts to invest per signal.
 PORTFOLIO_VALUE = 360.0   # ← Update this whenever your account size changes
 
-SWING_ATR_STOP_MULT   = 0.8    # Swing stop = support − (ATR × 0.8)
-SWING_ATR_TARGET_MULT = 2.5    # Swing target = price + (ATR × 2.5)
+SWING_ATR_STOP_MULT   = 1.5    # Swing stop = support − (ATR × 1.5) — gives room for normal noise
+SWING_ATR_TARGET_MULT = 3.5    # Swing target = price + (ATR × 3.5) — wider target to maintain R/R
 
 # ── Volume thresholds ─────────────────────────────────────────────────────────
 VOLUME_STRONG   = 2.0    # 2x relative volume = strong institutional activity
@@ -607,6 +611,22 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
               f"trend={trend_score} momentum={momentum_score} penalty=-{penalty}")
         return None
 
+    # ── Per-category floor check ──────────────────────────────────────────────
+    # Total score alone doesn't guarantee true trend-pullback alignment.
+    # trend < 3 means the stock is below both EMAs — a downtrend, not a pullback.
+    # momentum < 2 means there's no real oversold signal — nothing to bounce from.
+    # Both floors must be met even if total score passes.
+    trend_floor    = SWING_CATEGORY_FLOORS["trend"]
+    momentum_floor = SWING_CATEGORY_FLOORS["momentum"]
+    if trend_score < trend_floor:
+        print(f"   [{ticker}] ❌ Trend score {trend_score} below floor {trend_floor} "
+              f"— stock below both EMAs, possible downtrend. Rejected.")
+        return None
+    if momentum_score < momentum_floor:
+        print(f"   [{ticker}] ❌ Momentum score {momentum_score} below floor {momentum_floor} "
+              f"— insufficient oversold signal. Rejected.")
+        return None
+
     print(f"   [{ticker}] ✅ Score {score}/{threshold} — "
           f"trend={trend_score} momentum={momentum_score} penalty=-{penalty}")
     is_bullish = price > ema_21
@@ -630,6 +650,16 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     gap_pct = (entry_price - price) / price * 100  # how much today moved vs yesterday
     print(f"   [{ticker}] 📍 Scored on yesterday ${price:.2f} | Entry today ${entry_price:.2f} "
           f"({'↑' if gap_pct >= 0 else '↓'}{abs(gap_pct):.1f}% gap)")
+
+    # Gap filter — if today has moved more than 3% from yesterday's scored bar,
+    # the support/resistance structure the signal was based on is broken.
+    # A gap-up means you're chasing; a gap-down means support failed.
+    # Either way the entry is structurally disconnected from the scored setup.
+    MAX_ENTRY_GAP_PCT = 3.0
+    if abs(gap_pct) > MAX_ENTRY_GAP_PCT:
+        print(f"   [{ticker}] ❌ Gap too large ({gap_pct:+.1f}% vs {MAX_ENTRY_GAP_PCT}% max). "
+              f"Entry disconnected from scored structure. Rejected.")
+        return None
 
     return {
         "score": score, "threshold": threshold, "reasons": reasons,
@@ -1339,7 +1369,7 @@ def check_market(mode: str, tickers_override: list | None = None):
     print(f"{'='*60}\n")
 
     if alerts_sent == 0:
-        send_no_signals_notice(mode, len(candidates))
+        send_no_signals_notice(mode, len(scan_tickers))
 
 
 
@@ -1392,9 +1422,19 @@ def save_trade_log(trades: list):
 
 
 def log_new_trade(ticker: str, currency: str, signal: dict):
-    """Appends a new alert to the trade log."""
+    """Appends a new alert to the trade log. Skips if an OPEN trade already exists for this ticker."""
     try:
         trades = load_trade_log()
+
+        # Deduplication guard — if an OPEN trade already exists for this ticker,
+        # don't log another one. Without this, hourly runs log the same setup
+        # repeatedly with different minute timestamps, polluting the win rate stats.
+        existing_open = [t for t in trades
+                         if t["ticker"] == ticker and t["status"] == "OPEN"]
+        if existing_open:
+            print(f"   ⏭️  {ticker} already has an OPEN trade — skipping duplicate log")
+            return
+
         tz     = pytz.timezone(TIMEZONE)
         now    = datetime.now(tz)
         # Cast all numerics to plain Python float — signal values from yfinance
@@ -1480,8 +1520,21 @@ def check_open_trades(bulk_data) -> list:
             target = trade["take_profit"]
             stop   = trade["stop_loss"]
 
+            # Check if both stop AND target were hit on the same daily bar.
+            # Using daily OHLCV we cannot know which happened first intraday.
+            # Marking as LOST in this case creates a systematic negative bias
+            # on win rate — flag as AMBIGUOUS instead so it doesn't skew stats.
+            both_hit = (latest_low <= stop) and (latest_high >= target)
+            if both_hit:
+                trade["status"]       = "AMBIGUOUS"
+                trade["outcome_date"] = str(today)
+                trade["outcome_pct"]  = 0.0
+                resolved.append(trade)
+                print(f"   ⚠️  {trade['ticker']} AMBIGUOUS — both stop ${stop:.2f} "
+                      f"and target ${target:.2f} hit on same bar. Cannot determine order.")
+
             # Check stop hit (using daily low)
-            if latest_low <= stop:
+            elif latest_low <= stop:
                 trade["status"]       = "LOST"
                 trade["outcome_date"] = str(today)
                 trade["outcome_pct"]  = round((stop - entry) / entry * 100, 2)
@@ -1523,7 +1576,10 @@ def send_outcome_summary(resolved: list, bulk_data):
         won_tr    = [t for t in trades if t["status"] == "WON"]
         lost_tr   = [t for t in trades if t["status"] == "LOST"]
         expired   = [t for t in trades if t["status"] == "EXPIRED"]
+        ambiguous = [t for t in trades if t["status"] == "AMBIGUOUS"]
 
+        # AMBIGUOUS trades excluded from win rate — both stop and target hit
+        # on the same daily bar so we can't determine actual outcome
         total_closed = len(won_tr) + len(lost_tr)
         win_rate     = (len(won_tr) / total_closed * 100) if total_closed > 0 else 0
 
@@ -1531,7 +1587,8 @@ def send_outcome_summary(resolved: list, bulk_data):
         avg_loss = (sum(t["outcome_pct"] for t in lost_tr) / len(lost_tr)) if lost_tr else 0
 
         desc  = f"**Overall Win Rate:** `{win_rate:.0f}%` "
-        desc += f"({len(won_tr)}W / {len(lost_tr)}L / {len(expired)} expired)\n"
+        desc += f"({len(won_tr)}W / {len(lost_tr)}L / {len(expired)} expired"
+        desc += f" / {len(ambiguous)} ambiguous)\n" if ambiguous else ")\n"
         desc += f"**Avg Win:** `+{avg_win:.1f}%` | **Avg Loss:** `{avg_loss:.1f}%`\n"
 
         if open_tr:
