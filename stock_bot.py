@@ -84,14 +84,14 @@ TICKERS_USD = [
     'OXY', 'DVN', 'CCL', 'DKNG', 'CVX', 'TSM', 'DIS',
 
     # High beta
-    'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI',
+    'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI','RBLX', 'IOT', 
     'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW',
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
 TICKERS_CAD = [
     'ZSP.TO', 'XEF.TO',
-    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO',
+    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO', 'ATZ.TO', 
     # QQC.TO removed — delisted, no price data available
 ]
 
