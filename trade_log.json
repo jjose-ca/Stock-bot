@@ -1,1 +1,42 @@
-[]
+[
+  {
+    "id": "PYPL_20260225_1531",
+    "ticker": "PYPL",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-02-25",
+    "alert_time": "15:31 ET",
+    "entry": 47.13,
+    "stop_loss": 42.17,
+    "take_profit": 54.61,
+    "rr_ratio": 1.51,
+    "support": 45.38,
+    "support_source": "21 EMA (50 EMA above = resistance)",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 3,
+    "momentum_score": 3,
+    "penalty": 0,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA + Strong Recovery (Low $43.03 \u2192 Close $47.02)",
+      "\ud83c\udf0a Daily Momentum Reset (50.8)",
+      "\ud83d\ude80 Daily MACD: Positive Histogram"
+    ],
+    "rsi": 50.8,
+    "macd_h": 0.8927,
+    "atr": 2.1362,
+    "ema_21": 45.38,
+    "ema_50": 51.15,
+    "bbl": 33.24,
+    "bb_width": 0.5061,
+    "gap_pct": 0.23,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 47.13,
+    "min_price": 47.13
+  }
+]
