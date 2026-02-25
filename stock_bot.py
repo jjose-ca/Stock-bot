@@ -638,14 +638,38 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     # Stop/target use entry_price (today's close) — that's your actual fill.
     # Support levels come from yesterday's scored bar (structurally grounded).
     # ATR also comes from yesterday's completed bar.
-    if bbl is not None and price <= bbl * 1.02:
-        support = bbl
-    elif near_21:
-        support = ema_21
-    else:
-        support = ema_50
+    #
+    # Four support cases:
+    #   1. Near BB lower band        → anchor to BBL
+    #   2. Near/above 21 EMA         → anchor to 21 EMA
+    #   3. Between 21 and 50 EMA     → use entry-based volatility stop
+    #      (anchoring to 50 EMA would make stop too wide — the gap between
+    #       the two EMAs plus ATR buffer often exceeds the dynamic max)
+    #   4. Near 50 EMA               → anchor to 50 EMA
+    between_emas = (price < ema_21) and (price > ema_50)
 
-    stop_loss   = support      - (atr * SWING_ATR_STOP_MULT)
+    if bbl is not None and price <= bbl * 1.02:
+        support        = bbl
+        support_source = "BB Lower Band"
+    elif near_21:
+        support        = ema_21
+        support_source = "21 EMA"
+    elif between_emas:
+        # Price is below broken 21 EMA but holding above 50 EMA.
+        # 21 EMA is now resistance, 50 EMA is too far to anchor cleanly.
+        # Use entry - ATR×1.5 as a volatility stop — sits just below the
+        # broken 21 EMA level, exits if price can't reclaim it.
+        support        = entry_price   # placeholder — stop calculated directly below
+        support_source = "Volatility Stop (between EMAs)"
+    else:
+        support        = ema_50
+        support_source = "50 EMA"
+
+    if support_source == "Volatility Stop (between EMAs)":
+        stop_loss = entry_price - (atr * SWING_ATR_STOP_MULT)
+    else:
+        stop_loss = support - (atr * SWING_ATR_STOP_MULT)
+
     take_profit = entry_price  + (atr * SWING_ATR_TARGET_MULT)
 
     if stop_loss >= entry_price:
@@ -688,6 +712,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         "price": round(entry_price, 2), "is_bullish": is_bullish,
         "direction": "long",
         "mode": "SWING", "near_52w_high": near_52w_high,
+        "support": round(support, 2), "support_source": support_source,
     }
 
 
@@ -1165,6 +1190,17 @@ def send_setup_alert(ticker, currency, signal,
     desc += f"• **21 EMA:** `{ema_str(signal.get('ema_21'))}`\n"
     if signal.get('ema_50'):
         desc += f"• **50 EMA:** `{ema_str(signal.get('ema_50'))}`\n"
+    # Show which level the stop is anchored to — lets you sanity check on chart
+    support_src = signal.get('support_source', '')
+    support_val = signal.get('support', 0)
+    ema_21_val  = signal.get('ema_21', 0)
+    if support_src and support_val:
+        if support_src == "Volatility Stop (between EMAs)":
+            desc += (f"• **Stop Anchor:** Volatility stop — price between EMAs\n"
+                     f"  21 EMA `{curr_sym}{ema_21_val:.2f}` broken (resistance) | "
+                     f"50 EMA too far | stop = entry − ATR×1.5\n")
+        else:
+            desc += f"• **Stop Anchor:** `{curr_sym}{support_val:.2f}` ({support_src}) — stop is ATR×1.5 below this\n"
     if rel_vol > 2.0:    vol_label = "🔥 Heavy"
     elif rel_vol > 1.2:  vol_label = "💪 Above Average"
     else:                vol_label = "😐 Below Average"
