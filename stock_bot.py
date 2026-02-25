@@ -1713,9 +1713,21 @@ def check_open_trades(bulk_data) -> list:
             if df is None or df.empty:
                 continue
 
-            latest_high  = float(df['High'].iloc[-1])
-            latest_low   = float(df['Low'].iloc[-1])
-            latest_close = float(df['Close'].iloc[-1])
+            # Slice from alert_date forward to catch any days the bot missed.
+            # Using iloc[-1] only would miss stop/target hits on skipped days
+            # (weekends, GitHub Actions outages, holidays) — a silent memory gap.
+            alert_date_str = trade.get("alert_date", "")
+            try:
+                df_window = df.loc[alert_date_str:] if alert_date_str else df
+            except KeyError:
+                df_window = df
+            if df_window.empty:
+                continue
+
+            # Absolute extremes across the full window since trade opened
+            latest_high  = float(df_window['High'].max())
+            latest_low   = float(df_window['Low'].min())
+            latest_close = float(df_window['Close'].iloc[-1])
 
             # Update high/low watermarks — explicit float() to avoid numpy types
             trade["max_price"] = float(max(trade["max_price"], latest_high))
