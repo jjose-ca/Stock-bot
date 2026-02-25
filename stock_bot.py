@@ -69,7 +69,7 @@ TICKERS_USD = [
 
     # ETFs
     'SPY', 'QQQM', 'QQQ', 'IWM',
-    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB', 'QQC.TO', 'VWO', 'VEA', 'KO', 'PG', 'JNJ', 'QQQM', 'SPMO', 
+    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB', 'VWO', 'VEA', 'KO', 'PG', 'JNJ', 'QQQM', 'SPMO', 
 
     # Mega Cap
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
@@ -89,7 +89,7 @@ TICKERS_USD = [
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
 TICKERS_CAD = [
     'ZSP.TO', 'XEF.TO',
-    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO',
+    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO', 'QQC.TO',
 ]
 
 # ── Discord ───────────────────────────────────────────────────────────────────
