@@ -37,7 +37,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 48.5,
-    "min_price": 46.44499969482422
+    "min_price": 44.93000030517578
   },
   {
     "id": "QQQM_20260226_1000",
@@ -79,7 +79,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 253.49000549316406,
-    "min_price": 250.92999267578125
+    "min_price": 248.6999969482422
   },
   {
     "id": "XLK_20260226_1000",
@@ -121,7 +121,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 143.00999450683594,
-    "min_price": 141.0
+    "min_price": 139.25999450683594
   },
   {
     "id": "SPMO_20260226_1000",
@@ -163,7 +163,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 120.38999938964844,
-    "min_price": 119.61000061035156
+    "min_price": 118.6449966430664
   },
   {
     "id": "SPY_20260226_1013",
@@ -204,8 +204,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 689.22,
-    "min_price": 689.22
+    "max_price": 693.2999877929688,
+    "min_price": 684.3599853515625
   },
   {
     "id": "IWM_20260226_1013",
@@ -247,8 +247,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 264.21,
-    "min_price": 264.21
+    "max_price": 266.1700134277344,
+    "min_price": 262.2699890136719
   },
   {
     "id": "COIN_20260226_1013",
@@ -287,7 +287,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 183.52,
-    "min_price": 183.52
+    "max_price": 185.5399932861328,
+    "min_price": 179.66000366210938
   }
 ]
