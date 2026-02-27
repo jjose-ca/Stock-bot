@@ -911,10 +911,11 @@ def build_final_signal(swing_signal: dict | None) -> dict | None:
         swing_signal["price"], swing_signal["atr"]
     )
     sig.update({
-        "scenario":       "SWING",
-        "scenario_label": "📅 SWING SETUP",
-        "size_guidance":  pos_c["label"],
-        "hold_guidance":  (
+        "scenario":         "SWING",
+        "scenario_label":   "📅 SWING SETUP",
+        "size_guidance":    pos_c["label"],
+        "position_size_pct": pos_c["pct"],   # numeric % for Alpaca order sizing
+        "hold_guidance":    (
             "Enter before 4:00pm close. Sell at next morning open (9:30am ET). "
             "Stop active overnight — if price gaps below stop, exit immediately at open."
         ),
@@ -1435,6 +1436,15 @@ def check_market(mode: str, tickers_override: list | None = None):
     print(f"{'='*60}\n")
 
     elapsed_min = get_elapsed_minutes(et_now)
+
+    # Hard stop — don't fire alerts after market close (4:00pm ET)
+    # GitHub Actions delays can push a 3:45pm scheduled job to 4:05pm
+    MARKET_CLOSE_MINUTES = 390  # 6h30m after 9:30am open = 4:00pm ET
+    if elapsed_min >= MARKET_CLOSE_MINUTES and mode != "premarket":
+        print(f"🔔 Market closed ({et_now.strftime('%I:%M %p ET')}) — "
+              f"no alerts after 4:00pm. Exiting.")
+        return
+
     time_penalty, penalty_reasons = get_time_penalty(et_now)
 
     for r in penalty_reasons:
@@ -1759,10 +1769,12 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
         print(f"   🍁 {ticker} — TSX ticker, skipping Alpaca order")
         return False
 
-    # Only place orders during power hour
-    POWER_HOUR_START = 270  # 4.5 hours after open = 2:00pm ET
-    if elapsed_min < POWER_HOUR_START:
-        print(f"   ⏰ {ticker} — intraday alert, skipping Alpaca order (not power hour)")
+    # Only place orders in the 3:45-4:00pm window
+    # Early enough to fill before close, late enough for reliable bar data
+    ALPACA_ORDER_START  = 375   # 6h15m after open = 3:45pm ET
+    ALPACA_ORDER_CUTOFF = 390   # 6h30m after open = 4:00pm ET (market closed)
+    if elapsed_min < ALPACA_ORDER_START or elapsed_min >= ALPACA_ORDER_CUTOFF:
+        print(f"   ⏰ {ticker} — outside 3:45-4:00pm order window, skipping Alpaca order")
         return False
 
     client = get_alpaca_client()
@@ -1798,10 +1810,23 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
 
         order = client.submit_order(order_request)
         print(f"   ✅ Alpaca order submitted: {order.id}")
+
+        # Notify Discord that paper order was placed
+        order_desc = (
+            f"**Qty:** {qty} shares @ ~${entry:.2f}\n"
+            f"**Target:** ${target:.2f} (limit sell)\n"
+            f"**Stop:** ${stop:.2f} (stop loss)\n"
+            f"**Order ID:** `{order.id}`\n"
+            f"_Paper trading account_"
+        )
+        _post_discord({"embeds": [{"title": f"🦙 Alpaca Paper Order Placed — {ticker}",
+            "description": order_desc, "color": 3066993}]})
         return True
 
     except Exception as e:
         print(f"   ❌ Alpaca order failed for {ticker}: {e}")
+        _post_discord({"embeds": [{"title": f"❌ Alpaca Order Failed — {ticker}",
+            "description": f"Error: `{e}`", "color": 15548997}]})
         return False
 
 
