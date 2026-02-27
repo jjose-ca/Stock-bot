@@ -452,7 +452,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 71.19000244140625,
-    "min_price": 69.56999969482422
+    "min_price": 69.41000366210938
   },
   {
     "id": "ZSP.TO_20260227_1001",
@@ -495,7 +495,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 102.6500015258789,
+    "max_price": 102.68000030517578,
     "min_price": 102.25
   }
 ]
