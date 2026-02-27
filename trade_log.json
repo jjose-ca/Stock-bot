@@ -37,7 +37,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 48.5,
-    "min_price": 44.5
+    "min_price": 44.494998931884766
   },
   {
     "id": "QQQM_20260226_1000",
@@ -79,7 +79,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 253.49000549316406,
-    "min_price": 248.6999969482422
+    "min_price": 248.69000244140625
   },
   {
     "id": "XLK_20260226_1000",
@@ -205,7 +205,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 693.2999877929688,
-    "min_price": 684.3599853515625
+    "min_price": 684.3499755859375
   },
   {
     "id": "IWM_20260226_1013",
@@ -247,7 +247,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 266.2349853515625,
+    "max_price": 266.239990234375,
     "min_price": 262.1199951171875
   },
   {
@@ -287,8 +287,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 185.5399932861328,
-    "min_price": 176.75010681152344
+    "max_price": 186.38999938964844,
+    "min_price": 176.75
   },
   {
     "id": "HUT.TO_20260226_1329",
