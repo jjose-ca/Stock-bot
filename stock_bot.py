@@ -1435,28 +1435,26 @@ def check_market(mode: str, tickers_override: list | None = None):
     # Regime check (extracted from bulk — no extra API call)
     regime_penalty, regime_bullish, is_panic = check_market_regime(bulk_data)
 
-    if is_panic:
-        print("🚨 Scan halted due to VIX PANIC.")
-        return
     total_penalty = time_penalty + regime_penalty
     print(f"📊 Total threshold penalty: +{total_penalty} "
           f"(time +{time_penalty}, regime +{regime_penalty})\n")
 
-    # ── Check open trade outcomes ─────────────────────────────────────────────
-    # Runs on every scan using the bulk daily data already downloaded —
-    # no extra API calls needed.
+    # ── Check open trade outcomes BEFORE panic halt ───────────────────────────
+    # Must run even during VIX panic — open positions still need monitoring
+    # and stop-loss hits must be tracked during a market crash.
     print("📋 Checking open trade outcomes...")
     resolved = check_open_trades(bulk_data)
 
-    # Only send Discord outcome summary when there is actually something to show:
-    #   - Newly resolved trades (WON/LOST/EXPIRED this run), OR
-    #   - Open positions that need monitoring
-    # This prevents 5 identical "no change" messages per day when the bot runs
-    # every 15 minutes. An empty trade log or all-closed log stays silent.
     if OUTCOME_DISCORD_DAILY:
-        open_trades = [t for t in load_trade_log() if t["status"] == "OPEN"]
-        if resolved or open_trades:
+        all_trades = load_trade_log()
+        if resolved or any(t["status"] in ("WON", "LOST", "EXPIRED") for t in all_trades):
             send_outcome_summary(resolved, bulk_data)
+
+    # ── NOW halt scan if VIX panic — prevents new buy signals ────────────────
+    # Placed after open trade check so stop-loss monitoring always runs
+    if is_panic:
+        print("🚨 Scan halted due to VIX PANIC. No new setups will be evaluated.")
+        return
 
     # Pre-market: just send gap summary and exit
     if mode == "premarket":
@@ -1721,15 +1719,6 @@ def log_new_trade(ticker: str, currency: str, signal: dict):
     try:
         trades = load_trade_log()
 
-        # Deduplication guard — if an OPEN trade already exists for this ticker,
-        # don't log another one. Without this, hourly runs log the same setup
-        # repeatedly with different minute timestamps, polluting the win rate stats.
-        existing_open = [t for t in trades
-                         if t["ticker"] == ticker and t["status"] == "OPEN"]
-        if existing_open:
-            print(f"   ⏭️  {ticker} already has an OPEN trade — skipping duplicate log")
-            return
-
         tz     = pytz.timezone(TIMEZONE)
         now    = datetime.now(tz)
         # Cast all numerics to plain Python float — signal values from yfinance
@@ -1902,7 +1891,9 @@ def check_open_trades(bulk_data) -> list:
 
 
 def send_outcome_summary(resolved: list, bulk_data):
-    """Sends a Discord embed showing open positions and newly resolved trades."""
+    """Sends a Discord embed showing win rate stats and newly resolved trades.
+    Open positions are not shown — every alert is logged regardless of status.
+    """
     try:
         trades    = load_trade_log()
         open_tr   = [t for t in trades if t["status"] == "OPEN"]
@@ -1919,21 +1910,8 @@ def send_outcome_summary(resolved: list, bulk_data):
         avg_win  = (sum(t["outcome_pct"] for t in won_tr)  / len(won_tr))  if won_tr  else 0
         avg_loss = (sum(t["outcome_pct"] for t in lost_tr) / len(lost_tr)) if lost_tr else 0
 
-        desc  = f"**Overall Win Rate:** `{win_rate:.0f}%` "
-        desc += f"({len(won_tr)}W / {len(lost_tr)}L / {len(expired)} expired"
-        desc += f" / {len(ambiguous)} ambiguous)\n" if ambiguous else ")\n"
-        desc += f"**Avg Win:** `+{avg_win:.1f}%` | **Avg Loss:** `{avg_loss:.1f}%`\n"
-
-        if open_tr:
-            desc += f"\n📂 **Open Positions ({len(open_tr)})**\n"
-            for t in open_tr[-8:]:   # Show last 8 to avoid embed limits
-                days = (datetime.now(pytz.timezone(TIMEZONE)).date() -
-                        datetime.strptime(t["alert_date"], "%Y-%m-%d").date()).days
-                desc += (f"• **{t['ticker']}** {t['scenario']} — "
-                         f"Entry ${t['entry']:.2f} | "
-                         f"Target ${t['take_profit']:.2f} | "
-                         f"Stop ${t['stop_loss']:.2f} | "
-                         f"Day {days}\n")
+        # desc must be initialised before any += appends to it
+        desc = ""
 
         if resolved:
             desc += f"\n🔔 **Just Resolved ({len(resolved)})**\n"
