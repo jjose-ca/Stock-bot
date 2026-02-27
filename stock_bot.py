@@ -89,11 +89,11 @@ TICKERS_USD = [
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
-TICKERS_CAD = [
-    'ZSP.TO', 'XEF.TO',
-    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO', 'ATZ.TO', 
+#TICKERS_CAD = [
+ #   'ZSP.TO', 'XEF.TO',
+  #  'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO', 'ATZ.TO', 
     # QQC.TO removed — delisted, no price data available
-]
+#]
 
 # ── Discord ───────────────────────────────────────────────────────────────────
 # Never hardcode your webhook URL. Set it as an environment variable instead.
