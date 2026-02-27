@@ -361,30 +361,75 @@ def calculate_daily_relative_volume(df_daily: pd.DataFrame) -> float:
 #  extra API call needed. Bearish regime adds +1 to all thresholds.
 # =============================================================================
 
-def check_market_regime(bulk_data: pd.DataFrame) -> tuple[int, bool]:
+# VIX thresholds — three-tier fear gauge
+VIX_ELEVATED = 20   # above this: add warning badge to alerts
+VIX_PANIC    = 30   # above this: suppress all alerts — support levels unreliable
+
+def check_market_regime(bulk_data: pd.DataFrame) -> tuple[int, bool, bool]:
     """
     Returns (regime_penalty: int, regime_bullish: bool).
     regime_penalty is added to all score thresholds.
+
+    Two-layer regime check:
+      Layer 1 — VTI vs 200 SMA: slow macro trend filter
+        Bearish (VTI < 200 SMA) → +1 to all thresholds
+
+      Layer 2 — VIX fear gauge: fast real-time stress filter
+        VIX < 20  → Normal    — no change
+        VIX 20-30 → Elevated  — warning added to alerts, +1 threshold
+        VIX > 30  → Panic     — all alerts suppressed (regime_bullish=False)
     """
-    print(f"🌍 Checking market regime (VTI vs 200 SMA)...")
+    print(f"🌍 Checking market regime (VTI 200 SMA + VIX fear gauge)...")
+    regime_penalty = 0
+    regime_bullish = True
+
+    # ── Layer 1: VTI macro trend ──────────────────────────────────────────────
     try:
         vti_df = extract_ticker_daily(bulk_data, 'VTI')
         if vti_df is None or len(vti_df) < 200:
-            print("   ⚠️ VTI: Insufficient data — defaulting BULLISH")
-            return 0, True
-
-        vti_sma   = ta.sma(vti_df['Close'], length=200).iloc[-1]
-        vti_price = float(vti_df['Close'].iloc[-1])
-
-        if vti_price < vti_sma:
-            print(f"   ⚠️ Regime: BEARISH (VTI ${vti_price:.2f} < 200 SMA ${vti_sma:.2f}) → +1 threshold")
-            return 1, False
-
-        print(f"   ✅ Regime: BULLISH (VTI ${vti_price:.2f} > 200 SMA ${vti_sma:.2f})")
-        return 0, True
+            print("   ⚠️ VTI: Insufficient data — skipping macro check")
+        else:
+            vti_sma   = ta.sma(vti_df['Close'], length=200).iloc[-1]
+            vti_price = float(vti_df['Close'].iloc[-1])
+            if vti_price < vti_sma:
+                print(f"   ⚠️ Macro: BEARISH (VTI ${vti_price:.2f} < 200 SMA ${vti_sma:.2f}) → +1 threshold")
+                regime_penalty += 1
+                regime_bullish  = False
+            else:
+                print(f"   ✅ Macro: BULLISH (VTI ${vti_price:.2f} > 200 SMA ${vti_sma:.2f})")
     except Exception as e:
-        print(f"   ⚠️ Regime check error: {e} — defaulting BULLISH")
-        return 0, True
+        print(f"   ⚠️ VTI check error: {e}")
+
+    # ── Layer 2: VIX fear gauge ───────────────────────────────────────────────
+    try:
+        vix_df = extract_ticker_daily(bulk_data, '^VIX')
+        if vix_df is None or vix_df.empty:
+            print("   ⚠️ VIX: No data — skipping fear check")
+        else:
+            vix_level = float(vix_df['Close'].iloc[-1])
+
+            if vix_level > VIX_PANIC:
+                # Panic — short-circuit entire scan, don't waste time scoring tickers
+                print(f"   🚨 VIX PANIC ({vix_level:.1f} > {VIX_PANIC}) — "
+                      f"market in crisis, support levels unreliable. Scan halted.")
+                regime_bullish = False
+                return regime_penalty, False, True   # (penalty, bullish, is_panic)
+
+            elif vix_level > VIX_ELEVATED:
+                # Elevated — warn but still allow trades with tighter filter
+                print(f"   ⚠️ VIX ELEVATED ({vix_level:.1f} > {VIX_ELEVATED}) — "
+                      f"increased market stress. +1 threshold, warning badge added.")
+                regime_penalty += 1
+                # regime_bullish stays True — alerts fire but with warning badge
+
+            else:
+                print(f"   ✅ VIX NORMAL ({vix_level:.1f} < {VIX_ELEVATED}) — "
+                      f"calm market, support levels reliable.")
+
+    except Exception as e:
+        print(f"   ⚠️ VIX check error: {e}")
+
+    return regime_penalty, regime_bullish, False   # (penalty, bullish, is_panic)
 
 
 # Section 5 (Day Trade Engine) removed — swing-only bot
@@ -867,16 +912,16 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
     """
     Validates stop width dynamically based on the stock's own ATR.
     
-    Formula: dynamic_max = max(BASE, min(ATR% × 2.0, ABSOLUTE_CAP))
+    Formula: dynamic_max = max(BASE, min(ATR% × 2.5, ABSOLUTE_CAP))
     
     This gives each stock room proportional to its natural daily movement:
-      - Low-vol stock  (ATR 0.8%): dynamic max = max(6%, 1.6%)  = 6.0%
-      - Mid-vol stock  (ATR 3.0%): dynamic max = max(6%, 6.0%)  = 6.0%
-      - High-vol stock (ATR 4.5%): dynamic max = max(6%, 9.0%)  = 9.0%
-      - Extreme stock  (ATR 9.0%): dynamic max = max(6%, 18%) → capped = 15.0%
+      - Low-vol stock  (ATR 0.8%): dynamic max = max(6%, 2.0%)  = 6.0%
+      - Mid-vol stock  (ATR 3.0%): dynamic max = max(6%, 7.5%)  = 7.5%
+      - High-vol stock (ATR 4.5%): dynamic max = max(6%, 11.3%) = 11.3%
+      - Extreme stock  (ATR 9.0%): dynamic max = max(6%, 22.5%) → capped = 15.0%
     
-    The 2.0× multiplier aligns with the stop formula (support - ATR × 0.8),
-    giving enough buffer above it without being reckless.
+    The 2.5× multiplier gives enough buffer above support - ATR×1.5 stop
+    placement without being reckless.
     No manual per-ticker overrides needed — self-calibrates with market conditions.
     """
     price      = signal["price"]
@@ -904,8 +949,29 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
     rr = round(reward / risk, 2)
     signal["rr_ratio"] = rr
 
-    if rr < MIN_RR_RATIO:
-        print(f"   [{ticker}] ❌ R/R {rr:.2f} below minimum {MIN_RR_RATIO}. Rejected.")
+    # Dynamic R/R minimum based on RSI conviction.
+    # Deeply oversold setups have strong mean-reversion edge — standard 1.5 is fine.
+    # Neutral RSI (>45) means price already bouncing — stop is wider relative to
+    # target, so R/R is structurally lower. Demand a small premium (1.6) without
+    # forcing an impossible threshold that kills valid 6/6 setups like COIN/IWM.
+    #
+    # Catch-22 awareness: target is fixed at ATR×3.5, but stop widens when entry
+    # is further from support (which happens when RSI is higher = price bounced more).
+    # Setting min_rr=2.0 for RSI>45 would reject COIN (1.98) and IWM (1.64) — both
+    # valid setups. Thresholds calibrated to mathematical reality of trend pullbacks.
+    rsi = signal.get("rsi", 50.0)
+    if rsi < 35:
+        min_rr = 1.5    # deeply oversold — strong edge, standard requirement
+    elif rsi < 45:
+        min_rr = 1.5    # moderately oversold — same standard
+    else:
+        min_rr = 1.6    # neutral RSI — small premium, filters weak R/R without blocking valid setups
+
+    signal["min_rr_used"] = min_rr   # log which threshold was applied
+
+    if rr < min_rr:
+        print(f"   [{ticker}] ❌ R/R {rr:.2f} below dynamic minimum {min_rr} "
+              f"(RSI {rsi:.1f}). Rejected.")
         return None
 
     return signal
@@ -1263,6 +1329,10 @@ def send_setup_alert(ticker, currency, signal,
     badges = []
     if signal.get("near_52w_high"): badges.append("📈 52W HIGH ZONE")
     if not regime_bullish:          badges.append("⚠️ BEARISH REGIME")
+    # VIX warning badge — fires when VIX is elevated but not panic
+    vix_val = signal.get("vix_level", 0)
+    if vix_val > VIX_ELEVATED and vix_val <= VIX_PANIC:
+        badges.append(f"⚠️ VIX ELEVATED ({vix_val:.0f})")
     if badges:
         desc += f"\n🏷️ {' | '.join(badges)}"
 
@@ -1352,7 +1422,7 @@ def check_market(mode: str, tickers_override: list | None = None):
         all_tickers = TICKERS_USD + TICKERS_CAD
 
     # Always include VTI for regime check
-    bulk_tickers = list(dict.fromkeys(['VTI'] + all_tickers))
+    bulk_tickers = list(dict.fromkeys(['^VIX', 'VTI'] + all_tickers))
 
     # ═════════════════════════════════════════════════════════════════════════
     #  STAGE 1: BULK DAILY DOWNLOAD
@@ -1363,7 +1433,11 @@ def check_market(mode: str, tickers_override: list | None = None):
         return
 
     # Regime check (extracted from bulk — no extra API call)
-    regime_penalty, regime_bullish = check_market_regime(bulk_data)
+    regime_penalty, regime_bullish, is_panic = check_market_regime(bulk_data)
+
+    if is_panic:
+        print("🚨 Scan halted due to VIX PANIC.")
+        return
     total_penalty = time_penalty + regime_penalty
     print(f"📊 Total threshold penalty: +{total_penalty} "
           f"(time +{time_penalty}, regime +{regime_penalty})\n")
@@ -1450,7 +1524,7 @@ def check_market(mode: str, tickers_override: list | None = None):
     #  Only tickers with a valid swing signal advance to Stage 3.
     #  Scenario B (day-only) removed — swing structure required for all alerts.
     # ═════════════════════════════════════════════════════════════════════════
-    scan_tickers = [t for t in all_tickers if t != 'VTI']
+    scan_tickers = [t for t in all_tickers if t not in ('VTI', '^VIX')]
     print(f"🔍 STAGE 2: Swing filter on {len(scan_tickers)} tickers...")
 
     # candidates: list of (ticker, swing_signal, day_only_eligible=False)
@@ -1562,9 +1636,15 @@ def check_market(mode: str, tickers_override: list | None = None):
             alerts_sent += 1
 
             # Inject runtime values into signal before logging
-            # (vol_pace and regime_bullish live in main loop, not signal dict)
+            # (vol_pace, regime_bullish, vix_level live in main loop, not signal dict)
             final_signal["vol_pace"]      = round(float(vol_pace), 2)
             final_signal["regime_bullish"] = bool(regime_bullish)
+            # VIX level for badge and logging
+            try:
+                vix_df = extract_ticker_daily(bulk_data, '^VIX')
+                final_signal["vix_level"] = round(float(vix_df['Close'].iloc[-1]), 1) if vix_df is not None else 0.0
+            except Exception:
+                final_signal["vix_level"] = 0.0
 
             # Log the trade for outcome tracking
             log_new_trade(ticker, currency, final_signal)
@@ -1671,6 +1751,7 @@ def log_new_trade(ticker: str, currency: str, signal: dict):
             "stop_loss":    float(signal["stop_loss"]),
             "take_profit":  float(signal["take_profit"]),
             "rr_ratio":     float(signal.get("rr_ratio", 0)),
+            "min_rr_used":  float(signal.get("min_rr_used", 1.5)),
             "support":      float(signal.get("support", 0)),
             "support_source": signal.get("support_source", ""),
 
@@ -1693,6 +1774,7 @@ def log_new_trade(ticker: str, currency: str, signal: dict):
             "gap_pct":      float(signal.get("gap_pct", 0)),
             "near_52w_high": bool(signal.get("near_52w_high", False)),
             "regime_bullish": bool(signal.get("regime_bullish", True)),
+            "vix_level":    float(signal.get("vix_level", 0.0)),
 
             # ── Outcome tracking ──────────────────────────────────────────────
             "status":       "OPEN",
