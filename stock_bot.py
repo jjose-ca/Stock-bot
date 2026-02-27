@@ -56,6 +56,31 @@ import yfinance as yf
 from datetime import datetime
 from pathlib import Path
 
+# ── Alpaca paper trading integration ─────────────────────────────────────────
+try:
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import (MarketOrderRequest,
+                                          TakeProfitRequest,
+                                          StopLossRequest)
+    from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+    ALPACA_AVAILABLE = True
+except ImportError:
+    ALPACA_AVAILABLE = False
+    print("⚠️  alpaca-py not installed — order placement disabled")
+
+ALPACA_KEY = os.environ.get("ALPACA_API_KEY")
+ALPACA_SEC = os.environ.get("ALPACA_SECRET_KEY")
+
+def get_alpaca_client():
+    """Returns Alpaca paper trading client. Returns None if keys missing or unavailable."""
+    if not ALPACA_AVAILABLE or not ALPACA_KEY or not ALPACA_SEC:
+        return None
+    try:
+        return TradingClient(ALPACA_KEY, ALPACA_SEC, paper=True)
+    except Exception as e:
+        print(f"⚠️ Alpaca client init failed: {e}")
+        return None
+
 
 # =============================================================================
 #  SECTION 1 — CONFIGURATION
@@ -1644,6 +1669,9 @@ def check_market(mode: str, tickers_override: list | None = None):
             except Exception:
                 final_signal["vix_level"] = 0.0
 
+            # Place paper trade on Alpaca (power hour only, USD tickers only)
+            place_alpaca_bracket_order(ticker, final_signal, elapsed_min)
+
             # Log the trade for outcome tracking
             log_new_trade(ticker, currency, final_signal)
 
@@ -1712,6 +1740,69 @@ def save_trade_log(trades: list):
             json.dump(trades, f, indent=2)
     except Exception as e:
         print(f"⚠️ Trade log save failed: {e}")
+
+
+def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) -> bool:
+    """
+    Places a bracket order on Alpaca paper account after a signal fires.
+
+    Only runs during power hour (after 2pm ET) to avoid placing orders
+    on intraday informational alerts that aren't actionable yet.
+
+    Skips Canadian tickers (.TO) — not supported on Alpaca.
+    Skips if Alpaca keys not configured.
+
+    Returns True if order placed successfully, False otherwise.
+    """
+    # Canadian tickers not supported on Alpaca
+    if ".TO" in ticker:
+        print(f"   🍁 {ticker} — TSX ticker, skipping Alpaca order")
+        return False
+
+    # Only place orders during power hour
+    POWER_HOUR_START = 270  # 4.5 hours after open = 2:00pm ET
+    if elapsed_min < POWER_HOUR_START:
+        print(f"   ⏰ {ticker} — intraday alert, skipping Alpaca order (not power hour)")
+        return False
+
+    client = get_alpaca_client()
+    if not client:
+        print(f"   ⚠️ {ticker} — Alpaca not configured, skipping order")
+        return False
+
+    try:
+        entry  = signal["price"]
+        target = signal["take_profit"]
+        stop   = signal["stop_loss"]
+
+        # Position sizing — use bot's calculated percentage
+        PORTFOLIO_VALUE = 360.00
+        position_pct    = signal.get("position_size_pct", 4.8) / 100
+        dollar_amount   = PORTFOLIO_VALUE * position_pct
+        qty             = round(dollar_amount / entry, 2)
+        qty             = max(qty, 0.01)  # Alpaca minimum
+
+        print(f"   🦙 Placing Alpaca bracket order: {ticker} "
+              f"qty={qty} entry~${entry:.2f} "
+              f"target=${target:.2f} stop=${stop:.2f}")
+
+        order_request = MarketOrderRequest(
+            symbol        = ticker,
+            qty           = qty,
+            side          = OrderSide.BUY,
+            time_in_force = TimeInForce.DAY,
+            order_class   = OrderClass.BRACKET,
+            take_profit   = TakeProfitRequest(limit_price=round(target, 2)),
+            stop_loss     = StopLossRequest(stop_price=round(stop, 2))
+        )
+
+        order = client.submit_order(order_request)
+        print(f"   ✅ Alpaca order submitted: {order.id}")
+        return True
+
+    except Exception as e:
+        print(f"   ❌ Alpaca order failed for {ticker}: {e}")
+        return False
 
 
 def log_new_trade(ticker: str, currency: str, signal: dict):
