@@ -18,5 +18,17 @@
   "COIN": {
     "earnings_date": "2026-05-07",
     "fetched": "2026-02-26"
+  },
+  "SMCI": {
+    "earnings_date": "2026-05-05",
+    "fetched": "2026-02-27"
+  },
+  "RBLX": {
+    "earnings_date": "2026-04-30",
+    "fetched": "2026-02-27"
+  },
+  "IOT": {
+    "earnings_date": "2026-03-05",
+    "fetched": "2026-02-27"
   }
 }

@@ -79,7 +79,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 253.49000549316406,
-    "min_price": 248.69000244140625
+    "min_price": 247.9499969482422
   },
   {
     "id": "XLK_20260226_1000",
@@ -121,7 +121,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 143.00999450683594,
-    "min_price": 139.25999450683594
+    "min_price": 137.94590759277344
   },
   {
     "id": "SPMO_20260226_1000",
@@ -163,7 +163,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 120.38999938964844,
-    "min_price": 118.6449966430664
+    "min_price": 118.44000244140625
   },
   {
     "id": "SPY_20260226_1013",
@@ -205,7 +205,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 693.2999877929688,
-    "min_price": 684.3499755859375
+    "min_price": 681.6500244140625
   },
   {
     "id": "IWM_20260226_1013",
@@ -248,7 +248,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 266.239990234375,
-    "min_price": 262.1199951171875
+    "min_price": 259.8299865722656
   },
   {
     "id": "COIN_20260226_1013",
@@ -288,7 +288,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 186.38999938964844,
-    "min_price": 176.75
+    "min_price": 171.80999755859375
   },
   {
     "id": "HUT.TO_20260226_1329",
@@ -329,6 +329,173 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 79.20999908447266,
-    "min_price": 74.11000061035156
+    "min_price": 71.68000030517578
+  },
+  {
+    "id": "ABBV_20260227_1001",
+    "ticker": "ABBV",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-02-27",
+    "alert_time": "10:01 ET",
+    "entry": 226.9,
+    "stop_loss": 214.79,
+    "take_profit": 247.93,
+    "rr_ratio": 1.74,
+    "support": 223.81,
+    "support_source": "50 EMA",
+    "score": 7,
+    "threshold": 6,
+    "trend_score": 4,
+    "momentum_score": 3,
+    "penalty": 0,
+    "reasons": [
+      "\u26a0\ufe0f Below 21 EMA \u2014 Testing as Support ($225.20)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($223.81)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (49.9)",
+      "\ud83d\ude80 Daily MACD: Positive Histogram"
+    ],
+    "rsi": 49.9,
+    "macd_h": 0.0331,
+    "atr": 6.0087,
+    "ema_21": 225.2,
+    "ema_50": 223.81,
+    "bbl": 216.89,
+    "bb_width": 0.0721,
+    "gap_pct": 0.98,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 226.9,
+    "min_price": 226.9
+  },
+  {
+    "id": "SMCI_20260227_1001",
+    "ticker": "SMCI",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-02-27",
+    "alert_time": "10:01 ET",
+    "entry": 32.83,
+    "stop_loss": 28.66,
+    "take_profit": 39.65,
+    "rr_ratio": 1.64,
+    "support": 31.58,
+    "support_source": "21 EMA",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 3,
+    "momentum_score": 3,
+    "penalty": 0,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA \u2014 Early Bounce ($31.58)",
+      "\u26a0\ufe0f Below 50 EMA \u2014 Testing as Support ($32.40)",
+      "\ud83c\udf0a Daily Momentum Reset (52.3)",
+      "\ud83d\ude80 Daily MACD: Positive Histogram"
+    ],
+    "rsi": 52.3,
+    "macd_h": 0.1367,
+    "atr": 1.9472,
+    "ema_21": 31.58,
+    "ema_50": 32.4,
+    "bbl": 28.23,
+    "bb_width": 0.2062,
+    "gap_pct": 1.7,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 32.83,
+    "min_price": 32.83
+  },
+  {
+    "id": "RBLX_20260227_1001",
+    "ticker": "RBLX",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-02-27",
+    "alert_time": "10:01 ET",
+    "entry": 70.2,
+    "stop_loss": 61.53,
+    "take_profit": 85.42,
+    "rr_ratio": 1.76,
+    "support": 68.05,
+    "support_source": "21 EMA (50 EMA above = resistance)",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 3,
+    "momentum_score": 3,
+    "penalty": 0,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA + Strong Recovery (Low $67.83 \u2192 Close $71.40)",
+      "\ud83c\udf0a Daily Momentum Reset (53.1)",
+      "\ud83d\ude80 Daily MACD: Positive Histogram"
+    ],
+    "rsi": 53.1,
+    "macd_h": 1.1379,
+    "atr": 4.3478,
+    "ema_21": 68.05,
+    "ema_50": 75.64,
+    "bbl": 57.96,
+    "bb_width": 0.2523,
+    "gap_pct": -1.68,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 70.2,
+    "min_price": 70.2
+  },
+  {
+    "id": "ZSP.TO_20260227_1001",
+    "ticker": "ZSP.TO",
+    "currency": "CAD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-02-27",
+    "alert_time": "10:01 ET",
+    "entry": 102.46,
+    "stop_loss": 100.11,
+    "take_profit": 106.22,
+    "rr_ratio": 1.6,
+    "support": 101.72,
+    "support_source": "BB Lower Band",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 4,
+    "momentum_score": 4,
+    "penalty": 2,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA \u2014 Early Bounce ($103.31)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($103.47)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (50.7)",
+      "\ud83d\udee1\ufe0f Closed at Daily BB Lower ($101.72)",
+      "\ud83d\ude80 Daily MACD: Positive Histogram",
+      "\u26a0\ufe0f BB Squeeze (width 0.027) \u2014 reduced edge"
+    ],
+    "rsi": 50.7,
+    "macd_h": 0.1412,
+    "atr": 1.0743,
+    "ema_21": 103.31,
+    "ema_50": 103.47,
+    "bbl": 101.72,
+    "bb_width": 0.0269,
+    "gap_pct": -1.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 102.46,
+    "min_price": 102.46
   }
 ]
