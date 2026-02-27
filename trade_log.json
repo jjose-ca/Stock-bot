@@ -329,7 +329,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 79.20999908447266,
-    "min_price": 70.9000015258789
+    "min_price": 70.5999984741211
   },
   {
     "id": "ABBV_20260227_1001",
@@ -370,7 +370,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 230.4250030517578,
+    "max_price": 230.90989685058594,
     "min_price": 225.10000610351562
   },
   {
@@ -452,7 +452,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 71.19000244140625,
-    "min_price": 68.5999984741211
+    "min_price": 68.30999755859375
   },
   {
     "id": "ZSP.TO_20260227_1001",
