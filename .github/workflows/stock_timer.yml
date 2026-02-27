@@ -8,25 +8,24 @@ on:
     - cron: '45 12 * * 1-5'
     - cron: '45 13 * * 1-5'
 
-    # Intraday: every hour at :30, 9:30am–2:30pm ET (informational — shows what's building)
+    # Intraday: every hour at :30, 9:30am–2:30pm ET (informational)
     #   EDT: 13:30–18:30 UTC | EST: 14:30–19:30 UTC
     - cron: '30 13-18 * * 1-5'
 
-    # Power Hour: 3:00, 3:15, 3:30, 3:45, 4:00pm ET only
-    # Daily bar is 97-99% complete — most reliable window for swing signals
+    # Power Hour: 3:00, 3:15, 3:30, 3:45pm ET only
+    # 4:00pm removed — market closed, bot has hard stop at elapsed >= 390min
+
     # EDT (Summer, Mar–Nov): UTC-4
-    #   3:00pm = 19:00 UTC | 3:15 = 19:15 | 3:30 = 19:30 | 3:45 = 19:45 | 4:00 = 20:00
     - cron: '0 19 * * 1-5'
     - cron: '15 19 * * 1-5'
     - cron: '30 19 * * 1-5'
     - cron: '45 19 * * 1-5'
-    - cron: '0 20 * * 1-5'
+
     # EST (Winter, Nov–Mar): UTC-5
-    #   3:00pm = 20:00 UTC | 3:15 = 20:15 | 3:30 = 20:30 | 3:45 = 20:45 | 4:00 = 21:00
+    - cron: '0 20 * * 1-5'
     - cron: '15 20 * * 1-5'
     - cron: '30 20 * * 1-5'
     - cron: '45 20 * * 1-5'
-    - cron: '0 21 * * 1-5'
 
   workflow_dispatch:
 
@@ -62,13 +61,9 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Create empty files if they don't exist yet
           [ -f trade_log.json ] || echo "[]" > trade_log.json
           [ -f earnings_cache.json ] || echo "{}" > earnings_cache.json
           git add trade_log.json earnings_cache.json
-          # Only commit+push if the file actually changed.
-          # Commit first, then pull --rebase, then push.
-          # Rebasing with staged changes causes exit 128 — commit must come first.
           git diff --staged --quiet || (
             git commit -m "chore: update trade log [skip ci]" &&
             git pull --rebase origin master &&
