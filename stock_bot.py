@@ -493,9 +493,10 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     df = df_daily.copy()
 
-    df['EMA_9']  = ta.ema(df['Close'], length=9)
-    df['EMA_21'] = ta.ema(df['Close'], length=21)
-    df['EMA_50'] = ta.ema(df['Close'], length=50)
+    df['EMA_9']   = ta.ema(df['Close'], length=9)
+    df['EMA_21']  = ta.ema(df['Close'], length=21)
+    df['EMA_50']  = ta.ema(df['Close'], length=50)
+    df['EMA_200'] = ta.ema(df['Close'], length=200)
     df['RSI']    = ta.rsi(df['Close'], length=14)
     df['ATR']    = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
@@ -532,10 +533,11 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     entry_price = float(today['Close'])   # actual price you pay at today's close
     price    = float(scored['Close'])     # yesterday's close — all scoring based on this
-    ema_9    = float(scored['EMA_9'])     if 'EMA_9' in df.columns else None
-    ema_9_prev = float(prev['EMA_9'])     if 'EMA_9' in df.columns else None
-    ema_21   = float(scored['EMA_21'])
-    ema_50   = float(scored['EMA_50'])
+    ema_9      = float(scored['EMA_9'])   if 'EMA_9'   in df.columns else None
+    ema_9_prev = float(prev['EMA_9'])     if 'EMA_9'   in df.columns else None
+    ema_21     = float(scored['EMA_21'])
+    ema_50     = float(scored['EMA_50'])
+    ema_200    = float(scored['EMA_200']) if 'EMA_200' in df.columns else None
     rsi      = float(scored['RSI'])
     atr      = float(scored['ATR'])
     bbl      = float(scored['BBL'])      if 'BBL'      in df.columns else None
@@ -567,10 +569,10 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     elif wick_to_21 and near_21:
         trend_score += 2
         reasons.append(f"⚡ Daily Wick to 21 EMA — Early Bounce (${ema_21:.2f})")
-    elif near_21 and rsi < 55:
+    elif near_21 and rsi < 62:
         trend_score += 2
         reasons.append(f"📈 Daily 21 EMA Support Hold (${ema_21:.2f})")
-    elif below_21 and rsi < 55:
+    elif below_21 and rsi < 62:
         trend_score += 1
         reasons.append(f"⚠️ Below 21 EMA — Testing as Support (${ema_21:.2f})")
 
@@ -594,13 +596,28 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     # RSI cap at 55 prevents flagging already-extended momentum stocks
     # Uses iloc[-2] and iloc[-3] — both completed bars, no repainting risk
     if ema_9 is not None and ema_9_prev is not None:
-        ema_9_curling = (ema_9 > ema_9_prev) and (ema_9 > ema_21) and (rsi < 55)
+        ema_9_curling = (ema_9 > ema_9_prev) and (ema_9 > ema_21) and (rsi < 62)
         if ema_9_curling:
             trend_score += 1
             reasons.append(
                 f"📈 9 EMA Curling Up (${ema_9:.2f} > ${ema_9_prev:.2f}) "
                 f"— short-term momentum shifting bullish"
             )
+
+    # G. Oversold bypass — deeply oversold stock above 200 EMA
+    # Fixes: AAPL-type setups where RSI < 35 but price is 3-5% below 21/50 EMA
+    # These fall outside normal proximity windows but are textbook mean-reversion
+    # setups. Requires 200 EMA as safety net — ensures secular uptrend is intact.
+    # Only fires when no EMA proximity points were already scored (trend_score == 0)
+    # to avoid double-counting with standard wick/support signals.
+    oversold_bypass = False
+    if rsi < 35 and ema_200 is not None and price > ema_200 and trend_score == 0:
+        trend_score   += 2
+        oversold_bypass = True
+        reasons.append(
+            f"💎 Deep Oversold Bounce Setup — RSI {rsi:.1f} above 200 EMA "
+            f"(${ema_200:.2f}) — mean reversion path"
+        )
 
     # H. 52-week high zone
     high_52w      = float(df['Close'].tail(252).max())
@@ -643,11 +660,11 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     # ── Penalty (applied AFTER caps — can push score below threshold) ─────────
     penalty = 0
-    # Threshold lowered 0.03 → 0.025: 0.03 incorrectly penalised calm ETFs
-    # (ZSP.TO, SPY in low-vol periods). 0.025 targets genuine abnormal squeezes only.
-    if 0 < bb_width < 0.025:
-        penalty = 2
-        reasons.append(f"⚠️ BB Squeeze (width {bb_width:.3f}) — reduced edge")
+    # BB squeeze converted from -2 score penalty to warning badge only.
+    # In low-vol markets (like Feb 2026 with tightest BBs in 5 years), the penalty
+    # was a global kill switch. Squeeze often precedes breakout — flagging is better
+    # than rejecting. The ⚠️ badge on the Discord alert preserves awareness.
+    bb_squeeze_warning = (0 < bb_width < 0.025)  # flag for Discord alert, not a penalty
 
     # ── ROC Deceleration Penalty (Malik-style trend velocity check) ───────────
     # Inspired by: rate-of-change deceleration signals a trend running out of
@@ -833,8 +850,11 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         "bb_width": round(float(bb_width), 4) if bb_width else None,
         "bbl": round(float(bbl), 2) if bbl is not None else None,
         "gap_pct": round(gap_pct, 2),
-        "ema_9":  round(ema_9, 2) if ema_9 is not None else None,
+        "ema_9":   round(ema_9, 2)   if ema_9   is not None else None,
+        "ema_200": round(ema_200, 2) if ema_200 is not None else None,
         "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
+        "bb_squeeze_warning": bb_squeeze_warning,
+        "oversold_bypass":    oversold_bypass,
         "price": round(entry_price, 2), "is_bullish": is_bullish,
         "direction": "long",
         "mode": "SWING", "near_52w_high": near_52w_high,
