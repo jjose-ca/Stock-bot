@@ -493,6 +493,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     df = df_daily.copy()
 
+    df['EMA_9']  = ta.ema(df['Close'], length=9)
     df['EMA_21'] = ta.ema(df['Close'], length=21)
     df['EMA_50'] = ta.ema(df['Close'], length=50)
     df['RSI']    = ta.rsi(df['Close'], length=14)
@@ -531,6 +532,8 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     entry_price = float(today['Close'])   # actual price you pay at today's close
     price    = float(scored['Close'])     # yesterday's close — all scoring based on this
+    ema_9    = float(scored['EMA_9'])     if 'EMA_9' in df.columns else None
+    ema_9_prev = float(prev['EMA_9'])     if 'EMA_9' in df.columns else None
     ema_21   = float(scored['EMA_21'])
     ema_50   = float(scored['EMA_50'])
     rsi      = float(scored['RSI'])
@@ -584,6 +587,20 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     if price > ema_50:
         trend_score += 1
         reasons.append("✅ Price Above Daily 50 EMA (Bullish Structure)")
+
+    # F. 9 EMA curling up — early momentum shift signal
+    # Checks if 9 EMA slope turned positive (yesterday > day before)
+    # AND 9 EMA is above 21 EMA (bullish short-term stack)
+    # RSI cap at 55 prevents flagging already-extended momentum stocks
+    # Uses iloc[-2] and iloc[-3] — both completed bars, no repainting risk
+    if ema_9 is not None and ema_9_prev is not None:
+        ema_9_curling = (ema_9 > ema_9_prev) and (ema_9 > ema_21) and (rsi < 55)
+        if ema_9_curling:
+            trend_score += 1
+            reasons.append(
+                f"📈 9 EMA Curling Up (${ema_9:.2f} > ${ema_9_prev:.2f}) "
+                f"— short-term momentum shifting bullish"
+            )
 
     # H. 52-week high zone
     high_52w      = float(df['Close'].tail(252).max())
@@ -1426,7 +1443,7 @@ def send_no_signals_notice(mode: str, count: int):
 #  SECTION 12 — MAIN LOOP (Three-Stage Funnel)
 # =============================================================================
 
-def check_market(mode: str, tickers_override: list | None = None):
+def check_market(mode: str, tickers_override: list | None = None, bypass_hours: bool = False):
     tz     = pytz.timezone(TIMEZONE)
     et_now = datetime.now(tz)
 
@@ -1439,8 +1456,9 @@ def check_market(mode: str, tickers_override: list | None = None):
 
     # Hard stop — don't fire alerts after market close (4:00pm ET)
     # GitHub Actions delays can push a 3:45pm scheduled job to 4:05pm
+    # bypass_hours=True skips this check for local testing after hours
     MARKET_CLOSE_MINUTES = 390  # 6h30m after 9:30am open = 4:00pm ET
-    if elapsed_min >= MARKET_CLOSE_MINUTES and mode != "premarket":
+    if elapsed_min >= MARKET_CLOSE_MINUTES and mode != "premarket" and not bypass_hours:
         print(f"🔔 Market closed ({et_now.strftime('%I:%M %p ET')}) — "
               f"no alerts after 4:00pm. Exiting.")
         return
@@ -1769,11 +1787,12 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
         print(f"   🍁 {ticker} — TSX ticker, skipping Alpaca order")
         return False
 
-    # Only place orders in the 3:45-4:00pm window
+    # Only place orders in the 3:45-4:00pm window (bypassed in test mode)
     # Early enough to fill before close, late enough for reliable bar data
     ALPACA_ORDER_START  = 375   # 6h15m after open = 3:45pm ET
     ALPACA_ORDER_CUTOFF = 390   # 6h30m after open = 4:00pm ET (market closed)
-    if elapsed_min < ALPACA_ORDER_START or elapsed_min >= ALPACA_ORDER_CUTOFF:
+    test_mode = elapsed_min == 0  # treat elapsed=0 as test mode signal
+    if not test_mode and (elapsed_min < ALPACA_ORDER_START or elapsed_min >= ALPACA_ORDER_CUTOFF):
         print(f"   ⏰ {ticker} — outside 3:45-4:00pm order window, skipping Alpaca order")
         return False
 
@@ -1787,10 +1806,10 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
         target = signal["take_profit"]
         stop   = signal["stop_loss"]
 
-        # Position sizing — use bot's calculated percentage
-        PORTFOLIO_VALUE = 360.00
-        position_pct    = signal.get("position_size_pct", 4.8) / 100
-        dollar_amount   = PORTFOLIO_VALUE * position_pct
+        # Position sizing — uses global PORTFOLIO_VALUE constant
+        # Update PORTFOLIO_VALUE at top of file when account size changes
+        position_pct  = signal.get("position_size_pct", 4.8) / 100
+        dollar_amount = PORTFOLIO_VALUE * position_pct
         qty             = round(dollar_amount / entry, 2)
         qty             = max(qty, 0.01)  # Alpaca minimum
 
@@ -1872,6 +1891,7 @@ def log_new_trade(ticker: str, currency: str, signal: dict):
             "rsi":          float(signal.get("rsi", 0)),
             "macd_h":       float(signal["macd_h"]) if signal.get("macd_h") is not None else None,
             "atr":          float(signal.get("atr", 0)),
+            "ema_9":        float(signal.get("ema_9", 0)),
             "ema_21":       float(signal.get("ema_21", 0)),
             "ema_50":       float(signal.get("ema_50", 0)),
             "bbl":          float(signal["bbl"]) if signal.get("bbl") is not None else None,
@@ -2011,20 +2031,7 @@ def send_outcome_summary(resolved: list, bulk_data):
     Open positions are not shown — every alert is logged regardless of status.
     """
     try:
-        trades    = load_trade_log()
-        open_tr   = [t for t in trades if t["status"] == "OPEN"]
-        won_tr    = [t for t in trades if t["status"] == "WON"]
-        lost_tr   = [t for t in trades if t["status"] == "LOST"]
-        expired   = [t for t in trades if t["status"] == "EXPIRED"]
-        ambiguous = [t for t in trades if t["status"] == "AMBIGUOUS"]
-
-        # AMBIGUOUS trades excluded from win rate — both stop and target hit
-        # on the same daily bar so we can't determine actual outcome
-        total_closed = len(won_tr) + len(lost_tr)
-        win_rate     = (len(won_tr) / total_closed * 100) if total_closed > 0 else 0
-
-        avg_win  = (sum(t["outcome_pct"] for t in won_tr)  / len(won_tr))  if won_tr  else 0
-        avg_loss = (sum(t["outcome_pct"] for t in lost_tr) / len(lost_tr)) if lost_tr else 0
+        trades = load_trade_log()
 
         # desc must be initialised before any += appends to it
         desc = ""
@@ -2042,11 +2049,11 @@ def send_outcome_summary(resolved: list, bulk_data):
         payload = {"embeds": [{
             "title":       "📈 Trade Outcome Tracker",
             "description": desc[:4096],
-            "color":       5763719 if win_rate >= 50 else 15548997,
+            "color":       5763719,
             "footer":      {"text": f"Stock Alert Bot v5.0 | {len(trades)} total trades logged"},
         }]}
         _post_discord(payload)
-        print(f"   📊 Outcome summary sent ({len(open_tr)} open, {len(resolved)} resolved)")
+        print(f"   📊 Outcome summary sent ({len(resolved)} resolved)")
 
     except Exception as e:
         print(f"⚠️ Outcome summary error: {e}")
@@ -2064,14 +2071,21 @@ if __name__ == "__main__":
     parser.add_argument('--ticker',
         type=str, default=None,
         help='Scan a single ticker, e.g. --ticker NVDA')
+    parser.add_argument('--test',
+        action='store_true',
+        help='Test mode — bypasses market hours check and forces swing scan')
     args = parser.parse_args()
 
     et_now = datetime.now(pytz.timezone(TIMEZONE))
 
-    if args.mode == 'auto':
+    if args.test:
+        mode = 'swing'   # force swing scan in test mode
+        print("🧪 TEST MODE — market hours check bypassed")
+    elif args.mode == 'auto':
         mode = get_scan_mode(et_now)
     else:
         mode = args.mode
 
     tickers_override = [args.ticker.upper()] if args.ticker else None
-    check_market(mode=mode, tickers_override=tickers_override)
+    check_market(mode=mode, tickers_override=tickers_override,
+                 bypass_hours=args.test)
