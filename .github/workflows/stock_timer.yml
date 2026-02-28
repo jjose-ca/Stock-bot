@@ -55,7 +55,7 @@ jobs:
           DISCORD_URL: ${{ secrets.DISCORD_URL }}
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: python stock_bot.py
+        run: python stock_bot.py --test
 
       - name: Commit trade log
         run: |
