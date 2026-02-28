@@ -643,7 +643,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     # ── Penalty (applied AFTER caps — can push score below threshold) ─────────
     penalty = 0
-    if 0 < bb_width < 0.03:
+    # Threshold lowered 0.03 → 0.025: 0.03 incorrectly penalised calm ETFs
+    # (ZSP.TO, SPY in low-vol periods). 0.025 targets genuine abnormal squeezes only.
+    if 0 < bb_width < 0.025:
         penalty = 2
         reasons.append(f"⚠️ BB Squeeze (width {bb_width:.3f}) — reduced edge")
 
@@ -831,6 +833,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         "bb_width": round(float(bb_width), 4) if bb_width else None,
         "bbl": round(float(bbl), 2) if bbl is not None else None,
         "gap_pct": round(gap_pct, 2),
+        "ema_9":  round(ema_9, 2) if ema_9 is not None else None,
         "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
         "price": round(entry_price, 2), "is_bullish": is_bullish,
         "direction": "long",
@@ -1488,7 +1491,14 @@ def check_market(mode: str, tickers_override: list | None = None, bypass_hours: 
     # Regime check (extracted from bulk — no extra API call)
     regime_penalty, regime_bullish, is_panic = check_market_regime(bulk_data)
 
-    total_penalty = time_penalty + regime_penalty
+    # Cap total penalty at 2 — prevents threshold exceeding max possible score (8)
+    # Without cap: VIX elevated + bearish regime + Friday = +3 → threshold 9
+    # which is mathematically impossible (trend cap 4 + momentum cap 4 = 8 max)
+    raw_penalty   = time_penalty + regime_penalty
+    total_penalty = min(raw_penalty, 2)
+    if raw_penalty > 2:
+        print(f"⚠️  Penalty capped at 2 (raw: +{raw_penalty}) — "
+              f"prevents mathematically impossible threshold")
     print(f"📊 Total threshold penalty: +{total_penalty} "
           f"(time +{time_penalty}, regime +{regime_penalty})\n")
 
