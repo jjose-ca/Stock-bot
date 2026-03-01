@@ -612,7 +612,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     # to avoid double-counting with standard wick/support signals.
     oversold_bypass = False
     if rsi < 35 and ema_200 is not None and price > ema_200 and trend_score == 0:
-        trend_score   += 2
+        trend_score   += 3  # must be >= trend_floor (3) to pass floor check
         oversold_bypass = True
         reasons.append(
             f"💎 Deep Oversold Bounce Setup — RSI {rsi:.1f} above 200 EMA "
@@ -715,7 +715,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     # ── Final score ───────────────────────────────────────────────────────────
     score     = trend_score + momentum_score - penalty
-    threshold = SWING_SCORE_THRESHOLD + total_penalty
+    # Cap threshold at 7 — penalty=2 would otherwise require a perfect 8/8
+    # which is mathematically too strict for normal market conditions.
+    threshold = min(SWING_SCORE_THRESHOLD + total_penalty, 7)
     if score < threshold:
         print(f"   [{ticker}] ❌ Score {score}/{threshold} — "
               f"trend={trend_score} momentum={momentum_score} penalty=-{penalty}")
@@ -1699,7 +1701,20 @@ def check_market(mode: str, tickers_override: list | None = None, bypass_hours: 
             vol_pace          = rel_vol / pct_of_day
             MIN_VOL_PACE      = 0.6
 
-            if vol_pace < MIN_VOL_PACE:
+            # Only enforce volume pace after 11:00am ET (elapsed > 90 min)
+            # Before 11am, daily volume is still accumulating and pace reads are
+            # unreliable — low early volume does not mean low conviction.
+            #
+            # Stale volume guard: yfinance daily bars can return partial/stale
+            # volume during the session — it returns a real number, not an error,
+            # so the fallback in calculate_daily_relative_volume never fires.
+            # If rel_vol < 0.05 (less than 5% of average traded), volume is almost
+            # certainly stale — skip the gate rather than silently reject valid setups.
+            vol_looks_stale = (rel_vol < 0.05)
+            if vol_looks_stale:
+                print(f"   [{ticker}] ⚠️ Volume looks stale ({rel_vol:.2f}x) — "
+                      f"skipping vol pace gate to avoid false rejection")
+            elif elapsed_min > 90 and vol_pace < MIN_VOL_PACE:
                 print(f"   [{ticker}] ❌ Dead volume pace "
                       f"(tracking {vol_pace:.1f}x < {MIN_VOL_PACE}x min). "
                       f"Bounce lacks institutional conviction. Rejected.")
