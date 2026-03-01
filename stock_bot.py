@@ -152,7 +152,7 @@ MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 # ── Portfolio value ───────────────────────────────────────────────────────────
 # Set this to your total trading capital in USD.
 # Alerts will show exact dollar amounts to invest per signal.
-PORTFOLIO_VALUE = 360.0   # ← Update this whenever your account size changes
+PORTFOLIO_VALUE = 2000.0   # ← Update this whenever your account size changes
 
 SWING_ATR_STOP_MULT   = 1.5    # Swing stop = support − (ATR × 1.5) — gives room for normal noise
 SWING_ATR_TARGET_MULT = 3.5    # Swing target = price + (ATR × 3.5) — wider target to maintain R/R
