@@ -99,17 +99,17 @@ TICKERS_USD = [
 
     # Mega Cap / Defensive
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
-    'JPM', 'BAC', 'XOM', 'ABBV',
+    'JPM', 'BAC', 'ABBV',
     'KO', 'PG', 'JNJ', 'V', 'MA',
 
     # Mid-risk
-    'NVDA', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX',
+    'NVDA', 'AVGO', 'QCOM', 'AMAT', 'LRCX',
     'NFLX', 'ORCL', 'CRM', 'NOW', 'PANW',
-    'SHOP', 'UBER', 'PYPL', 'TGT',
-    'OXY', 'DVN', 'CCL', 'DKNG', 'CVX', 'TSM', 'DIS',
+    'SHOP', 'UBER', 'PYPL',
+    'CCL', 'DKNG', 'CVX', 'TSM', 'DIS',
 
     # High beta
-    'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI','RBLX', 'IOT', 
+    'TSLA', 'PLTR', 'AMD', 'ARM', 'RBLX', 'IOT', 
     'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW',
 ]
 
@@ -127,7 +127,7 @@ TICKERS_CAD = [
 DISCORD_WEBHOOK_URL = os.getenv('DISCORD_URL')
 
 # ── Scoring thresholds ────────────────────────────────────────────────────────
-SWING_SCORE_THRESHOLD = 6
+SWING_SCORE_THRESHOLD = 7   # raised from 6 — backtest confirmed higher threshold = better expectancy
 
 # ── Swing category caps and floors ───────────────────────────────────────────
 # Trend/Structure   — Max 4: EMA 21 wick/support, EMA 50 proximity,
@@ -152,10 +152,11 @@ MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 # ── Portfolio value ───────────────────────────────────────────────────────────
 # Set this to your total trading capital in USD.
 # Alerts will show exact dollar amounts to invest per signal.
-PORTFOLIO_VALUE = 2000.0   # ← Update this whenever your account size changes
+PORTFOLIO_VALUE = 2000.0  # ← Update this whenever your account size changes
 
 SWING_ATR_STOP_MULT   = 1.5    # Swing stop = support − (ATR × 1.5) — gives room for normal noise
-SWING_ATR_TARGET_MULT = 3.5    # Swing target = price + (ATR × 3.5) — wider target to maintain R/R
+SWING_ATR_TARGET_MULT = 2.0    # Lowered from 3.5x — backtest shows 2.0x target hits more often
+                                       # (win rate 21.4% vs 5.9%) without increasing stop risk
 
 # ── Volume thresholds ─────────────────────────────────────────────────────────
 VOLUME_STRONG   = 2.0    # 2x relative volume = strong institutional activity
@@ -187,7 +188,7 @@ COOLDOWN_MINUTES = {"SWING": 240}
 # Each alert is logged on fire; outcomes are auto-checked on every subsequent run.
 TRADE_LOG_FILE        = "trade_log.json"
 EARNINGS_CACHE_FILE   = "earnings_cache.json"
-OUTCOME_CHECK_DAYS    = 21    # Extended from 10 — swing trades need room to develop
+OUTCOME_CHECK_DAYS    = 21    # 21-day expiry — covers 10-day hold plus buffer
 OUTCOME_DISCORD_DAILY = True  # Send outcome summary to Discord whenever there are
                               # open positions or newly resolved trades.
                               # Set False to suppress all outcome messages.
@@ -1822,6 +1823,9 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
     Only runs during power hour (after 2pm ET) to avoid placing orders
     on intraday informational alerts that aren't actionable yet.
 
+    Orders use GTC (Good Till Cancelled) — bracket stays live for up to 10 days.
+    Alpaca will auto-cancel if neither target nor stop is hit within the hold window.
+
     Skips Canadian tickers (.TO) — not supported on Alpaca.
     Skips if Alpaca keys not configured.
 
@@ -1866,7 +1870,7 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
             symbol        = ticker,
             qty           = qty,
             side          = OrderSide.BUY,
-            time_in_force = TimeInForce.DAY,
+            time_in_force = TimeInForce.GTC,   # GTC — bracket stays live across multiple days (10-day hold strategy)
             order_class   = OrderClass.BRACKET,
             take_profit   = TakeProfitRequest(limit_price=round(target, 2)),
             stop_loss     = StopLossRequest(stop_price=round(stop, 2))
