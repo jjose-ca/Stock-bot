@@ -367,7 +367,8 @@ def check_market_regime(bulk_data: pd.DataFrame) -> tuple[int, bool, bool]:
 # =============================================================================
 
 def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
-                     ticker: str = "?") -> dict | None:
+                     ticker: str = "?",
+                     regime_bullish: bool = True) -> dict | None:
     """
     Scores yesterday's completed daily bar. Returns signal dict or None.
 
@@ -396,8 +397,12 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
         +3  Closed at BB lower band
         +2  MACD histogram positive
         +1  MACD histogram improving
-      Threshold: 5 (lowered from 6 — recovers signal count)
-      Floors: trend ≥ 3 AND momentum ≥ 2
+      Threshold: min(5 + total_penalty, 6)  — capped at 6, not 7
+        Prevents perfection trap: penalty=2 no longer requires a perfect 7.
+      Trend floor: 3 normally, 4 in bearish regime (VTI below 200 SMA)
+        In bear markets, weak-trend + strong-momentum = likely falling knife.
+        Raising the floor demands genuine EMA confirmation, not just RSI.
+      Momentum floor: 2 always
     """
     if df_daily is None or len(df_daily) < 50:
         print(f"   [{ticker}] ❌ Insufficient data")
@@ -467,9 +472,15 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
     # =========================================================================
     if rsi < 35 and ema_200 is not None and price > ema_200:
         print(f"   [{ticker}] 💎 OVERSOLD BYPASS — RSI {rsi:.1f}, above 200 EMA ${ema_200:.2f}")
-        score         = 6   # fixed score — bypass always passes
-        trend_score   = 3   # synthetic — satisfies floor check for logging
-        momentum_score = 3  # RSI < 35 = max momentum
+        score          = 6   # fixed score — bypass always passes
+        # Use penalized threshold for honest labeling, position sizing, and
+        # earnings penalty logic. The bypass skips the GATE but the returned
+        # threshold must reflect what the market conditions actually required.
+        # Without this, margin = score - threshold is inflated in penalty sessions,
+        # boosting position size incorrectly, and earnings penalty check is too lenient.
+        threshold      = min(SWING_SCORE_THRESHOLD + total_penalty, 6)
+        trend_score    = 3   # synthetic — satisfies floor check for logging
+        momentum_score = 3   # RSI < 35 = max momentum
         oversold_bypass = True
         bb_squeeze_warning = (0 < bb_width < 0.025)
         reasons = [
@@ -555,17 +566,28 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
         momentum_score = min(momentum_score, 3)
 
         # ── GATES ─────────────────────────────────────────────────────────────
-        score     = trend_score + momentum_score
-        threshold = min(SWING_SCORE_THRESHOLD + total_penalty, 7)
+        score = trend_score + momentum_score
+
+        # Cap threshold at 6 (not 7) to prevent perfection trap.
+        # When total_penalty == 2, threshold = 7 means only a perfect score
+        # passes — with all the other gates ahead, that's a near-total blackout
+        # in exactly the sessions where we want caution, not silence.
+        # Cap at 6 still requires a strong setup under penalty conditions.
+        threshold = min(SWING_SCORE_THRESHOLD + total_penalty, 6)
 
         if score < threshold:
             print(f"   [{ticker}] ❌ Score {score}/{threshold} "
                   f"(trend={trend_score} momentum={momentum_score})")
             return None
 
-        if trend_score < TREND_FLOOR:
-            print(f"   [{ticker}] ❌ Trend floor {trend_score} < {TREND_FLOOR} "
-                  f"— possible downtrend. Rejected.")
+        # Trend floor scales up in bearish regime — requires stronger EMA
+        # confirmation rather than just a higher total score. In bear markets,
+        # weak-trend + strong-momentum combos are more likely falling knives.
+        effective_trend_floor = TREND_FLOOR + (1 if not regime_bullish else 0)
+
+        if trend_score < effective_trend_floor:
+            print(f"   [{ticker}] ❌ Trend floor {trend_score} < {effective_trend_floor} "
+                  f"({'bearish regime' if not regime_bullish else 'normal'}) — rejected.")
             return None
 
         if momentum_score < MOMENTUM_FLOOR:
@@ -574,7 +596,8 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
             return None
 
         print(f"   [{ticker}] ✅ Score {score}/{threshold} "
-              f"(trend={trend_score} momentum={momentum_score})")
+              f"(trend={trend_score} momentum={momentum_score}"
+              f"{' | bearish regime' if not regime_bullish else ''})")
 
     # ── STOP / TARGET PLACEMENT ───────────────────────────────────────────────
     # Both paths (bypass and standard) converge here.
@@ -584,8 +607,6 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
     near_50  = abs(price - ema_50) / ema_50 < 0.03
     pct_21   = (price - ema_21) / ema_21
     near_21  = 0.000 <= pct_21 < 0.025   # recomputed — safe on both paths
-    # threshold may not be set on bypass path (Path A sets score=6 directly)
-    threshold = threshold if 'threshold' in dir() else SWING_SCORE_THRESHOLD
 
     # Bypass path: 200 EMA is the structural anchor for deep oversold setups.
     # 21 EMA will be above a crashed price — leads to false "support > entry" rejection.
@@ -1413,7 +1434,7 @@ def check_market(mode: str, tickers_override: list | None = None,
                 continue
             if not passes_liquidity_filter(df_daily, ticker):
                 continue
-            signal = run_swing_engine(df_daily, total_penalty, ticker=ticker)
+            signal = run_swing_engine(df_daily, total_penalty, ticker=ticker, regime_bullish=regime_bullish)
             if signal is not None:
                 candidates.append((ticker, signal))
         except Exception as e:
