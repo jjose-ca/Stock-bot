@@ -79,7 +79,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 253.49000549316406,
-    "min_price": 247.9499969482422
+    "min_price": 246.24009704589844
   },
   {
     "id": "XLK_20260226_1000",
@@ -117,11 +117,11 @@
     "gap_pct": -0.87,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-03-02",
+    "outcome_pct": -3.39,
     "max_price": 143.00999450683594,
-    "min_price": 137.94000244140625
+    "min_price": 136.55999755859375
   },
   {
     "id": "SPMO_20260226_1000",
@@ -163,7 +163,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 120.38999938964844,
-    "min_price": 118.44000244140625
+    "min_price": 118.05000305175781
   },
   {
     "id": "SPY_20260226_1013",
@@ -205,7 +205,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 693.2999877929688,
-    "min_price": 681.6400146484375
+    "min_price": 678.031005859375
   },
   {
     "id": "IWM_20260226_1013",
@@ -248,7 +248,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 266.239990234375,
-    "min_price": 259.7699890136719
+    "min_price": 257.7974853515625
   },
   {
     "id": "COIN_20260226_1013",
@@ -329,7 +329,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 79.20999908447266,
-    "min_price": 70.5999984741211
+    "min_price": 70.05999755859375
   },
   {
     "id": "ABBV_20260227_1001",
@@ -370,7 +370,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 232.27000427246094,
+    "max_price": 235.66000366210938,
     "min_price": 225.05999755859375
   },
   {
@@ -452,7 +452,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 71.19000244140625,
-    "min_price": 68.1500015258789
+    "min_price": 65.77999877929688
   },
   {
     "id": "ZSP.TO_20260227_1001",
@@ -496,7 +496,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 102.83999633789062,
-    "min_price": 102.25
+    "min_price": 101.75
   },
   {
     "id": "SMCI_20260227_1932",
@@ -629,7 +629,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 68.66,
-    "min_price": 68.66
+    "min_price": 65.77999877929688
   },
   {
     "id": "SMCI_20260301_1411",
@@ -717,6 +717,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 68.66,
-    "min_price": 68.66
+    "min_price": 65.77999877929688
   }
 ]
