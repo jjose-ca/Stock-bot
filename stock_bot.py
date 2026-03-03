@@ -188,6 +188,7 @@ OUTCOME_DISCORD_DAILY = True
 COLOR_BLUE   = 3447003
 COLOR_GREEN  = 5763719
 COLOR_RED    = 15548997
+COLOR_YELLOW = 16705372   # Tier B alerts (Discord gold)
 
 # ── Timezone ─────────────────────────────────────────────────────────────────
 TIMEZONE = "US/Eastern"
@@ -605,6 +606,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
         if momentum_score < MOMENTUM_FLOOR:
             print(f"   [{ticker}] ❌ Momentum floor {momentum_score} < {MOMENTUM_FLOOR} "
                   f"— no oversold signal. Rejected.")
+            return None
 
         # ── RSI 35-45 FALLING KNIFE GATE ──────────────────────────────────
         # Backtest: RSI 35-45 = -0.13% expectancy (48 signals).
@@ -692,7 +694,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
         "bb_width":         round(bb_width, 4),
         "bb_squeeze_warning": bb_squeeze_warning,
         "macd_h":           round(macd_h, 4),
-        "gap_pct":          round(gap_pct, 2),
+        "gap_pct":          0.0,               # set in Stage 3 after live price fetch
         "oversold_bypass":  oversold_bypass,
         "is_bullish":       price > ema_21,
         "mode":             "SWING",
@@ -1034,9 +1036,6 @@ def send_setup_alert(ticker: str, currency: str, signal: dict,
         badges.append(f"⚠️ VIX ELEVATED ({vix_val:.0f})")
     if signal.get("oversold_bypass"):
         badges.append("💎 DEEP OVERSOLD BYPASS")
-    if badges:
-        desc += f"\n🏷️ {' | '.join(badges)}"
-
     tier       = signal.get("alert_tier", "A")
     tier_emoji = "🟢" if tier == "A" else "🟡"
     tier_label = "Tier A — Trade" if tier == "A" else "Tier B — Paper/Watchlist"
@@ -1135,7 +1134,7 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
         print(f"   🦙 Placing bracket order: {ticker} qty={qty} "
               f"entry~${entry:.2f} target=${target:.2f} stop=${stop:.2f}")
 
-        order = get_alpaca_client().submit_order(MarketOrderRequest(
+        order = client.submit_order(MarketOrderRequest(
             symbol        = ticker,
             qty           = qty,
             side          = OrderSide.BUY,
