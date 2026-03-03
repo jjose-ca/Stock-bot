@@ -445,7 +445,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
     entry_price = float(today['Close'])
     ema_21      = float(scored['EMA_21'])
     ema_50      = float(scored['EMA_50'])
-    ema_200     = float(scored['EMA_200']) if 'EMA_200' in df.columns else None
+    ema_200     = (float(scored['EMA_200'])
+                   if 'EMA_200' in df.columns and pd.notna(scored['EMA_200'])
+                   else None)
     rsi         = float(scored['RSI'])
     atr         = float(scored['ATR'])
     bbl         = float(scored['BBL'])      if 'BBL'      in df.columns else None
@@ -643,18 +645,12 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
 
     take_profit = entry_price + (atr * SWING_ATR_TARGET_MULT)
 
-    # ── GAP FILTER ────────────────────────────────────────────────────────────
-    # If today moved too far from yesterday's scored bar, structure is broken.
-    # Dynamic threshold — proportional to stock's own ATR (floor 2%, ceil 7%).
-    gap_pct     = (entry_price - price) / price * 100
-    atr_pct     = (atr / price) * 100
-    max_gap     = max(2.0, min(atr_pct * 1.5, 7.0))
-    if abs(gap_pct) > max_gap:
-        print(f"   [{ticker}] ❌ Gap {gap_pct:+.1f}% > {max_gap:.1f}% dynamic max. Rejected.")
-        return None
-
-    print(f"   [{ticker}] 📍 Scored ${price:.2f} | Entry ${entry_price:.2f} "
-          f"({'↑' if gap_pct >= 0 else '↓'}{abs(gap_pct):.1f}%)")
+    # Gap filter deliberately NOT applied here.
+    # entry_price comes from daily bulk data which may be stale or mid-session
+    # intraday. Filtering on a noisy provisional price would silently discard
+    # valid candidates before they reach the live-price correction in Stage 3.
+    # Gap is checked there using fast_info.last_price — the actual fill price.
+    print(f"   [{ticker}] 📍 Scored ${price:.2f} | Provisional entry ${entry_price:.2f}")
 
     return {
         "score":            score,
@@ -663,6 +659,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
         "momentum_score":   momentum_score,
         "reasons":          reasons,
         "price":            round(entry_price, 2),
+        "scored_price":     round(price, 2),       # yesterday's close — reference for live gap check
         "stop_loss":        round(stop_loss, 2),
         "take_profit":      round(take_profit, 2),
         "support":          round(support, 2),
@@ -983,7 +980,7 @@ def send_setup_alert(ticker: str, currency: str, signal: dict,
             desc += "• **Stop Anchor:** Volatility stop — price between EMAs\n"
         else:
             desc += (f"• **Stop Anchor:** `{sym}{support_val:.2f}` ({support_src}) "
-                     f"— stop = support − ATR×1.5\n")
+                     f"— stop = support − ATR×{SWING_ATR_STOP_MULT}\n")
 
     if signal.get("bb_squeeze_warning"):
         desc += "• ⚠️ **BB Squeeze** — volatility compressed, breakout possible\n"
@@ -1248,9 +1245,17 @@ def check_open_trades(bulk_data) -> list:
             if df is None or df.empty:
                 continue
 
+            # Start outcome window from the day AFTER the alert date.
+            # The GTC bracket order is placed at ~3:45pm on alert day —
+            # same-day highs/lows before order placement are not fillable.
+            # Including alert day would falsely credit wins from morning
+            # moves that happened before the order even existed.
             try:
-                df_window = df.loc[trade.get("alert_date", ""):] 
-            except KeyError:
+                alert_dt   = datetime.strptime(trade.get("alert_date", ""), "%Y-%m-%d").date()
+                df_dates   = pd.to_datetime(df.index).date if not hasattr(df.index[0], 'date')                              else [d.date() for d in df.index]
+                future_idx = next((i for i, d in enumerate(df_dates) if d > alert_dt), None)
+                df_window  = df.iloc[future_idx:] if future_idx is not None else pd.DataFrame()
+            except Exception:
                 df_window = df
             if df_window.empty:
                 continue
@@ -1448,6 +1453,49 @@ def check_market(mode: str, tickers_override: list | None = None,
         try:
             currency = get_currency(ticker)
             print(f"── {ticker} ({currency}) ──")
+
+            # ── Live price injection ──────────────────────────────────────────
+            # run_swing_engine used daily bulk data where today's bar may be
+            # stale or mid-session. Fetch live price now and recompute stop,
+            # target, and gap filter on the actual fillable price.
+            # Falls back to scored Close (yesterday) if live fetch fails.
+            try:
+                live_price = yf.Ticker(ticker).fast_info.get("last_price")
+                live_price = float(live_price) if live_price else None
+            except Exception:
+                live_price = None
+
+            if live_price and live_price > 0:
+                old_entry = signal["price"]
+                atr       = signal["atr"]
+                support   = signal.get("support", old_entry)
+
+                # Recompute stop and target from live price
+                if signal.get("support_source", "").startswith("Volatility Stop"):
+                    new_stop = live_price - (atr * SWING_ATR_STOP_MULT)
+                else:
+                    new_stop = support - (atr * SWING_ATR_STOP_MULT)
+                if new_stop >= live_price:
+                    new_stop = live_price - atr
+
+                new_target = live_price + (atr * SWING_ATR_TARGET_MULT)
+
+                # Gap filter — live price vs yesterday's scored close.
+                # scored_price is always set in the signal dict (see run_swing_engine).
+                gap_pct = (live_price - signal["scored_price"]) / signal["scored_price"] * 100
+                atr_pct     = (atr / live_price) * 100
+                max_gap     = max(2.0, min(atr_pct * 1.5, 7.0))
+                if abs(gap_pct) > max_gap:
+                    print(f"   [{ticker}] ❌ Live gap {gap_pct:+.1f}% > {max_gap:.1f}% — structure broken. Rejected.")
+                    continue
+
+                signal["price"]       = round(live_price, 2)
+                signal["stop_loss"]   = round(new_stop, 2)
+                signal["take_profit"] = round(new_target, 2)
+                print(f"   [{ticker}] 🔴 Live price ${live_price:.2f} "
+                      f"(was ${old_entry:.2f}) — stop/target updated")
+            else:
+                print(f"   [{ticker}] ℹ️  Live price unavailable — using daily close ${signal['price']:.2f}")
 
             # Position size
             pos = calculate_position_size(
