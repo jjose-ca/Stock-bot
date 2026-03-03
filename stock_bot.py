@@ -112,8 +112,11 @@ TICKERS_USD = [
     'CCL', 'DKNG', 'CVX', 'TSM', 'DIS',
 
     # High beta
-    'TSLA', 'PLTR', 'AMD', 'ARM', 'RBLX', 'IOT',
-    'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW',
+    # Removed: TSLA (6.7% win, -2.58% exp), PLTR (-3.11% exp),
+    #           COIN (-2.11% exp), SMCI (-3.14% exp), DVN (0% win)
+    #           — confirmed dead weight across v5 and v6 backtests
+    'AMD', 'ARM', 'RBLX', 'IOT',
+    'SOFI', 'HOOD', 'MSTR', 'SNOW',
 ]
 
 # CAD tickers (TSX) — tagged CA$ automatically
@@ -125,17 +128,24 @@ TICKERS_CAD = [
 # ── Discord ───────────────────────────────────────────────────────────────────
 DISCORD_WEBHOOK_URL = os.getenv('DISCORD_URL')
 
-# ── Scoring ───────────────────────────────────────────────────────────────────
-# v6: threshold reduced back to 6 — backtest showed 17.0% win vs 17.1% at 7.
-# Not worth cutting signal count in half for 0.1% win rate improvement.
-SWING_SCORE_THRESHOLD = 5   # lowered from 6 — recovers signal count
-                            # backtest: score 6 vs 5 same win rate, 6 cuts 90% of signals
+# ── Scoring & Alert Tiers ────────────────────────────────────────────────────
+# Two-tier alert system:
+#   Tier A (trade-worthy):    score ≥ 5, trend ≥ 3, momentum ≥ 2, R/R ≥ 1.2
+#   Tier B (paper/watchlist): score ≥ 4, passes softer gates, lower R/R ok
+# Alpaca orders only fire on Tier A. Both tiers send Discord alerts.
+SWING_SCORE_THRESHOLD   = 5   # Tier A minimum score
+TIER_B_SCORE_THRESHOLD  = 4   # Tier B minimum score (paper/informational)
 
-# Per-category floors — prevent falling knives from passing on momentum alone.
-# trend ≥ 3  : price must be near at least one EMA (uptrend structure intact)
-# momentum ≥ 2: must have at least one real oversold / mean-reversion signal
-TREND_FLOOR    = 3
-MOMENTUM_FLOOR = 2
+# Per-category floors
+TREND_FLOOR    = 3   # Tier A: price must be near at least one EMA
+MOMENTUM_FLOOR = 2   # Tier A: at least one real oversold / mean-reversion signal
+TIER_B_TREND_FLOOR    = 2   # Tier B: relaxed — catches early-stage setups
+TIER_B_MOMENTUM_FLOOR = 1   # Tier B: at least some momentum signal
+
+# EMA proximity windows — how close price needs to be to count as "near EMA"
+NEAR_21_WINDOW = 0.035   # 3.5% (was 2.5%) — catches more valid pullbacks
+                          # higher ATR names often pull back near but not within 2.5%
+NEAR_50_WINDOW = 0.030   # 3.0% — unchanged
 
 # ── Risk parameters ───────────────────────────────────────────────────────────
 PORTFOLIO_VALUE       = 2000.0  # ← update when account size changes
@@ -506,9 +516,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
         trend_score = 0
 
         # 21 EMA wick detection
-        wick_to_21 = (daily_low <= ema_21 * 1.005) and (price > ema_21) and (rsi < 65)
+        wick_to_21 = (daily_low <= ema_21 * 1.010) and (price > ema_21) and (rsi < 65)  # loosened 0.5%→1.0%
         pct_21     = (price - ema_21) / ema_21
-        near_21    =  0.000 <= pct_21 < 0.025
+        near_21    =  0.000 <= pct_21 < NEAR_21_WINDOW
         below_21   = -0.025 <= pct_21 < 0.000
 
         if wick_to_21 and not near_21:
@@ -595,6 +605,14 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
         if momentum_score < MOMENTUM_FLOOR:
             print(f"   [{ticker}] ❌ Momentum floor {momentum_score} < {MOMENTUM_FLOOR} "
                   f"— no oversold signal. Rejected.")
+
+        # ── RSI 35-45 FALLING KNIFE GATE ──────────────────────────────────
+        # Backtest: RSI 35-45 = -0.13% expectancy (48 signals).
+        # Exception: trend_score == 4 overrides.
+        if 35 <= rsi < 45 and trend_score < 4:
+            print(f"   [{ticker}] ❌ RSI {rsi:.1f} falling-knife zone (35-45) "
+                  f"with weak trend ({trend_score}) — rejected.")
+            return None
             return None
 
         print(f"   [{ticker}] ✅ Score {score}/{threshold} "
@@ -608,7 +626,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int,
     above_50 = price >= ema_50
     near_50  = abs(price - ema_50) / ema_50 < 0.03
     pct_21   = (price - ema_21) / ema_21
-    near_21  = 0.000 <= pct_21 < 0.025   # recomputed — safe on both paths
+    near_21  = 0.000 <= pct_21 < NEAR_21_WINDOW   # recomputed — safe on both paths
 
     # Bypass path: 200 EMA is the structural anchor for deep oversold setups.
     # 21 EMA will be above a crashed price — leads to false "support > entry" rejection.
@@ -1019,20 +1037,33 @@ def send_setup_alert(ticker: str, currency: str, signal: dict,
     if badges:
         desc += f"\n🏷️ {' | '.join(badges)}"
 
+    tier       = signal.get("alert_tier", "A")
+    tier_emoji = "🟢" if tier == "A" else "🟡"
+    tier_label = "Tier A — Trade" if tier == "A" else "Tier B — Paper/Watchlist"
+    embed_color = COLOR_GREEN if tier == "A" else COLOR_YELLOW
+
+    # Add gap/vol badges for Tier B signals
+    if signal.get("gap_extended"):
+        badges.append("📏 EXTENDED GAP")
+    if signal.get("vol_weak"):
+        badges.append("📉 LOW VOLUME")
+    if badges:
+        desc += f"\n🏷️ {' | '.join(badges)}"
+
     payload = {
-        "content": f"🚨 **{ticker}** | SWING | `{currency}`",
+        "content": f"{tier_emoji} **{ticker}** | {tier_label} | `{currency}`",
         "embeds": [{
-            "title":       f"📅 SWING — {ticker}  (Score {score})",
+            "title":       f"📅 SWING — {ticker}  ({tier_emoji} {tier_label} · Score {score})",
             "description": desc,
-            "color":       COLOR_BLUE,
+            "color":       embed_color,
             "fields":      [{"name": "🔗 Chart",
                              "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})",
                              "inline": False}],
-            "footer":      {"text": f"Stock Alert Bot v6.0 | ATR: Daily"},
+            "footer":      {"text": f"Stock Alert Bot v6.0 | ATR: Daily | {tier_label}"},
         }],
     }
     _post_discord(payload)
-    print(f"   ✅ Alert sent: {ticker} | Score {score} | {currency}")
+    print(f"   ✅ Alert sent: {ticker} | Score {score} | {tier_label} | {currency}")
 
 
 def send_premarket_summary(summaries: list[dict]):
@@ -1383,8 +1414,14 @@ def check_market(mode: str, tickers_override: list | None = None,
         send_outcome_summary(resolved, bulk_data)
 
     if is_panic:
-        print("🚨 VIX PANIC — no new signals. Open trade monitoring complete.")
-        return
+        # Soft VIX halt — still scan but apply extra penalty + cap Tier A only.
+        # Hard halt removed: panic periods are valuable learning opportunities
+        # for paper trading and may still produce valid oversold setups.
+        print("🚨 VIX PANIC — scanning continues with +2 threshold penalty, Tier A only.")
+        total_penalty = min(total_penalty + 2, 3)   # extra caution, hard cap at 3
+        vix_panic_mode = True
+    else:
+        vix_panic_mode = False
 
     # ── Pre-market mode: gap summary ──────────────────────────────────────────
     if mode == "premarket":
@@ -1481,13 +1518,18 @@ def check_market(mode: str, tickers_override: list | None = None,
                 new_target = live_price + (atr * SWING_ATR_TARGET_MULT)
 
                 # Gap filter — live price vs yesterday's scored close.
-                # scored_price is always set in the signal dict (see run_swing_engine).
+                # Soft: large gaps reduce score by 1 (Tier B only) rather than hard kill.
+                # Only kill if gap is extreme (> 2× max_gap) — structure truly broken.
                 gap_pct = (live_price - signal["scored_price"]) / signal["scored_price"] * 100
                 atr_pct     = (atr / live_price) * 100
                 max_gap     = max(2.0, min(atr_pct * 1.5, 7.0))
-                if abs(gap_pct) > max_gap:
-                    print(f"   [{ticker}] ❌ Live gap {gap_pct:+.1f}% > {max_gap:.1f}% — structure broken. Rejected.")
+                if abs(gap_pct) > max_gap * 2:
+                    print(f"   [{ticker}] ❌ Extreme gap {gap_pct:+.1f}% > {max_gap*2:.1f}% — hard reject.")
                     continue
+                elif abs(gap_pct) > max_gap:
+                    signal["score"]     -= 1
+                    signal["gap_extended"] = True
+                    print(f"   [{ticker}] ⚠️ Gap {gap_pct:+.1f}% > {max_gap:.1f}% — score −1, may downgrade to Tier B")
 
                 signal["price"]       = round(live_price, 2)
                 signal["stop_loss"]   = round(new_stop, 2)
@@ -1532,14 +1574,30 @@ def check_market(mode: str, tickers_override: list | None = None,
             vol_pace     = rel_vol / pct_of_day
 
             vol_stale = (rel_vol < 0.05)
+            vol_penalty = 0
             if vol_stale:
                 print(f"   [{ticker}] ⚠️ Volume stale ({rel_vol:.2f}x) — skipping vol gate")
-            elif elapsed_min > 90 and vol_pace < MIN_VOL_PACE:
-                print(f"   [{ticker}] ❌ Low volume pace ({vol_pace:.1f}x < {MIN_VOL_PACE}x). Rejected.")
-                continue
+            elif elapsed_min <= 90:
+                # Early session — noisy data, only penalise extremely weak volume
+                if vol_pace < 0.4:
+                    vol_penalty = 1
+                    print(f"   [{ticker}] ⚠️ Very weak early volume ({vol_pace:.1f}x) — score −1")
+            else:
+                # Later session — data is reliable, apply tiered penalties
+                if vol_pace < 0.4:
+                    vol_penalty = 2
+                    print(f"   [{ticker}] ⚠️ Very low volume pace ({vol_pace:.1f}x) — score −2")
+                elif vol_pace < MIN_VOL_PACE:
+                    vol_penalty = 1
+                    print(f"   [{ticker}] ⚠️ Low volume pace ({vol_pace:.1f}x) — score −1")
+
+            if vol_penalty > 0:
+                signal["score"] -= vol_penalty
+                signal["vol_weak"] = True
 
             print(f"   📊 Vol pace {vol_pace:.1f}x (actual {rel_vol:.2f}x, "
-                  f"{pct_of_day*100:.0f}% of day elapsed)")
+                  f"{pct_of_day*100:.0f}% of day elapsed)"
+                  f"{f'  [−{vol_penalty} penalty]' if vol_penalty else ''}")
 
             # Inject runtime values
             signal["vol_pace"]      = round(float(vol_pace), 2)
@@ -1550,7 +1608,37 @@ def check_market(mode: str, tickers_override: list | None = None,
             except Exception:
                 signal["vix_level"] = 0.0
 
-            # Fire Discord alert
+            # ── Tier classification ───────────────────────────────────────────
+            # Tier A: full signal — send alert + place Alpaca order
+            # Tier B: informational — Discord only, no order, lower quality tag
+            final_score    = signal["score"]
+            panic_mode     = vix_panic_mode
+
+            tier_a = (
+                final_score >= SWING_SCORE_THRESHOLD
+                and signal.get("trend_score",  0) >= TREND_FLOOR
+                and signal.get("momentum_score", 0) >= MOMENTUM_FLOOR
+                and signal.get("rr_ratio", 0) >= 1.2
+                and not panic_mode   # no Tier A orders during VIX panic
+            )
+            tier_b = (
+                not tier_a
+                and final_score >= TIER_B_SCORE_THRESHOLD
+                and signal.get("trend_score", 0) >= TIER_B_TREND_FLOOR
+                and signal.get("momentum_score", 0) >= TIER_B_MOMENTUM_FLOOR
+                and signal.get("rr_ratio", 0) >= 1.05
+            )
+
+            if not tier_a and not tier_b:
+                print(f"   [{ticker}] ❌ Score {final_score} below both tiers after penalties. Skipped.")
+                continue
+
+            signal["alert_tier"] = "A" if tier_a else "B"
+            tier_label = "🟢 Tier A" if tier_a else "🟡 Tier B"
+            print(f"   [{ticker}] {tier_label} alert — score {final_score} | "
+                  f"R/R {signal.get('rr_ratio',0):.2f}")
+
+            # Fire Discord alert (both tiers)
             send_setup_alert(
                 ticker=ticker, currency=currency, signal=signal,
                 rel_vol=rel_vol, elapsed_minutes=elapsed_min,
@@ -1558,11 +1646,12 @@ def check_market(mode: str, tickers_override: list | None = None,
             )
             alerts_sent += 1
 
-            # Place Alpaca paper order
-            place_alpaca_bracket_order(ticker, signal, elapsed_min)
-
-            # Log trade
-            log_new_trade(ticker, currency, signal)
+            # Place Alpaca order + log trade — Tier A only
+            if tier_a:
+                place_alpaca_bracket_order(ticker, signal, elapsed_min)
+                log_new_trade(ticker, currency, signal)
+            else:
+                print(f"   [{ticker}] ℹ️  Tier B — Discord only, no order placed")
 
         except Exception as e:
             print(f"   ❌ Error on {ticker}: {e}")
