@@ -287,7 +287,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 209.7899932861328,
+    "max_price": 212.07000732421875,
     "min_price": 171.80999755859375
   },
   {
@@ -585,7 +585,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 32.39,
+    "max_price": 32.955101013183594,
     "min_price": 29.68000030517578
   },
   {
@@ -673,7 +673,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 32.39,
+    "max_price": 32.955101013183594,
     "min_price": 29.68000030517578
   },
   {
@@ -800,7 +800,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 77.05999755859375,
-    "min_price": 75.27100372314453
+    "min_price": 75.19000244140625
   },
   {
     "id": "VEA_20260304_1000",
@@ -828,7 +828,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 67.30010223388672,
+    "max_price": 67.33000183105469,
     "min_price": 66.58999633789062
   },
   {
@@ -855,7 +855,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 76.44000244140625,
+    "max_price": 76.54910278320312,
     "min_price": 75.01300048828125
   }
 ]
