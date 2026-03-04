@@ -519,6 +519,14 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     # C. 21 EMA wick detection
     daily_low   = float(scored['Low'])
     daily_close = float(scored['Close'])  # same as price — yesterday's confirmed close
+    # ── STRUCTURAL GATE: must be above at least one EMA ──────────────────
+    # Prevents signals where price is below both 21 and 50 EMA — those are
+    # downtrends, not pullbacks. Swing setups need at least one EMA as support.
+    if price < ema_21 and price < ema_50:
+        print(f"   [{ticker}] ❌ Below both EMAs (21 EMA ${ema_21:.2f}, "
+              f"50 EMA ${ema_50:.2f}) — not a pullback, rejected.")
+        return None
+
     wick_to_21  = (daily_low <= ema_21 * 1.005) and (daily_close > ema_21) and (rsi < 65)
 
     pct_from_21 = (daily_close - ema_21) / ema_21
@@ -596,7 +604,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     # ── Penalty (applied AFTER caps — can push score below threshold) ─────────
     penalty = 0
-    if 0 < bb_width < 0.03:
+    if 0 < bb_width < 0.03 and rsi > 50:
+        # Squeeze + RSI neutral/high = likely coiling before breakout, not pullback
+        # Squeeze + RSI < 50 = oversold pullback into squeeze — valid setup, no penalty
         penalty = 2
         reasons.append(f"⚠️ BB Squeeze (width {bb_width:.3f}) — reduced edge")
 
@@ -1455,12 +1465,11 @@ def check_market(mode: str, tickers_override: list | None = None):
                     price = live_price
                     prev  = prev_close
                 elif live_price and not data_is_live:
-                    # Stale daily data (weekend/holiday): fast_info quote vs the
-                    # completed close before that (prev_close IS Friday's close,
-                    # prior_close is Thursday's — we want Friday vs prior_close
-                    # to show the true overnight/weekend gap correctly).
+                    # Stale daily data (weekend/holiday): compare live price vs
+                    # most recent completed session (prev_close = Friday on Monday).
+                    # prior_close (Thursday) would inflate/deflate the gap incorrectly.
                     price = live_price
-                    prev  = prior_close
+                    prev  = prev_close   # always most recent completed bar
                 else:
                     # fast_info unavailable: fall back to yesterday vs day before
                     price = prev_close
