@@ -125,7 +125,7 @@ TICKERS_USD = [
 
     # High beta
     'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI','RBLX', 'IOT', 
-    'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW',
+    'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW', 'TQQQ',
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
