@@ -167,7 +167,7 @@ MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 # ── Portfolio value ───────────────────────────────────────────────────────────
 # Set this to your total trading capital in USD.
 # Alerts will show exact dollar amounts to invest per signal.
-PORTFOLIO_VALUE = 360.0   # ← Update this whenever your account size changes
+PORTFOLIO_VALUE = 2000.0  # ← Update this whenever your account size changes
 
 SWING_ATR_STOP_MULT   = 1.5    # Swing stop = support − (ATR × 1.5) — gives room for normal noise
 SWING_ATR_TARGET_MULT = 3.5    # Swing target = price + (ATR × 3.5) — wider target to maintain R/R
@@ -1705,7 +1705,9 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
 
         position_pct  = signal.get("position_size_pct", 4.8) / 100
         dollar_amount = PORTFOLIO_VALUE * position_pct
-        qty           = max(round(dollar_amount / entry, 2), 0.01)
+        qty = max(1, int(dollar_amount / entry))  # whole shares only — min 1 share always placed
+        print(f"   📐 Position: {qty} share(s) @ ~${entry:.2f} = ${qty*entry:.2f} "
+              f"(allocated ${dollar_amount:.2f})")
 
         print(f"   🦙 Placing bracket order: {ticker} qty={qty} "
               f"entry~${entry:.2f} target=${target:.2f} stop=${stop:.2f}")
