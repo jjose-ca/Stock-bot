@@ -800,7 +800,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 77.05999755859375,
-    "min_price": 75.19000244140625
+    "min_price": 74.41000366210938
   },
   {
     "id": "VEA_20260304_1000",
@@ -828,7 +828,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 67.33000183105469,
+    "max_price": 67.33769989013672,
     "min_price": 66.58999633789062
   },
   {
@@ -855,7 +855,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 76.54910278320312,
+    "max_price": 76.9000015258789,
     "min_price": 75.01300048828125
   }
 ]
