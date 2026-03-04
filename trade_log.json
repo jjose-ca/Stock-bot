@@ -287,7 +287,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 186.38999938964844,
+    "max_price": 205.36000061035156,
     "min_price": 171.80999755859375
   },
   {
@@ -628,7 +628,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 68.66,
+    "max_price": 68.76000213623047,
     "min_price": 63.2599983215332
   },
   {
@@ -716,7 +716,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 68.66,
+    "max_price": 68.76000213623047,
     "min_price": 63.2599983215332
   },
   {
@@ -746,7 +746,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 682.6099853515625,
+    "max_price": 683.5180053710938,
     "min_price": 669.6599731445312
   },
   {
@@ -772,7 +772,90 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 147.5,
+    "max_price": 152.2489013671875,
     "min_price": 138.1999969482422
+  },
+  {
+    "id": "SLV_20260304_1000",
+    "ticker": "SLV",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "entry": 75.6,
+    "stop_loss": 64.43,
+    "take_profit": 97.16,
+    "rr_ratio": 1.93,
+    "score": 6,
+    "threshold": 6,
+    "atr": 6.159,
+    "reasons": [
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($73.67)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (47.6)",
+      "\ud83d\ude80 Daily MACD: Positive Histogram"
+    ],
+    "alert_date": "2026-03-04",
+    "alert_time": "10:00 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 75.6,
+    "min_price": 75.6
+  },
+  {
+    "id": "VEA_20260304_1000",
+    "ticker": "VEA",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "entry": 66.79,
+    "stop_loss": 64.46,
+    "take_profit": 70.42,
+    "rr_ratio": 1.56,
+    "score": 6,
+    "threshold": 6,
+    "atr": 1.0372,
+    "reasons": [
+      "\u26a0\ufe0f Below 21 EMA \u2014 Testing as Support ($68.30)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($66.31)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83d\udcc9 Daily RSI Oversold (41.9)",
+      "\ud83d\udee1\ufe0f Closed at Daily BB Lower ($66.01)",
+      "\u26a0\ufe0f Trend Sharply Decelerating \u2014 ROC 3.2% \u2192 -2.9% (\u2212190%)"
+    ],
+    "alert_date": "2026-03-04",
+    "alert_time": "10:00 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 66.79,
+    "min_price": 66.79
+  },
+  {
+    "id": "UBER_20260304_1000",
+    "ticker": "UBER",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "entry": 76.06,
+    "stop_loss": 70.96,
+    "take_profit": 85.5,
+    "rr_ratio": 1.85,
+    "score": 6,
+    "threshold": 6,
+    "atr": 2.699,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA \u2014 Early Bounce ($75.00)",
+      "\u26a0\ufe0f Below 50 EMA \u2014 Testing as Support ($78.54)",
+      "\ud83c\udf0a Daily Momentum Reset (52.0)",
+      "\ud83d\ude80 Daily MACD: Positive Histogram"
+    ],
+    "alert_date": "2026-03-04",
+    "alert_time": "10:00 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 76.06,
+    "min_price": 76.06
   }
 ]
