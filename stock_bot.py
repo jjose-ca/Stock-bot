@@ -125,7 +125,7 @@ TICKERS_USD = [
 
     # High beta
     'TSLA', 'PLTR', 'AMD', 'ARM', 'SMCI','RBLX', 'IOT', 
-    'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW', 'TQQQ',
+    'SOFI', 'HOOD', 'COIN', 'MSTR', 'SNOW',
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
@@ -162,8 +162,7 @@ MIN_DOLLAR_VOLUME = {
 # ── Risk parameters ───────────────────────────────────────────────────────────
 BASE_MAX_STOP_PCT     = 0.06   # Floor — never tighter than 6% even for low-vol stocks
 ABSOLUTE_MAX_STOP_PCT = 0.15   # Ceiling — never wider than 15% even for extreme high-beta
-MIN_RR_RATIO          = 1.1    # Lowered from 1.5 — backtest uses 1.2, structural stops
-                               # widen on valid setups; 1.5 was rejecting good trades
+MIN_RR_RATIO          = 1.5    # Minimum acceptable risk/reward ratio
 
 # ── Portfolio value ───────────────────────────────────────────────────────────
 # Set this to your total trading capital in USD.
@@ -248,8 +247,9 @@ def get_time_penalty(et_now: datetime) -> tuple[int, list[str]]:
     mkt_open    = et_now.replace(hour=9, minute=30, second=0, microsecond=0)
     elapsed_min = max((et_now - mkt_open).total_seconds() / 60.0, 0.0)
 
-    # Opening noise penalty removed — swing score is based on yesterday's
-    # completed bar, not today's intraday action. Gap filter handles open risk.
+    if elapsed_min < OPENING_NOISE_MINUTES:
+        penalty += 1
+        reasons.append(f"⏰ Opening {OPENING_NOISE_MINUTES}-min noise window (+1 threshold)")
 
     if et_now.weekday() == 4 and elapsed_min > LATE_FRIDAY_MINUTES:
         penalty += 1
@@ -1590,8 +1590,12 @@ def check_market(mode: str, tickers_override: list | None = None):
             vol_pace          = rel_vol / pct_of_day
             MIN_VOL_PACE      = 0.6
 
-            # Volume pace gate removed — backtest never included it and has no
-            # bearing on yesterday's completed bar score. Still log for reference.
+            if vol_pace < MIN_VOL_PACE:
+                print(f"   [{ticker}] ❌ Dead volume pace "
+                      f"(tracking {vol_pace:.1f}x < {MIN_VOL_PACE}x min). "
+                      f"Bounce lacks institutional conviction. Rejected.")
+                continue
+
             print(f"   📊 Volume Pace: {vol_pace:.1f}x projected "
                   f"(actual {rel_vol:.2f}x so far, {pct_of_day*100:.0f}% of day elapsed)")
 
