@@ -865,7 +865,8 @@ def build_final_signal(swing_signal: dict | None) -> dict | None:
     sig.update({
         "scenario":       "SWING",
         "scenario_label": "📅 SWING SETUP",
-        "size_guidance":  pos_c["label"],
+        "size_guidance":    pos_c["label"],
+        "position_size_pct": pos_c["pct"],   # needed by place_alpaca_bracket_order
         "hold_guidance":  (
             "Enter before 4:00pm close. Sell at next morning open (9:30am ET). "
             "Stop active overnight — if price gaps below stop, exit immediately at open."
@@ -1668,11 +1669,10 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
         print(f"   🍁 {ticker} — TSX not supported on Alpaca, skipping")
         return False
 
-    ALPACA_ORDER_START  = 375   # 3:45pm ET
-    ALPACA_ORDER_CUTOFF = 390   # 4:00pm ET
-    test_mode = (elapsed_min == 0)
-    if not test_mode and (elapsed_min < ALPACA_ORDER_START or elapsed_min >= ALPACA_ORDER_CUTOFF):
-        print(f"   ⏰ {ticker} — outside 3:45–4:00pm window, skipping Alpaca order")
+    # Orders fire whenever the bot runs during market hours (no time restriction).
+    # Only skip if market is closed (elapsed_min == 0 and not test mode).
+    if elapsed_min >= 390:
+        print(f"   ⏰ {ticker} — market closed, skipping Alpaca order")
         return False
 
     client = get_alpaca_client()
@@ -1696,7 +1696,7 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
             symbol        = ticker,
             qty           = qty,
             side          = OrderSide.BUY,
-            time_in_force = TimeInForce.GTC,
+            time_in_force = TimeInForce.DAY,    # market orders must use DAY — bracket legs stay GTC automatically
             order_class   = OrderClass.BRACKET,
             take_profit   = TakeProfitRequest(limit_price=round(target, 2)),
             stop_loss     = StopLossRequest(stop_price=round(stop, 2))
