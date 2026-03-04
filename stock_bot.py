@@ -71,15 +71,29 @@ except ImportError:
 ALPACA_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_SEC = os.environ.get("ALPACA_SECRET_KEY")
 
+# ── Alpaca startup diagnostic (prints on every run) ───────────────────────────
+print(f"🔑 Alpaca lib available: {ALPACA_AVAILABLE}")
+print(f"🔑 ALPACA_API_KEY set:   {'YES (' + ALPACA_KEY[:4] + '...)' if ALPACA_KEY else 'NO ← missing secret'}")
+print(f"🔑 ALPACA_SECRET_KEY set: {'YES' if ALPACA_SEC else 'NO ← missing secret'}")
+
 
 def get_alpaca_client():
     """Returns an Alpaca paper trading client, or None if not configured."""
-    if not ALPACA_AVAILABLE or not ALPACA_KEY or not ALPACA_SEC:
+    if not ALPACA_AVAILABLE:
+        print("   ⚠️ get_alpaca_client: alpaca-py not installed")
+        return None
+    if not ALPACA_KEY:
+        print("   ⚠️ get_alpaca_client: ALPACA_API_KEY not set")
+        return None
+    if not ALPACA_SEC:
+        print("   ⚠️ get_alpaca_client: ALPACA_SECRET_KEY not set")
         return None
     try:
-        return TradingClient(ALPACA_KEY, ALPACA_SEC, paper=True)
+        client = TradingClient(ALPACA_KEY, ALPACA_SEC, paper=True)
+        print(f"   ✅ Alpaca client connected (paper=True)")
+        return client
     except Exception as e:
-        print(f"⚠️ Alpaca client init failed: {e}")
+        print(f"   ❌ Alpaca client init failed: {e}")
         return None
 
 
@@ -1587,9 +1601,13 @@ def check_market(mode: str, tickers_override: list | None = None):
             # Log the trade for outcome tracking
             log_new_trade(ticker, currency, final_signal)
 
-            # Place Alpaca paper bracket order (swing signals only, 3:45–4pm window)
-            if final_signal.get("mode", "") == "SWING":
+            # Place Alpaca paper bracket order
+            sig_mode = final_signal.get("mode", "")
+            print(f"   🔍 Signal mode: '{sig_mode}' | elapsed_min: {elapsed_min:.0f}")
+            if sig_mode == "SWING":
                 place_alpaca_bracket_order(ticker, final_signal, elapsed_min)
+            else:
+                print(f"   ⚠️ Skipping Alpaca — mode is '{sig_mode}', expected 'SWING'")
 
             # ── OPTIONAL: Write state + cooldown (disabled by default) ──────────
             # Uncomment both lines below to activate state tracking:
