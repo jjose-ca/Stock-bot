@@ -1699,6 +1699,19 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
         return False
 
     try:
+        # ── Check for existing open position or pending order ─────────────────
+        # Fetches both open positions and open orders from Alpaca.
+        # Skips if either exists for this ticker — prevents doubling up.
+        existing_positions = client.get_all_positions()
+        if any(p.symbol == ticker for p in existing_positions):
+            print(f"   ⏭️ {ticker} — already has an open position on Alpaca, skipping")
+            return False
+
+        existing_orders = client.get_orders()
+        if any(o.symbol == ticker for o in existing_orders):
+            print(f"   ⏭️ {ticker} — already has a pending order on Alpaca, skipping")
+            return False
+
         entry  = signal["price"]
         target = signal["take_profit"]
         stop   = signal["stop_loss"]
