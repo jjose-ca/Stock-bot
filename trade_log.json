@@ -37,7 +37,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 48.5,
-    "min_price": 44.494998931884766
+    "min_price": 44.36068724794196
   },
   {
     "id": "QQQM_20260226_1000",
@@ -585,7 +585,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 32.955101013183594,
+    "max_price": 32.959999084472656,
     "min_price": 29.68000030517578
   },
   {
@@ -628,7 +628,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 68.91000366210938,
+    "max_price": 68.91999816894531,
     "min_price": 63.2599983215332
   },
   {
@@ -673,7 +673,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 32.955101013183594,
+    "max_price": 32.959999084472656,
     "min_price": 29.68000030517578
   },
   {
@@ -716,7 +716,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 68.91000366210938,
+    "max_price": 68.91999816894531,
     "min_price": 63.2599983215332
   },
   {
