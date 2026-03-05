@@ -829,7 +829,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 67.52999877929688,
-    "min_price": 65.77999877929688
+    "min_price": 65.73139953613281
   },
   {
     "id": "UBER_20260304_1000",
@@ -965,7 +965,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 670.7000122070312,
-    "min_price": 659.2100830078125
+    "min_price": 658.4400024414062
   },
   {
     "id": "IWM_20260305_1020",
@@ -994,6 +994,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 260.7550048828125,
-    "min_price": 257.3900146484375
+    "min_price": 257.2200012207031
   }
 ]
