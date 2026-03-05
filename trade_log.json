@@ -411,7 +411,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 33.189998626708984,
+    "max_price": 33.5099983215332,
     "min_price": 29.68000030517578
   },
   {
@@ -540,7 +540,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 33.189998626708984,
+    "max_price": 33.5099983215332,
     "min_price": 29.68000030517578
   },
   {
@@ -585,7 +585,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 33.189998626708984,
+    "max_price": 33.5099983215332,
     "min_price": 29.68000030517578
   },
   {
@@ -673,7 +673,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 33.189998626708984,
+    "max_price": 33.5099983215332,
     "min_price": 29.68000030517578
   },
   {
@@ -800,7 +800,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 77.05999755859375,
-    "min_price": 73.95999908447266
+    "min_price": 73.68000030517578
   },
   {
     "id": "VEA_20260304_1000",
@@ -829,7 +829,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 67.52999877929688,
-    "min_price": 66.16000366210938
+    "min_price": 65.77999877929688
   },
   {
     "id": "UBER_20260304_1000",
@@ -883,7 +883,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 252.2899932861328,
-    "min_price": 250.11000061035156
+    "min_price": 249.5399932861328
   },
   {
     "id": "QQQ_20260305_1012",
@@ -910,7 +910,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 612.760009765625,
-    "min_price": 607.3800048828125
+    "min_price": 606.0700073242188
   },
   {
     "id": "AMZN_20260305_1012",
@@ -965,7 +965,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 670.7000122070312,
-    "min_price": 661.3499755859375
+    "min_price": 659.2100830078125
   },
   {
     "id": "IWM_20260305_1020",
@@ -993,7 +993,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 258.83,
-    "min_price": 258.83
+    "max_price": 260.7550048828125,
+    "min_price": 257.3900146484375
   }
 ]
