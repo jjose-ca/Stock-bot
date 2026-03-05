@@ -800,7 +800,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 77.05999755859375,
-    "min_price": 73.68000030517578
+    "min_price": 73.01000213623047
   },
   {
     "id": "VEA_20260304_1000",
@@ -829,7 +829,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 67.52999877929688,
-    "min_price": 65.73139953613281
+    "min_price": 65.1050033569336
   },
   {
     "id": "UBER_20260304_1000",
@@ -883,7 +883,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 252.2899932861328,
-    "min_price": 249.5399932861328
+    "min_price": 247.97999572753906
   },
   {
     "id": "QQQ_20260305_1012",
@@ -910,7 +910,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 612.760009765625,
-    "min_price": 606.0700073242188
+    "min_price": 602.260009765625
   },
   {
     "id": "AMZN_20260305_1012",
@@ -965,7 +965,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 670.7000122070312,
-    "min_price": 658.4400024414062
+    "min_price": 650.3099975585938
   },
   {
     "id": "IWM_20260305_1020",
@@ -994,6 +994,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 260.7550048828125,
-    "min_price": 257.2200012207031
+    "min_price": 254.1649932861328
   }
 ]
