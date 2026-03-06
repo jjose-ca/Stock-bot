@@ -1738,7 +1738,7 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
             symbol        = ticker,
             qty           = qty,
             side          = OrderSide.BUY,
-            time_in_force = TimeInForce.DAY,    # market orders must use DAY — bracket legs stay GTC automatically
+            time_in_force = TimeInForce.GTC,    # GTC applies to all legs — bracket stop/target persist overnight
             order_class   = OrderClass.BRACKET,
             take_profit   = TakeProfitRequest(limit_price=round(target, 2)),
             stop_loss     = StopLossRequest(stop_price=round(stop, 2))
