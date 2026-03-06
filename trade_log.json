@@ -325,11 +325,11 @@
     "gap_pct": 0.13,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-03-06",
+    "outcome_pct": -14.7,
     "max_price": 79.20999908447266,
-    "min_price": 65.0999984741211
+    "min_price": 63.560001373291016
   },
   {
     "id": "ABBV_20260227_1001",
@@ -496,7 +496,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 103.41999816894531,
-    "min_price": 100.4000015258789
+    "min_price": 100.1449966430664
   },
   {
     "id": "SMCI_20260227_1932",
@@ -883,7 +883,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 252.3000030517578,
-    "min_price": 246.4600067138672
+    "min_price": 246.38999938964844
   },
   {
     "id": "QQQ_20260305_1012",
@@ -910,7 +910,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 612.760009765625,
-    "min_price": 598.5399780273438
+    "min_price": 598.3699951171875
   },
   {
     "id": "AMZN_20260305_1012",
@@ -937,7 +937,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 220.47000122070312,
-    "min_price": 213.22000122070312
+    "min_price": 212.53500366210938
   },
   {
     "id": "META_20260305_1012",
@@ -1019,7 +1019,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 165.22999572753906,
+    "max_price": 165.35989379882812,
     "min_price": 161.30999755859375
   },
   {
@@ -1048,7 +1048,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 77.12799835205078,
+    "max_price": 77.19000244140625,
     "min_price": 76.36000061035156
   }
 ]
