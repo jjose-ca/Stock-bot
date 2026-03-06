@@ -452,7 +452,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 71.19000244140625,
-    "min_price": 63.2599983215332
+    "min_price": 62.81999969482422
   },
   {
     "id": "ZSP.TO_20260227_1001",
@@ -496,7 +496,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 103.41999816894531,
-    "min_price": 100.87000274658203
+    "min_price": 100.4000015258789
   },
   {
     "id": "SMCI_20260227_1932",
@@ -629,7 +629,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 69.91000366210938,
-    "min_price": 63.2599983215332
+    "min_price": 62.81999969482422
   },
   {
     "id": "SMCI_20260301_1411",
@@ -717,7 +717,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 69.91000366210938,
-    "min_price": 63.2599983215332
+    "min_price": 62.81999969482422
   },
   {
     "id": "SPY_20260303_1535",
@@ -825,11 +825,11 @@
     ],
     "alert_date": "2026-03-04",
     "alert_time": "10:00 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-03-06",
+    "outcome_pct": -3.49,
     "max_price": 67.52999877929688,
-    "min_price": 65.1050033569336
+    "min_price": 64.41000366210938
   },
   {
     "id": "UBER_20260304_1000",
@@ -856,7 +856,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 78.25,
-    "min_price": 75.01300048828125
+    "min_price": 74.19000244140625
   },
   {
     "id": "QQQM_20260305_1012",
@@ -882,8 +882,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 252.2899932861328,
-    "min_price": 247.97999572753906
+    "max_price": 252.3000030517578,
+    "min_price": 246.4600067138672
   },
   {
     "id": "QQQ_20260305_1012",
@@ -910,7 +910,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 612.760009765625,
-    "min_price": 602.260009765625
+    "min_price": 598.5399780273438
   },
   {
     "id": "AMZN_20260305_1012",
@@ -937,7 +937,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 220.47000122070312,
-    "min_price": 215.58999633789062
+    "min_price": 214.1999969482422
   },
   {
     "id": "META_20260305_1012",
@@ -965,7 +965,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 670.7000122070312,
-    "min_price": 650.3099975585938
+    "min_price": 636.1799926757812
   },
   {
     "id": "IWM_20260305_1020",
@@ -993,7 +993,33 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 260.7550048828125,
-    "min_price": 254.1649932861328
+    "max_price": 260.760009765625,
+    "min_price": 250.07000732421875
+  },
+  {
+    "id": "PANW_20260306_1000",
+    "ticker": "PANW",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "entry": 161.82,
+    "stop_loss": 147.85,
+    "take_profit": 186.12,
+    "rr_ratio": 1.74,
+    "score": 6,
+    "threshold": 6,
+    "atr": 6.9434,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA + Strong Recovery (Low $158.48 \u2192 Close $163.16)",
+      "\ud83c\udf0a Daily Momentum Reset (52.6)",
+      "\ud83d\ude80 Daily MACD: Positive Histogram"
+    ],
+    "alert_date": "2026-03-06",
+    "alert_time": "10:00 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 161.82,
+    "min_price": 161.82
   }
 ]
