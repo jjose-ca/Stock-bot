@@ -1021,5 +1021,34 @@
     "outcome_pct": null,
     "max_price": 164.52999877929688,
     "min_price": 161.30999755859375
+  },
+  {
+    "id": "KO_20260306_1024",
+    "ticker": "KO",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "entry": 76.89,
+    "stop_loss": 74.75,
+    "take_profit": 81.6,
+    "rr_ratio": 2.2,
+    "score": 6,
+    "threshold": 6,
+    "atr": 1.3446,
+    "reasons": [
+      "\u26a0\ufe0f Below 21 EMA \u2014 Testing as Support ($78.40)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($75.78)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (46.2)",
+      "\ud83d\udee1\ufe0f Closed at Daily BB Lower ($76.77)",
+      "\u26a0\ufe0f Trend Sharply Decelerating \u2014 ROC 2.0% \u2192 -2.4% (\u2212218%)"
+    ],
+    "alert_date": "2026-03-06",
+    "alert_time": "10:24 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 76.89,
+    "min_price": 76.89
   }
 ]

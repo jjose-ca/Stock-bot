@@ -1,7 +1,7 @@
 {
   "ABBV": {
     "earnings_date": "2026-05-01",
-    "fetched": "2026-02-24"
+    "fetched": "2026-03-06"
   },
   "PYPL": {
     "earnings_date": "2026-05-05",
@@ -21,7 +21,7 @@
   },
   "SMCI": {
     "earnings_date": "2026-05-05",
-    "fetched": "2026-02-27"
+    "fetched": "2026-03-06"
   },
   "RBLX": {
     "earnings_date": "2026-04-30",
@@ -49,6 +49,10 @@
   },
   "PANW": {
     "earnings_date": "2026-05-20",
+    "fetched": "2026-03-06"
+  },
+  "KO": {
+    "earnings_date": "2026-04-28",
     "fetched": "2026-03-06"
   }
 }
