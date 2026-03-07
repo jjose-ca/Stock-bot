@@ -756,28 +756,26 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     if stop_loss >= entry_price:
         stop_loss = entry_price - atr
 
-    gap_pct = (entry_price - price) / price * 100  # how much today moved vs yesterday
-    print(f"   [{ticker}] 📍 Scored on yesterday ${price:.2f} | Entry today ${entry_price:.2f} "
-          f"({'↑' if gap_pct >= 0 else '↓'}{abs(gap_pct):.1f}% gap)")
+    # Gap filter — measures the true overnight gap (today's Open vs yesterday's Close)
+    # Bug fix: using entry_price (live 3:45pm price) vs yesterday's close measured
+    # intraday momentum, not the gap. A stock opening flat then rallying 5% intraday
+    # would be wrongly rejected. The true gap is Open - prev_Close.
+    today_open  = float(today['Open'])
+    gap_pct     = (today_open - price) / price * 100
+    intraday_move = (entry_price - today_open) / today_open * 100  # for logging only
 
-    # Gap filter — if today has moved more than 3% from yesterday's scored bar,
-    # the support/resistance structure the signal was based on is broken.
-    # A gap-up means you're chasing; a gap-down means support failed.
-    # Either way the entry is structurally disconnected from the scored setup.
+    print(f"   [{ticker}] 📍 Scored on yesterday ${price:.2f} | "
+          f"Gap {gap_pct:+.1f}% | Intraday {intraday_move:+.1f}% | Entry ${entry_price:.2f}")
+
     # Dynamic ATR-based gap filter — flat % is too strict for high-beta stocks
     # (RBLX, AMD, IOT gap 3-5% routinely) and too loose for low-vol stocks
     # (SPY gapping 3% is abnormal). Solution: allow up to 1.5× the stock's
     # own ATR% as the max gap, with a floor of 2% and ceiling of 7%.
-    # Examples:
-    #   SPY   ATR 0.8% → max gap = max(2%, 1.2%)  = 2.0%  (floor)
-    #   ABBV  ATR 2.7% → max gap = max(2%, 4.1%)  = 4.1%
-    #   RBLX  ATR 5.0% → max gap = max(2%, 7.5%)  = 7.0%  (ceiling)
-    #   COIN  ATR 7.0% → max gap = max(2%, 10.5%) = 7.0%  (ceiling)
     atr_pct_gap     = (atr / price) * 100
     dynamic_max_gap = max(2.0, min(atr_pct_gap * 1.5, 7.0))
     if abs(gap_pct) > dynamic_max_gap:
         print(f"   [{ticker}] ❌ Gap too large ({gap_pct:+.1f}% vs {dynamic_max_gap:.1f}% dynamic max "
-              f"[ATR {atr_pct_gap:.1f}% × 1.5]). Entry disconnected from scored structure. Rejected.")
+              f"[ATR {atr_pct_gap:.1f}% × 1.5]). Overnight gap breaks scored structure. Rejected.")
         return None
 
     return {
@@ -1851,50 +1849,61 @@ def check_open_trades(bulk_data) -> list:
             if df_window.empty:
                 continue
 
-            # Absolute extremes across the full window since trade opened
-            latest_high  = float(df_window['High'].max())
-            latest_low   = float(df_window['Low'].min())
-            latest_close = float(df_window['Close'].iloc[-1])
-
-            # Update high/low watermarks — explicit float() to avoid numpy types
-            trade["max_price"] = float(max(trade["max_price"], latest_high))
-            trade["min_price"] = float(min(trade["min_price"], latest_low))
-            changed = True
-
             entry  = trade["entry"]
             target = trade["take_profit"]
             stop   = trade["stop_loss"]
 
-            # Check if both stop AND target were hit on the same daily bar.
-            # Using daily OHLCV we cannot know which happened first intraday.
-            # Marking as LOST in this case creates a systematic negative bias
-            # on win rate — flag as AMBIGUOUS instead so it doesn't skew stats.
-            both_hit = (latest_low <= stop) and (latest_high >= target)
-            if both_hit:
-                trade["status"]       = "AMBIGUOUS"
-                trade["outcome_date"] = str(today)
-                trade["outcome_pct"]  = 0.0
-                resolved.append(trade)
-                print(f"   ⚠️  {trade['ticker']} AMBIGUOUS — both stop ${stop:.2f} "
-                      f"and target ${target:.2f} hit on same bar. Cannot determine order.")
+            latest_close = float(df_window['Close'].iloc[-1])
+            changed = True
 
-            # Check stop hit (using daily low)
-            elif latest_low <= stop:
-                trade["status"]       = "LOST"
-                trade["outcome_date"] = str(today)
-                trade["outcome_pct"]  = round((stop - entry) / entry * 100, 2)
-                resolved.append(trade)
-                print(f"   🛑 {trade['ticker']} LOST — stop ${stop:.2f} hit "
-                      f"(low: ${latest_low:.2f})")
+            # ── Chronological row-by-row scan — first event wins ─────────────
+            # Bug fix: scanning max/min across full window would mark WON trades
+            # as AMBIGUOUS if the stop was later hit after target was already hit.
+            # Correct approach: walk each bar in order, stop at first trigger.
+            outcome_found = None
+            outcome_date  = None
+            outcome_bar   = None
 
-            # Check target hit (using daily high)
-            elif latest_high >= target:
+            for bar_date, bar in df_window.iterrows():
+                bar_high = float(bar['High'])
+                bar_low  = float(bar['Low'])
+
+                # Update watermarks on every bar regardless
+                trade["max_price"] = float(max(trade.get("max_price", entry), bar_high))
+                trade["min_price"] = float(min(trade.get("min_price", entry), bar_low))
+
+                # On a single bar where both are hit, we cannot know order —
+                # assume target hit first (favourable, consistent with limit order
+                # behaviour: limit fills before stop on same bar in most brokers)
+                if bar_low <= stop and bar_high >= target:
+                    outcome_found = "WON"   # target assumed hit first on same bar
+                    outcome_date  = str(bar_date.date() if hasattr(bar_date,'date') else bar_date)
+                    outcome_bar   = bar
+                    break
+                elif bar_high >= target:
+                    outcome_found = "WON"
+                    outcome_date  = str(bar_date.date() if hasattr(bar_date,'date') else bar_date)
+                    outcome_bar   = bar
+                    break
+                elif bar_low <= stop:
+                    outcome_found = "LOST"
+                    outcome_date  = str(bar_date.date() if hasattr(bar_date,'date') else bar_date)
+                    outcome_bar   = bar
+                    break
+
+            if outcome_found == "WON":
                 trade["status"]       = "WON"
-                trade["outcome_date"] = str(today)
+                trade["outcome_date"] = outcome_date
                 trade["outcome_pct"]  = round((target - entry) / entry * 100, 2)
                 resolved.append(trade)
-                print(f"   ✅ {trade['ticker']} WON — target ${target:.2f} hit "
-                      f"(high: ${latest_high:.2f})")
+                print(f"   ✅ {trade['ticker']} WON — target ${target:.2f} hit on {outcome_date}")
+
+            elif outcome_found == "LOST":
+                trade["status"]       = "LOST"
+                trade["outcome_date"] = outcome_date
+                trade["outcome_pct"]  = round((stop - entry) / entry * 100, 2)
+                resolved.append(trade)
+                print(f"   🛑 {trade['ticker']} LOST — stop ${stop:.2f} hit on {outcome_date}")
 
             else:
                 pct_to_target = (target - latest_close) / entry * 100
