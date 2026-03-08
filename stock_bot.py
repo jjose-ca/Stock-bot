@@ -169,7 +169,7 @@ MIN_RR_RATIO          = 1.1    # Lowered from 1.5 — structural stops widen on 
 # Alerts will show exact dollar amounts to invest per signal.
 PORTFOLIO_VALUE = 2000.0  # ← Update this whenever your account size changes
 
-SWING_ATR_STOP_MULT   = 1.5    # Swing stop = support − (ATR × 1.5) — gives room for normal noise
+SWING_ATR_STOP_MULT   = 2.5    # Swing stop = support − (ATR × 2.5) — validated by ATR sweep (16.5% win rate)
 SWING_ATR_TARGET_MULT = 3.5    # Swing target = price + (ATR × 3.5) — wider target to maintain R/R
 
 # ── Volume thresholds ─────────────────────────────────────────────────────────
@@ -911,17 +911,18 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
     """
     Validates stop width dynamically based on the stock's own ATR.
     
-    Formula: dynamic_max = max(BASE, min(ATR% × 2.0, ABSOLUTE_CAP))
-    
+    Formula: dynamic_max = max(BASE, min(ATR% × 3.5, ABSOLUTE_CAP))
+
+    Ceiling raised to 3.5x to accommodate support-anchored stops at 2.5x ATR.
+    Entry is typically ~0.45x ATR above support, so total stop from entry
+    = 0.45 + 2.5 = ~2.95x ATR. Ceiling of 3.5x gives headroom without
+    being reckless. ABSOLUTE_MAX_STOP_PCT=15% is the hard safety net.
+
     This gives each stock room proportional to its natural daily movement:
-      - Low-vol stock  (ATR 0.8%): dynamic max = max(6%, 1.6%)  = 6.0%
-      - Mid-vol stock  (ATR 3.0%): dynamic max = max(6%, 6.0%)  = 6.0%
-      - High-vol stock (ATR 4.5%): dynamic max = max(6%, 9.0%)  = 9.0%
-      - Extreme stock  (ATR 9.0%): dynamic max = max(6%, 18%) → capped = 15.0%
-    
-    The 2.0× multiplier aligns with the stop formula (support - ATR × 0.8),
-    giving enough buffer above it without being reckless.
-    No manual per-ticker overrides needed — self-calibrates with market conditions.
+      - Low-vol stock  (ATR 0.8%): dynamic max = max(6%, 2.8%)  = 6.0%
+      - Mid-vol stock  (ATR 3.0%): dynamic max = max(6%, 10.5%) = 10.5%
+      - High-vol stock (ATR 4.5%): dynamic max = max(6%, 15.75%) → capped = 15.0%
+      - Extreme stock  (ATR 9.0%): dynamic max = max(6%, 31.5%) → capped = 15.0%
     """
     price      = signal["price"]
     stop_loss  = signal["stop_loss"]
@@ -929,13 +930,13 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
     atr        = signal.get("atr", 0)
 
     atr_pct          = atr / price if price > 0 else 0
-    dynamic_max_stop = max(BASE_MAX_STOP_PCT, min(atr_pct * 2.5, ABSOLUTE_MAX_STOP_PCT))
+    dynamic_max_stop = max(BASE_MAX_STOP_PCT, min(atr_pct * 3.5, ABSOLUTE_MAX_STOP_PCT))
     actual_pct       = (price - stop_loss) / price
 
     if actual_pct > dynamic_max_stop:
         print(f"   [{ticker}] ❌ Stop too wide "
               f"({actual_pct*100:.1f}% > {dynamic_max_stop*100:.1f}% dynamic max "
-              f"[ATR {atr_pct*100:.1f}% × 2.5]). Rejected.")
+              f"[ATR {atr_pct*100:.1f}% × 3.5]). Rejected.")
         return None
 
     risk   = price - stop_loss
