@@ -674,52 +674,10 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         penalty = 2
         reasons.append(f"⚠️ BB Squeeze (width {bb_width:.3f}) — reduced edge")
 
-    # ── ROC Deceleration Penalty (Malik-style trend velocity check) ───────────
-    # Inspired by: rate-of-change deceleration signals a trend running out of
-    # steam even when price is still above all EMAs. If the trend is slowing,
-    # reduce conviction before it reverses.
-    #
-    # ROC_10  = velocity of the current trend (last 10 days)
-    # ROC_ref = velocity 10 days ago (rolling comparison)
-    # If price is in bullish structure but ROC is meaningfully decelerating:
-    #   Mild deceleration  (ROC dropped > 30%): -1 point
-    #   Sharp deceleration (ROC dropped > 60%): -2 points
-    roc_penalty = 0
-    try:
-        # Use the actual datetime index to look up 10 and 20 trading days ago,
-        # rather than iloc[-11] / iloc[-21] which shift unpredictably after dropna
-        # removes warmup rows. This ensures ROC always compares true calendar
-        # windows regardless of how many rows were dropped earlier.
-        close_series = df['Close'].iloc[:-1].dropna()  # exclude today's incomplete bar
-        if len(close_series) >= 21:
-            today_idx   = close_series.index[-1]  # = yesterday's close
-            ten_ago_idx = close_series.index[-11]   # 10 bars back (inclusive of today)
-            twenty_ago_idx = close_series.index[-21]  # 20 bars back
-
-            close_today    = float(close_series.loc[today_idx])
-            close_ten_ago  = float(close_series.loc[ten_ago_idx])
-            close_twenty_ago = float(close_series.loc[twenty_ago_idx])
-
-            roc_10  = (close_today    - close_ten_ago)    / close_ten_ago    * 100
-            roc_ref = (close_ten_ago  - close_twenty_ago) / close_twenty_ago * 100
-
-            # Only penalise when price is above 50 EMA (bullish structure but decelerating)
-            if price > ema_50 and roc_ref > 1.0 and roc_10 < roc_ref:
-                decel_pct = (roc_ref - roc_10) / roc_ref  # how much velocity dropped
-                if decel_pct >= 0.60:
-                    roc_penalty = 2
-                    reasons.append(
-                        f"⚠️ Trend Sharply Decelerating — ROC {roc_ref:.1f}% → {roc_10:.1f}% (−{decel_pct*100:.0f}%)"
-                    )
-                elif decel_pct >= 0.30:
-                    roc_penalty = 1
-                    reasons.append(
-                        f"⚠️ Trend Decelerating — ROC {roc_ref:.1f}% → {roc_10:.1f}% (−{decel_pct*100:.0f}%)"
-                    )
-    except Exception:
-        pass
-
-    penalty += roc_penalty
+    # ROC deceleration penalty removed — tested and found to block 128 valid
+    # signals without improving signal quality. Backtest showed -0.144pp
+    # expectancy without it. The penalty was working empirically but the
+    # mechanism was flawed: fires on virtually every pullback by definition.
 
     # ── Final score ───────────────────────────────────────────────────────────
     score     = trend_score + momentum_score - penalty
