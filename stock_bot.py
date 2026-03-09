@@ -109,23 +109,25 @@ TICKERS_USD = [
 
     # ETFs
     'SPY', 'QQQM', 'QQQ', 'IWM',
-    'SOXQ', 'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB',
+    'SOXQ', 'XLY', 'GDX', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB',
     'VWO', 'VEA', 'SPMO',
 
     # Mega Cap / Defensive
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
-    'JPM', 'BAC', 'XOM', 'ABBV',
+    'JPM', 'BAC', 'XOM',
     'KO', 'PG', 'JNJ', 'V', 'MA',
 
     # Mid-risk
-    'NVDA', 'AVGO', 'QCOM', 'AMAT',
+    'NVDA', 'AVGO', 'AMAT',
     'NFLX', 'ORCL', 'CRM', 'NOW',
     'SHOP', 'UBER', 'TGT',
-    'OXY', 'DVN', 'CCL', 'DKNG', 'CVX', 'TSM',
+    'DVN', 'CCL', 'DKNG', 'CVX', 'TSM',
+    'CRWD', 'APP',                          # new — high ATR growth, mean-reverting
 
     # High beta
     'TSLA', 'PLTR', 'AMD', 'ARM', 'IOT',
-    'HOOD', 'COIN', 'MSTR', 'SNOW',
+    'HOOD', 'COIN', 'MSTR',
+    'DUOL', 'RDDT',                         # new — high ATR growth, mean-reverting
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
@@ -250,9 +252,11 @@ def get_time_penalty(et_now: datetime) -> tuple[int, list[str]]:
     # Opening noise penalty removed — swing score is based on yesterday's
     # completed bar, not today's intraday action. Gap filter handles open risk.
 
-    if et_now.weekday() == 4 and elapsed_min > LATE_FRIDAY_MINUTES:
-        penalty += 1
-        reasons.append("📅 Late Friday — weekend gap risk (+1 threshold)")
+    # Late Friday penalty removed — redundant for swing trading.
+    # Bracket orders (stop + target) sit on the broker over the weekend
+    # unattended regardless of entry day. The 2.5x ATR stop already absorbs
+    # weekend gaps (avg 0.3-0.8% vs stop of 7-10%). Earnings within 7 days
+    # is already caught by apply_earnings_penalty().
 
     return penalty, reasons
 
@@ -329,9 +333,17 @@ def extract_ticker_daily(bulk_data: pd.DataFrame, ticker: str) -> pd.DataFrame |
     REQUIRED_COLS = {'Open', 'High', 'Low', 'Close', 'Volume'}
     try:
         if isinstance(bulk_data.columns, pd.MultiIndex):
-            if ticker not in bulk_data.columns.get_level_values(0):
+            # Detect which level contains tickers — yfinance reversed the
+            # MultiIndex order in v0.2.36 from (Ticker, Price) to (Price, Ticker)
+            # so we can't hardcode level 0. Mirror the OHLCV detection in _flatten().
+            ticker_level = None
+            for i in range(bulk_data.columns.nlevels):
+                if ticker in bulk_data.columns.get_level_values(i):
+                    ticker_level = i
+                    break
+            if ticker_level is None:
                 return None
-            df = bulk_data[ticker].copy()
+            df = bulk_data.xs(ticker, level=ticker_level, axis=1).copy()
         else:
             # Single-ticker path: triggered when --ticker CLI flag is used.
             # Validate that expected OHLCV columns are present before returning —
