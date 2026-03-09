@@ -8,8 +8,8 @@
     "fetched": "2026-02-25"
   },
   "TOU.TO": {
-    "earnings_date": "2026-03-04",
-    "fetched": "2026-02-25"
+    "earnings_date": "2026-05-06",
+    "fetched": "2026-03-09"
   },
   "HUT.TO": {
     "earnings_date": "2026-02-25",
@@ -54,5 +54,13 @@
   "KO": {
     "earnings_date": "2026-04-28",
     "fetched": "2026-03-06"
+  },
+  "AVGO": {
+    "earnings_date": "2026-06-03",
+    "fetched": "2026-03-09"
+  },
+  "ATD.TO": {
+    "earnings_date": "2026-03-17",
+    "fetched": "2026-03-09"
   }
 }
