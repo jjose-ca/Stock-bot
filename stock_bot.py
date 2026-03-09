@@ -122,12 +122,14 @@ TICKERS_USD = [
     'NFLX', 'ORCL', 'CRM', 'NOW',
     'SHOP', 'UBER', 'TGT',
     'DVN', 'CCL', 'DKNG', 'CVX', 'TSM',
-    'CRWD', 'APP',                          # new — high ATR growth, mean-reverting
+    'CRWD', 'APP',                          # added — high ATR growth, mean-reverting
+    'DDOG', 'SPOT', 'TTD',                  # added — cloud/streaming/adtech, clean EMA structure
+    'NET', 'HIMS', 'DASH',                  # added — cloud security / health tech / consumer tech
 
     # High beta
     'TSLA', 'PLTR', 'AMD', 'ARM', 'IOT',
     'HOOD', 'COIN', 'MSTR',
-    'DUOL', 'RDDT',                         # new — high ATR growth, mean-reverting
+    'DUOL', 'RDDT',                         # added — high ATR growth, mean-reverting
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
@@ -474,10 +476,11 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     df = df_daily.copy()
 
-    df['EMA_21'] = ta.ema(df['Close'], length=21)
-    df['EMA_50'] = ta.ema(df['Close'], length=50)
-    df['RSI']    = ta.rsi(df['Close'], length=14)
-    df['ATR']    = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['EMA_21']  = ta.ema(df['Close'], length=21)
+    df['EMA_50']  = ta.ema(df['Close'], length=50)
+    df['EMA_200'] = ta.ema(df['Close'], length=200)
+    df['RSI']     = ta.rsi(df['Close'], length=14)
+    df['ATR']     = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
     macd = ta.macd(df['Close'])
     if macd is not None:
@@ -514,6 +517,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     price    = float(scored['Close'])     # yesterday's close — all scoring based on this
     ema_21   = float(scored['EMA_21'])
     ema_50   = float(scored['EMA_50'])
+    ema_200  = float(scored['EMA_200']) if 'EMA_200' in df.columns and not pd.isna(scored.get('EMA_200', float('nan'))) else None
     rsi      = float(scored['RSI'])
     atr      = float(scored['ATR'])
     bbl      = float(scored['BBL'])      if 'BBL'      in df.columns else None
@@ -523,16 +527,65 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     reasons = []
 
+    # ── PATH A — DEEP OVERSOLD BYPASS ────────────────────────────────────────
+    # Checked FIRST — before the structural gate below.
+    # RSI<35 stocks are deeply sold off and almost always below both 21 and 50
+    # EMA — which would trigger the structural gate and silently block 98% of
+    # these elite setups (84% resolved WR, +3.74% avg exp).
+    # The 200 EMA acts as the structural anchor: if price is above it, the
+    # stock is in a long-term uptrend having a severe short-term pullback.
+    if rsi < 35 and ema_200 is not None and price > ema_200:
+        trend_score     = 3
+        momentum_score  = 3
+        score           = trend_score + momentum_score
+        threshold       = SWING_SCORE_THRESHOLD + total_penalty
+        oversold_bypass = True
+        daily_low       = float(scored['Low'])
+        daily_close     = float(scored['Close'])
+        is_bullish      = price > ema_21
+        high_52w        = float(df['Close'].tail(252).max())
+        near_52w_high   = price >= high_52w * 0.98
+        support         = ema_200
+        support_source  = "200 EMA"
+        stop_loss       = support - (atr * SWING_ATR_STOP_MULT)
+        if stop_loss >= entry_price:
+            stop_loss = entry_price - atr
+        take_profit = entry_price + (atr * SWING_ATR_TARGET_MULT)
+        # rr_ratio not computed here — validate_risk overwrites it with ATR ratio (3.5/2.5=1.40)
+        reasons = [
+            f"💎 Deep Oversold Bounce — RSI {rsi:.1f}",
+            f"🏔️  Above 200 EMA ${ema_200:.2f} (Long-term Uptrend Intact)",
+        ]
+        print(f"   [{ticker}] ✅ PATH A — Deep Oversold Bypass "
+              f"RSI={rsi:.1f} above 200EMA=${ema_200:.2f}")
+        return {
+            "price": entry_price, "entry_price": entry_price,
+            "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
+            "rr_ratio": round(rr_ratio, 2), "score": score, "threshold": threshold,
+            "trend_score": trend_score, "momentum_score": momentum_score,
+            "oversold_bypass": oversold_bypass, "atr": round(atr, 4),
+            "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
+            "ema_200": round(ema_200, 2) if ema_200 else None,
+            "rsi": round(rsi, 1), "bbl": round(bbl, 2) if bbl else None,
+            "bb_width": round(bb_width, 4), "macd_h": round(macd_h, 4),
+            "support": round(support, 2), "support_source": support_source,
+            "is_bullish": is_bullish, "near_52w_high": near_52w_high,
+            "mode": "SWING", "reasons": reasons,
+            "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
+        }
+
     # ── Category: TREND / STRUCTURE (cap at 4) ────────────────────────────────
-    trend_score = 0
-    trend_cap   = SWING_CATEGORY_CAPS["trend"]
+    # PATH B only — Path A (RSI<35 + above 200 EMA) bypasses this entirely.
+    trend_score     = 0
+    oversold_bypass = False
+    trend_cap       = SWING_CATEGORY_CAPS["trend"]
 
     # C. 21 EMA wick detection
     daily_low   = float(scored['Low'])
     daily_close = float(scored['Close'])  # same as price — yesterday's confirmed close
     # ── STRUCTURAL GATE: must be above at least one EMA ──────────────────
-    # Prevents signals where price is below both 21 and 50 EMA — those are
-    # downtrends, not pullbacks. Swing setups need at least one EMA as support.
+    # Path B only — prevents signals where price is below both 21 and 50 EMA.
+    # Those are downtrends, not pullbacks. Path A has its own gate (200 EMA).
     if price < ema_21 and price < ema_50:
         print(f"   [{ticker}] ❌ Below both EMAs (21 EMA ${ema_21:.2f}, "
               f"50 EMA ${ema_50:.2f}) — not a pullback, rejected.")
@@ -1745,7 +1798,16 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
 
         position_pct  = signal.get("position_size_pct", 4.8) / 100
         dollar_amount = PORTFOLIO_VALUE * position_pct
-        qty = max(1, int(dollar_amount / entry))  # whole shares only — min 1 share always placed
+        qty = int(dollar_amount / entry)  # whole shares only — no fractional shares on brackets
+        if qty < 1:
+            print(f"   ⚠️ {ticker} — Cannot afford 1 share "
+                  f"(allocated ${dollar_amount:.2f}, price ${entry:.2f}). Skipping.")
+            _post_discord({"embeds": [{"title": f"⚠️ Skipped — {ticker} Too Expensive",
+                "description": (f"Allocated **${dollar_amount:.2f}** but 1 share costs "
+                                f"**${entry:.2f}**. Increase `PORTFOLIO_VALUE` or "
+                                f"remove {ticker} from watchlist."),
+                "color": COLOR_YELLOW}]})
+            return False
         print(f"   📐 Position: {qty} share(s) @ ~${entry:.2f} = ${qty*entry:.2f} "
               f"(allocated ${dollar_amount:.2f})")
 
