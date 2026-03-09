@@ -371,7 +371,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 237.11000061035156,
-    "min_price": 225.05999755859375
+    "min_price": 223.22999572753906
   },
   {
     "id": "SMCI_20260227_1001",
@@ -1048,7 +1048,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 77.19000244140625,
+    "max_price": 77.59500122070312,
     "min_price": 76.3499984741211
   },
   {
@@ -1075,8 +1075,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 335.64,
-    "min_price": 335.64
+    "max_price": 342.92999267578125,
+    "min_price": 323.610107421875
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1104,8 +1104,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 79.91,
-    "min_price": 79.91
+    "max_price": 80.62000274658203,
+    "min_price": 79.5
   },
   {
     "id": "TOU.TO_20260309_1014",
@@ -1133,7 +1133,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 64.06,
-    "min_price": 64.06
+    "max_price": 64.91000366210938,
+    "min_price": 63.63999938964844
   }
 ]
