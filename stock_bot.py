@@ -107,29 +107,29 @@ def get_alpaca_client():
 TICKERS_USD = [
     'VTI',          # ← Keep this — used for market regime check, not traded
 
-    # ETFs
+    # ETFs — slow ETFs (GDX, SOXQ, GLD, SLV, VWO, VEA) removed: low ATR, rarely
+    # reach ATR-scaled targets in 10-day hold, negative or near-zero backtest exp
     'SPY', 'QQQM', 'QQQ', 'IWM',
-    'SOXQ', 'XLY', 'GDX', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB',
-    'VWO', 'VEA', 'SPMO',
+    'XLY', 'XLF', 'XLK', 'SMH', 'ITB', 'SPMO',
 
-    # Mega Cap / Defensive
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
+    # Mega Cap / Defensive — MSFT, KO, PG, JNJ removed: negative backtest exp
+    'AAPL', 'GOOGL', 'AMZN', 'META',
     'JPM', 'BAC', 'XOM',
-    'KO', 'PG', 'JNJ', 'V', 'MA',
+    'V', 'MA',
 
-    # Mid-risk
-    'NVDA', 'AVGO', 'AMAT',
+    # Mid-risk — AMAT, DKNG, CVX, DDOG, CRWD removed: negative backtest exp
+    # DVN removed: low ATR oil play, inconsistent mean-reversion
+    'NVDA', 'AVGO',
     'NFLX', 'ORCL', 'CRM', 'NOW',
     'SHOP', 'UBER', 'TGT',
-    'DVN', 'CCL', 'DKNG', 'CVX', 'TSM',
-    'CRWD', 'APP',                          # added — high ATR growth, mean-reverting
-    'DDOG', 'SPOT', 'TTD',                  # added — cloud/streaming/adtech, clean EMA structure
-    'NET', 'HIMS', 'DASH',                  # added — cloud security / health tech / consumer tech
+    'CCL', 'TSM',
+    'APP', 'SPOT', 'TTD',
+    'NET', 'HIMS', 'DASH',
 
     # High beta
     'TSLA', 'PLTR', 'AMD', 'ARM', 'IOT',
     'HOOD', 'COIN', 'MSTR',
-    'DUOL', 'RDDT',                         # added — high ATR growth, mean-reverting
+    'DUOL', 'RDDT',
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
@@ -1635,13 +1635,49 @@ def check_market(mode: str, tickers_override: list | None = None):
             )
             alerts_sent += 1
 
+            # ── Duplicate guard (Alpaca-backed) ───────────────────────────────
+            # trade_log.json is NOT persisted between GitHub Actions runs —
+            # each runner starts with a fresh workspace, so the file-based
+            # deduplication in log_new_trade() sees 0 open trades every run.
+            # Alpaca IS persistent across runs, so we use it as the source of
+            # truth: if an open position OR pending order already exists for
+            # this ticker, skip logging AND placing — don't fire twice.
+            #
+            # Bypassed in --dry-run mode so after-hours testing works even when
+            # real positions are open for the ticker being tested.
+            already_active = False
+            if not globals().get('DRY_RUN', False):
+                try:
+                    from alpaca.trading.client import TradingClient
+                    _api_key    = os.getenv('ALPACA_API_KEY', '')
+                    _api_secret = os.getenv('ALPACA_SECRET_KEY', '')
+                    if _api_key and _api_secret and ".TO" not in ticker:
+                        _ac = TradingClient(_api_key, _api_secret, paper=True)
+                        _positions = _ac.get_all_positions()
+                        if any(p.symbol == ticker for p in _positions):
+                            print(f"   ⏭️  {ticker} — open Alpaca position exists, skipping")
+                            already_active = True
+                        if not already_active:
+                            _orders = _ac.get_orders()
+                            if any(o.symbol == ticker for o in _orders):
+                                print(f"   ⏭️  {ticker} — pending Alpaca order exists, skipping")
+                                already_active = True
+                except Exception as _e:
+                    # Alpaca check failed — fall back to trade_log file guard only
+                    print(f"   ⚠️  Alpaca duplicate check failed ({_e}), relying on file guard")
+
+            if already_active:
+                continue
+
             # Log the trade for outcome tracking
             log_new_trade(ticker, currency, final_signal)
 
-            # Place Alpaca paper bracket order
+            # Place Alpaca paper bracket order (skipped in --dry-run)
             sig_mode = final_signal.get("mode", "")
             print(f"   🔍 Signal mode: '{sig_mode}' | elapsed_min: {elapsed_min:.0f}")
-            if sig_mode == "SWING":
+            if globals().get('DRY_RUN', False):
+                print(f"   ⚠️  DRY RUN — Alpaca order skipped for {ticker}")
+            elif sig_mode == "SWING":
                 place_alpaca_bracket_order(ticker, final_signal, elapsed_min)
             else:
                 print(f"   ⚠️ Skipping Alpaca — mode is '{sig_mode}', expected 'SWING'")
@@ -2035,7 +2071,13 @@ if __name__ == "__main__":
     parser.add_argument('--ticker',
         type=str, default=None,
         help='Scan a single ticker, e.g. --ticker NVDA')
+    parser.add_argument('--dry-run', action='store_true',
+        help='Skip Alpaca duplicate guard and order placement. Safe for after-hours testing.')
     args = parser.parse_args()
+
+    DRY_RUN = args.dry_run
+    if DRY_RUN:
+        print("⚠️  DRY RUN — Alpaca duplicate guard and order placement disabled")
 
     et_now = datetime.now(pytz.timezone(TIMEZONE))
 
