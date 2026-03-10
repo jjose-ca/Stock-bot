@@ -319,7 +319,7 @@ def fetch_bulk_daily(tickers: list) -> pd.DataFrame:
     print(f"📥 STAGE 1: Bulk downloading 1y daily data for {len(tickers)} tickers...")
     try:
         df = yf.download(
-            tickers, period="1y", interval="1d",
+            tickers, period="2y", interval="1d",
             group_by='ticker', auto_adjust=True, progress=False,
             multi_level_index=False   # Requires yfinance ≥ 0.2.38 — flat columns, no MultiIndex
         )
@@ -543,7 +543,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         daily_low       = float(scored['Low'])
         daily_close     = float(scored['Close'])
         is_bullish      = price > ema_21
-        high_52w        = float(df['Close'].tail(252).max())
+        high_52w        = float(df['High'].tail(252).max())
         near_52w_high   = price >= high_52w * 0.98
         support         = ema_200
         support_source  = "200 EMA"
@@ -551,7 +551,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         if stop_loss >= entry_price:
             stop_loss = entry_price - atr
         take_profit = entry_price + (atr * SWING_ATR_TARGET_MULT)
-        # rr_ratio not computed here — validate_risk overwrites it with ATR ratio (3.5/2.5=1.40)
+        rr_ratio = 0.0  # placeholder — validate_risk overwrites with ATR ratio (3.5/2.5=1.40)
         reasons = [
             f"💎 Deep Oversold Bounce — RSI {rsi:.1f}",
             f"🏔️  Above 200 EMA ${ema_200:.2f} (Long-term Uptrend Intact)",
@@ -628,7 +628,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         reasons.append("✅ Price Above Daily 50 EMA (Bullish Structure)")
 
     # H. 52-week high zone
-    high_52w      = float(df['Close'].tail(252).max())
+    high_52w      = float(df['High'].tail(252).max())
     near_52w_high = price >= high_52w * 0.98
     if near_52w_high:
         trend_score += 1
@@ -651,10 +651,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         momentum_score += 1
         reasons.append(f"🌊 Daily Momentum Reset ({rsi:.1f})")
 
-    # B. BB lower band close
-    if bbl is not None and price <= bbl * 1.02:   # widened 1% → 2% tolerance
-        momentum_score += 3
-        reasons.append(f"🛡️ Closed at Daily BB Lower (${bbl:.2f})")
+    # BB lower band removed — zero true touches in 3yr backtest (entry is next-day
+    # open, band is never actually reached at entry). 169 signals it fired on
+    # averaged only +0.08% exp vs +0.92% for non-BB signals. Actively hurt quality.
 
     # F. MACD
     if macd_h > 0:
