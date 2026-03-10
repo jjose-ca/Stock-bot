@@ -1075,7 +1075,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 348.489990234375,
+    "max_price": 353.1400146484375,
     "min_price": 323.6099853515625
   },
   {
@@ -1104,7 +1104,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 81.05000305175781,
+    "max_price": 82.29499816894531,
     "min_price": 79.5
   },
   {
@@ -1134,6 +1134,34 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 64.91000366210938,
-    "min_price": 63.11000061035156
+    "min_price": 61.709999084472656
+  },
+  {
+    "id": "SMH_20260310_1114",
+    "ticker": "SMH",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "entry": 401.16,
+    "stop_loss": 360.41,
+    "take_profit": 447.45,
+    "rr_ratio": 1.4,
+    "score": 6,
+    "threshold": 6,
+    "atr": 13.2253,
+    "reasons": [
+      "\u26a0\ufe0f Below 21 EMA \u2014 Testing as Support ($401.57)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($393.47)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (46.7)",
+      "\ud83d\udd04 Daily MACD: Improving Momentum"
+    ],
+    "alert_date": "2026-03-10",
+    "alert_time": "11:14 ET",
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 401.16,
+    "min_price": 401.16
   }
 ]
