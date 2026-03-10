@@ -171,7 +171,7 @@ MIN_RR_RATIO          = 1.1    # Lowered from 1.5 — structural stops widen on 
 # ── Portfolio value ───────────────────────────────────────────────────────────
 # Set this to your total trading capital in USD.
 # Alerts will show exact dollar amounts to invest per signal.
-PORTFOLIO_VALUE = 2000.0  # ← Update this whenever your account size changes
+PORTFOLIO_VALUE = 10000.0  # ← Update this whenever your account size changes
 
 SWING_ATR_STOP_MULT   = 2.5    # Swing stop = support − (ATR × 2.5) — validated by ATR sweep (16.5% win rate)
 SWING_ATR_TARGET_MULT = 3.5    # Swing target = entry + (ATR × 3.5)
