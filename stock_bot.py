@@ -53,8 +53,19 @@ import pytz
 import requests
 import yfinance as yf
 
+import tempfile
 from datetime import datetime
 from pathlib import Path
+
+try:
+    import mplfinance as mpf
+    import matplotlib
+    matplotlib.use("Agg")   # headless — no display needed
+    import matplotlib.pyplot as plt
+    CHART_AVAILABLE = True
+except ImportError:
+    CHART_AVAILABLE = False
+    print("⚠️  mplfinance not installed — chart images disabled. Run: pip install mplfinance")
 
 # ── Alpaca paper trading ──────────────────────────────────────────────────────
 try:
@@ -1219,18 +1230,150 @@ def set_state(ticker: str, new_state: str, stop_loss: float = None, mode: str = 
 
 
 # =============================================================================
+#  SECTION 10B — SIGNAL CHART GENERATOR
+#  Saves a candlestick chart PNG at the moment of signal scoring.
+#  Shows last 60 candles with EMA 21/50/200, RSI panel, and entry/stop/target.
+#  Chart is attached to the Discord alert as a file upload.
+# =============================================================================
+
+CHARTS_DIR = Path(tempfile.gettempdir()) / "charts"
+CHARTS_DIR.mkdir(exist_ok=True, parents=True)
+
+def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path | None:
+    """
+    Generate a candlestick chart for the signal and save to disk.
+    Returns the Path to the saved PNG, or None if chart generation fails.
+
+    Layout:
+      - Top panel:    60-day OHLC candles + EMA 21 (blue) / EMA 50 (orange) / EMA 200 (purple)
+                      Horizontal lines: entry (green dashed), target (lime), stop (red)
+      - Bottom panel: RSI 14 with 30/50/70 reference lines
+    """
+    if not CHART_AVAILABLE:
+        return None
+
+    try:
+        # ── Slice to last 60 candles ────────────────────────────────────────
+        plot_df = df[['Open','High','Low','Close','Volume']].tail(60).copy()
+        plot_df.index = pd.DatetimeIndex(plot_df.index)
+        if plot_df.index.tz is not None:
+            plot_df.index = plot_df.index.tz_localize(None)
+
+        entry  = signal.get("price", 0)
+        target = signal.get("take_profit", 0)
+        stop   = signal.get("stop_loss", 0)
+        rsi    = df['RSI'].tail(60).values
+
+        # ── EMA overlays ────────────────────────────────────────────────────
+        ema21  = df['EMA_21'].tail(60).values
+        ema50  = df['EMA_50'].tail(60).values
+        ema200 = df['EMA_200'].tail(60).values
+
+        apds = [
+            mpf.make_addplot(ema21,  color='#3399ff', width=1.2,  panel=0, label='EMA 21'),
+            mpf.make_addplot(ema50,  color='#ff9933', width=1.2,  panel=0, label='EMA 50'),
+            mpf.make_addplot(ema200, color='#cc44ff', width=1.0,  panel=0, label='EMA 200'),
+            mpf.make_addplot(rsi,    color='#ffffff', width=1.2,  panel=1, ylabel='RSI',
+                             ylim=(0, 100)),
+        ]
+
+        # ── Horizontal lines (entry / target / stop) ────────────────────────
+        hlines = dict(
+            hlines=[entry, target, stop],
+            colors=['#00ff88', '#00cc44', '#ff3333'],
+            linestyle=['--', '-', '-'],
+            linewidths=[1.0, 1.0, 1.0],
+        )
+
+        # ── RSI reference levels as separate addplot lines ──────────────────
+        rsi_30 = [30] * len(plot_df)
+        rsi_50 = [50] * len(plot_df)
+        rsi_70 = [70] * len(plot_df)
+        apds += [
+            mpf.make_addplot(rsi_30, color='#ff4444', width=0.6, linestyle='--', panel=1),
+            mpf.make_addplot(rsi_50, color='#888888', width=0.6, linestyle='--', panel=1),
+            mpf.make_addplot(rsi_70, color='#44ff44', width=0.6, linestyle='--', panel=1),
+        ]
+
+        # ── Style ────────────────────────────────────────────────────────────
+        style = mpf.make_mpf_style(
+            base_mpf_style='nightclouds',
+            rc={
+                'axes.labelcolor':  '#cccccc',
+                'xtick.color':      '#999999',
+                'ytick.color':      '#999999',
+                'figure.facecolor': '#1a1a2e',
+                'axes.facecolor':   '#16213e',
+            }
+        )
+
+        score     = signal.get('score', '?')
+        rsi_val   = signal.get('rsi', 0)
+        scenario  = signal.get('scenario_label', '')
+        date_str  = datetime.now().strftime('%Y-%m-%d %H:%M')
+        title     = (f"{ticker}  |  Score {score}  |  RSI {rsi_val:.1f}"
+                     f"\n{scenario}  |  {date_str} ET"
+                     f"\nEntry ${entry:.2f}  ▲ Target ${target:.2f}"
+                     f"  ▼ Stop ${stop:.2f}")
+
+        # ── Save ─────────────────────────────────────────────────────────────
+        out_path = CHARTS_DIR / f"{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+
+        fig, axes = mpf.plot(
+            plot_df,
+            type='candle',
+            style=style,
+            addplot=apds,
+            volume=True,
+            panel_ratios=(4, 1, 1),   # candles : volume : RSI
+            title=title,
+            figsize=(14, 9),
+            tight_layout=True,
+            returnfig=True,
+            **hlines,
+        )
+
+        fig.savefig(out_path, dpi=130, bbox_inches='tight',
+                    facecolor='#1a1a2e')
+        plt.close(fig)
+        print(f"   📸 Chart saved: {out_path}")
+        return out_path
+
+    except Exception as e:
+        print(f"   ⚠️  Chart generation failed for {ticker}: {e}")
+        return None
+
+
+# =============================================================================
 #  SECTION 11 — DISCORD ALERT
 #  Rich embed with trade plan, technicals, reasons, and contextual banners.
 # =============================================================================
 
-def _post_discord(payload: dict):
+def _post_discord(payload: dict, chart_path: Path | None = None):
     if not DISCORD_WEBHOOK_URL:
         print("⚠️  DISCORD_URL not set — skipping webhook.")
         return
     try:
-        r = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        if chart_path and chart_path.exists():
+            # Multipart upload — embeds the chart image directly in the Discord message.
+            # Discord requires payload_json for the embed when sending multipart.
+            import json as _json
+            with open(chart_path, 'rb') as img:
+                r = requests.post(
+                    DISCORD_WEBHOOK_URL,
+                    data={"payload_json": _json.dumps(payload)},
+                    files={"file": (chart_path.name, img, "image/png")},
+                    timeout=20,
+                )
+            # Clean up chart file after sending — don't accumulate PNGs
+            try:
+                chart_path.unlink()
+            except Exception:
+                pass
+        else:
+            r = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+
         if not r.ok:
-            # Print full Discord error response so we can diagnose exactly what's wrong
             print(f"❌ Discord error: {r.status_code} — {r.text[:500]}")
             return
         r.raise_for_status()
@@ -1241,8 +1384,8 @@ def _post_discord(payload: dict):
 
 def send_setup_alert(ticker, currency, signal,
                      rel_vol, elapsed_minutes, mode, regime_bullish,
-                     earnings_msg=""):
-    """Sends a swing trade setup embed to Discord."""
+                     earnings_msg="", df: pd.DataFrame | None = None):
+    """Sends a swing trade setup embed to Discord, with an auto-generated chart image."""
     et_now     = datetime.now(pytz.timezone(TIMEZONE))
     curr_sym   = 'CA$' if currency == 'CAD' else '$'
     scenario   = signal.get("scenario", "?")
@@ -1351,13 +1494,20 @@ def send_setup_alert(ticker, currency, signal,
             "title":       f"{rating} — {ticker}  (Score {score})",
             "description": desc,
             "color":       color,
-            "fields": [{"name": "🔗 Chart",
-                        "value": f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})",
+            "fields": [{"name": "🔗 Charts",
+                        "value": (f"[TradingView](https://www.tradingview.com/chart/?symbol={ticker}) · "
+                                  f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})"),
                         "inline": False}],
             "footer": {"text": f"Stock Alert Bot v5.0 | ATR: {signal.get('atr_source','—')}"},
         }],
     }
-    _post_discord(payload)
+
+    # Generate chart image using exact df the scorer used, attach to Discord embed
+    chart_path = generate_signal_chart(ticker, df, signal) if df is not None else None
+    if chart_path:
+        payload["embeds"][0]["image"] = {"url": f"attachment://{chart_path.name}"}
+
+    _post_discord(payload, chart_path=chart_path)
     print(f"   ✅ Alert sent: {ticker} | Scenario {scenario} | {trade_mode} | {currency}")
 
 
@@ -1631,7 +1781,8 @@ def check_market(mode: str, tickers_override: list | None = None):
             send_setup_alert(
                 ticker=ticker, currency=currency, signal=final_signal,
                 rel_vol=rel_vol, elapsed_minutes=elapsed_min, mode=mode,
-                regime_bullish=regime_bullish, earnings_msg=earnings_msg
+                regime_bullish=regime_bullish, earnings_msg=earnings_msg,
+                df=df_d,
             )
             alerts_sent += 1
 
