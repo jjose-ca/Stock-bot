@@ -4,3 +4,4 @@ pandas-ta
 requests
 numpy
 alpaca-py
+mplfinance
