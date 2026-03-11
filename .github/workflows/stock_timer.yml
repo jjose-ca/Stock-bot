@@ -2,26 +2,30 @@ name: Run Stock Bot
 
 on:
   schedule:
-    # Premarket: once at 8:45am ET
-    #   EDT (Summer, Mar–Nov): UTC-4 → 8:45am + 4h = 12:45 UTC
-    #   EST (Winter, Nov–Mar): UTC-5 → 8:45am + 5h = 13:45 UTC
+    # All times target ET market hours. GitHub Actions cron runs in UTC.
+    # DST is handled by running BOTH UTC offsets year-round — the bot's
+    # internal market-hours gate (elapsed_minutes check) rejects any run
+    # that fires outside 9:30am-4:00pm ET, so duplicate fires are harmless.
+    #
+    # EDT (Mar-Nov): UTC-4  |  EST (Nov-Mar): UTC-5
+    # Running both offsets means exactly one fires correctly each season.
+
+    # Premarket: 8:45am ET
+    #   EDT -> 12:45 UTC  |  EST -> 13:45 UTC
     - cron: '45 12 * * 1-5'
     - cron: '45 13 * * 1-5'
 
-    # Intraday: every hour at :30, 9:30am–2:30pm ET (informational)
-    #   EDT: 13:30–18:30 UTC | EST: 14:30–19:30 UTC
-    - cron: '30 13-18 * * 1-5'
+    # Intraday: every hour at :00, 10:00am-2:00pm ET
+    #   EDT -> 14:00-18:00 UTC  |  EST -> 15:00-19:00 UTC
+    - cron: '0 14-18 * * 1-5'
+    - cron: '0 15-19 * * 1-5'
 
-    # Power Hour: 3:00, 3:15, 3:30, 3:45pm ET only
-    # 4:00pm removed — market closed, bot has hard stop at elapsed >= 390min
-
-    # EDT (Summer, Mar–Nov): UTC-4
+    # Power Hour: 3:00, 3:15, 3:30, 3:45pm ET
+    #   EDT -> 19:00-19:45 UTC  |  EST -> 20:00-20:45 UTC
     - cron: '0 19 * * 1-5'
     - cron: '15 19 * * 1-5'
     - cron: '30 19 * * 1-5'
     - cron: '45 19 * * 1-5'
-
-    # EST (Winter, Nov–Mar): UTC-5
     - cron: '0 20 * * 1-5'
     - cron: '15 20 * * 1-5'
     - cron: '30 20 * * 1-5'
