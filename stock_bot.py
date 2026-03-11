@@ -11,7 +11,7 @@ WHAT THIS BOT DOES:
 
 v5.0 CHANGES:
   1. COMPLETED-BAR SIGNALING — Day engine now signals on the last completed
-     5m candle (iloc[-2]), not the in-progress bar. Prevents false triggers
+     5m candle (iloc[-1]) — today's bar at 3:45pm. Market order fills immediately
      from partial candles that reverse before close.
   2. CATEGORY-CAPPED SCORING — Signals are grouped into categories (Trend,
      Momentum, Confirmation) with independent hard caps. This forces setups
@@ -43,6 +43,7 @@ ARCHITECTURE — Three-Stage Funnel:
 """
 
 import os
+import sys
 import json
 import time
 import argparse
@@ -245,9 +246,9 @@ def get_scan_mode(et_now: datetime) -> str:
     if 8.5  <= t < 9.5:  return "premarket"
     if 9.5  <= t < 16.0: return "swing"
 
-    # Outside defined windows — default to swing scan.
-    print("🌙 Outside normal scan windows — defaulting to swing mode.")
-    return "swing"
+    # Outside market hours — return None to signal the main loop to exit.
+    print(f"🌙 Outside market hours ({et_now.strftime('%H:%M')} ET) — skipping scan.")
+    return "closed"
 
 
 def get_time_penalty(et_now: datetime) -> tuple[int, list[str]]:
@@ -521,18 +522,19 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     if len(df) < 3:
         return None
 
-    # ── Anti-repainting: score on yesterday's COMPLETED bar ───────────────────
-    # iloc[-1] is today's in-progress candle — its Close, RSI, BBL etc. will
-    # keep changing until 4:00pm. Scoring on it mid-session creates false signals
-    # that look nothing like the final daily close.
-    # iloc[-2] is yesterday's confirmed, final, never-changing bar — safe to score.
-    # iloc[-1].Close is used only for the entry price (what you actually pay today).
-    scored = df.iloc[-2]   # yesterday — completed bar, all signal logic
-    prev   = df.iloc[-3]   # day before yesterday — MACD direction comparison
-    today  = df.iloc[-1]   # today — incomplete bar, entry price only
+    # ── Score on TODAY's candle (iloc[-1]) at 3:45pm ─────────────────────────
+    # Since the bot fires a market order at 3:45pm (fills immediately), we score
+    # on today's in-progress candle. The entry price IS today's current price,
+    # so scoring on yesterday (iloc[-2]) would be one day stale.
+    # Key benefits:
+    #   - Bullish Engulfing: today engulfing yesterday is the live pattern
+    #   - Hammer: buyers defending support RIGHT NOW as we enter
+    #   - RSI/EMA: most current values at time of fill
+    scored = df.iloc[-1]   # today — current bar at 3:45pm, all signal logic
+    prev   = df.iloc[-2]   # yesterday — completed bar, MACD/engulfing comparison
 
-    entry_price = float(today['Close'])   # actual price you pay at today's close
-    price    = float(scored['Close'])     # yesterday's close — all scoring based on this
+    entry_price = float(scored['Close'])  # today's current price = actual fill price
+    price    = float(scored['Close'])     # same — scoring and entry on same bar
     ema_21   = float(scored['EMA_21'])
     ema_50   = float(scored['EMA_50'])
     ema_200  = float(scored['EMA_200']) if 'EMA_200' in df.columns and not pd.isna(scored.get('EMA_200', float('nan'))) else None
@@ -858,14 +860,14 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         stop_loss = entry_price - atr
 
     # Gap filter — measures the true overnight gap (today's Open vs yesterday's Close)
-    # Bug fix: using entry_price (live 3:45pm price) vs yesterday's close measured
-    # intraday momentum, not the gap. A stock opening flat then rallying 5% intraday
-    # would be wrongly rejected. The true gap is Open - prev_Close.
-    today_open  = float(today['Open'])
-    gap_pct     = (today_open - price) / price * 100
+    # Since scored = iloc[-1] (today), today_open = scored['Open'],
+    # and the gap is vs prev['Close'] (yesterday's confirmed close).
+    today_open    = float(scored['Open'])
+    prev_close_px = float(prev['Close'])
+    gap_pct       = (today_open - prev_close_px) / prev_close_px * 100
     intraday_move = (entry_price - today_open) / today_open * 100  # for logging only
 
-    print(f"   [{ticker}] 📍 Scored on yesterday ${price:.2f} | "
+    print(f"   [{ticker}] 📍 Scored on today ${price:.2f} | "
           f"Gap {gap_pct:+.1f}% | Intraday {intraday_move:+.1f}% | Entry ${entry_price:.2f}")
 
     # Dynamic ATR-based gap filter — flat % is too strict for high-beta stocks
@@ -1300,13 +1302,9 @@ CHARTS_DIR.mkdir(exist_ok=True, parents=True)
 
 def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path | None:
     """
-    Generate a candlestick chart for the signal and save to disk.
-    Returns the Path to the saved PNG, or None if chart generation fails.
-
-    Layout:
-      - Top panel:    60-day OHLC candles + EMA 21/50/200 overlays
-                      axhline: entry (green dashed), target (lime), stop (red)
-      - Bottom panel: RSI 14 with axhline 30/50/70 reference lines
+    Generate a candlestick chart using pure matplotlib (no mplfinance panel quirks).
+    Layout: top 70% = candles + EMAs + entry/stop/target lines
+            bottom 30% = RSI with 30/50/70 reference lines
     """
     if not CHART_AVAILABLE:
         return None
@@ -1314,24 +1312,26 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
     try:
         import traceback as _tb
         import numpy as np
+        import matplotlib.patches as mpatches
+        import matplotlib.dates as mdates
 
-        # ── Slice to last 60 candles ─────────────────────────────────────────
-        plot_df = df[['Open','High','Low','Close','Volume']].tail(60).copy()
-        plot_df.index = pd.DatetimeIndex(plot_df.index)
-        if plot_df.index.tz is not None:
-            plot_df.index = plot_df.index.tz_localize(None)
-
-        n = len(plot_df)
+        # ── Slice last 60 bars ───────────────────────────────────────────────
+        sub = df.tail(60).copy()
+        sub.index = pd.DatetimeIndex(sub.index)
+        if sub.index.tz is not None:
+            sub.index = sub.index.tz_localize(None)
+        n = len(sub)
+        xs = np.arange(n)   # integer x positions (avoids date-gap issues)
 
         entry  = signal.get("price", 0)
         target = signal.get("take_profit", 0)
         stop   = signal.get("stop_loss", 0)
 
-        # ── Safe column extract: forward-fill NaN, return None if all-NaN ────
+        # ── Safe column ──────────────────────────────────────────────────────
         def safe_col(col):
-            if col not in df.columns:
+            if col not in sub.columns:
                 return None
-            vals = df[col].tail(n).values.astype(float)
+            vals = sub[col].values.astype(float)
             if np.all(np.isnan(vals)):
                 return None
             mask = np.isnan(vals)
@@ -1341,78 +1341,101 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
                 vals[mask] = vals[idx[mask]]
             return vals
 
-        # ── Only EMAs go into addplot — no constant arrays ───────────────────
-        # Constant-value addplot arrays trigger mplfinance's y-axis log-scale
-        # calculation on a zero-size range, causing ValueError. All horizontal
-        # lines are drawn via matplotlib axhline after the plot is rendered.
-        apds = []
-        ema_specs = [
-            ('EMA_21',  '#3399ff', 1.2),
-            ('EMA_50',  '#ff9933', 1.2),
-            ('EMA_200', '#cc44ff', 1.0),
-        ]
-        for col, color, width in ema_specs:
-            data = safe_col(col)
-            if data is not None:
-                apds.append(mpf.make_addplot(data, color=color, width=width, panel=0))
+        ema21  = safe_col("EMA_21")
+        ema50  = safe_col("EMA_50")
+        ema200 = safe_col("EMA_200")
+        rsi    = safe_col("RSI")
 
-        rsi_data = safe_col('RSI')
-        if rsi_data is not None:
-            apds.append(mpf.make_addplot(rsi_data, color='#ffffff', width=1.2,
-                                         panel=1, ylabel='RSI', ylim=(0, 100)))
+        opens  = sub["Open"].values.astype(float)
+        highs  = sub["High"].values.astype(float)
+        lows   = sub["Low"].values.astype(float)
+        closes = sub["Close"].values.astype(float)
 
-        # ── Style ────────────────────────────────────────────────────────────
-        style = mpf.make_mpf_style(
-            base_mpf_style='nightclouds',
-            rc={
-                'axes.labelcolor':  '#cccccc',
-                'xtick.color':      '#999999',
-                'ytick.color':      '#999999',
-                'figure.facecolor': '#1a1a2e',
-                'axes.facecolor':   '#16213e',
-            }
+        # ── Figure with 2 panels ─────────────────────────────────────────────
+        BG   = "#1a1a2e"
+        PAN  = "#16213e"
+        GRID = "#2a2a4a"
+
+        fig, (ax1, ax2) = plt.subplots(
+            2, 1, figsize=(14, 10),
+            gridspec_kw={"height_ratios": [3, 1], "hspace": 0.06},
+            facecolor=BG
         )
+        ax1.set_facecolor(PAN)
+        ax2.set_facecolor(PAN)
 
-        score    = signal.get('score', '?')
-        rsi_val  = signal.get('rsi', 0)
-        scenario = signal.get('scenario_label', '')
-        date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
-        title    = (f"{ticker}  |  Score {score}  |  RSI {rsi_val:.1f}"
-                    f"\n{scenario}  |  {date_str} ET"
-                    f"\nEntry ${entry:.2f}  ▲ Target ${target:.2f}"
-                    f"  ▼ Stop ${stop:.2f}")
+        # ── Draw candles ─────────────────────────────────────────────────────
+        W = 0.6
+        for i in range(n):
+            bull = closes[i] >= opens[i]
+            color = "#26a69a" if bull else "#ef5350"
+            body_lo = min(opens[i], closes[i])
+            body_hi = max(opens[i], closes[i])
+            # Wick
+            ax1.plot([xs[i], xs[i]], [lows[i], highs[i]], color=color, linewidth=0.8)
+            # Body
+            ax1.add_patch(mpatches.FancyBboxPatch(
+                (xs[i] - W/2, body_lo), W, max(body_hi - body_lo, 0.001),
+                boxstyle="square,pad=0", linewidth=0,
+                facecolor=color, edgecolor=color
+            ))
+
+        # ── EMA overlays ─────────────────────────────────────────────────────
+        if ema21  is not None: ax1.plot(xs, ema21,  color="#3399ff", linewidth=1.2, label="EMA 21")
+        if ema50  is not None: ax1.plot(xs, ema50,  color="#ff9933", linewidth=1.2, label="EMA 50")
+        if ema200 is not None: ax1.plot(xs, ema200, color="#cc44ff", linewidth=1.0, label="EMA 200")
+
+        # ── Entry / target / stop lines ──────────────────────────────────────
+        ax1.axhline(entry,  color="#00ff88", linewidth=1.0, linestyle="--", alpha=0.9)
+        ax1.axhline(target, color="#00cc44", linewidth=1.0, linestyle="-",  alpha=0.9)
+        ax1.axhline(stop,   color="#ff3333", linewidth=1.0, linestyle="-",  alpha=0.9)
+
+        # ── Candle panel style ───────────────────────────────────────────────
+        ax1.set_xlim(-1, n)
+        ax1.tick_params(colors="#999999", labelsize=8)
+        ax1.yaxis.label.set_color("#cccccc")
+        for sp in ax1.spines.values(): sp.set_color(GRID)
+        ax1.grid(color=GRID, linewidth=0.5, linestyle="--")
+        # x-tick labels: show ~6 evenly spaced dates
+        step = max(1, n // 6)
+        tick_pos = xs[::step]
+        tick_lbl = [sub.index[i].strftime("%b %d") for i in tick_pos]
+        ax1.set_xticks(tick_pos)
+        ax1.set_xticklabels(tick_lbl, rotation=30, ha="right", fontsize=7, color="#999999")
+        ax1.set_ylabel("Price", color="#cccccc", fontsize=9)
+        if ema21 is not None or ema50 is not None or ema200 is not None:
+            ax1.legend(loc="upper left", fontsize=7,
+                       facecolor=BG, edgecolor=GRID, labelcolor="#cccccc")
+
+        # ── RSI panel ────────────────────────────────────────────────────────
+        if rsi is not None:
+            ax2.plot(xs, rsi, color="#ffffff", linewidth=1.2)
+            ax2.axhline(30, color="#ff4444", linewidth=0.6, linestyle="--", alpha=0.7)
+            ax2.axhline(50, color="#888888", linewidth=0.6, linestyle="--", alpha=0.7)
+            ax2.axhline(70, color="#44ff44", linewidth=0.6, linestyle="--", alpha=0.7)
+            ax2.fill_between(xs, rsi, 30, where=(rsi < 30), alpha=0.15, color="#ff4444")
+            ax2.fill_between(xs, rsi, 70, where=(rsi > 70), alpha=0.15, color="#44ff44")
+            ax2.set_ylim(0, 100)
+            ax2.set_yticks([30, 50, 70])
+        ax2.set_xlim(-1, n)
+        ax2.set_ylabel("RSI", color="#cccccc", fontsize=9)
+        ax2.tick_params(colors="#999999", labelsize=8)
+        ax2.set_xticks([])
+        for sp in ax2.spines.values(): sp.set_color(GRID)
+        ax2.grid(color=GRID, linewidth=0.5, linestyle="--")
+
+        # ── Title ────────────────────────────────────────────────────────────
+        score    = signal.get("score", "?")
+        rsi_val  = signal.get("rsi", 0)
+        scenario = signal.get("scenario_label", "")
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        title_str = (f"{ticker}  |  Score {score}  |  RSI {rsi_val:.1f}\n"
+                     f"{scenario}  |  {date_str} ET\n"
+                     f"Entry ${entry:.2f}  \u25b2 Target ${target:.2f}  \u25bc Stop ${stop:.2f}")
+        fig.suptitle(title_str, color="#ffffff", fontsize=10)
 
         out_path = CHARTS_DIR / f"{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-
-        plot_kwargs = dict(
-            type='candle',
-            style=style,
-            volume=False,
-            title=title,
-            figsize=(14, 10),
-            tight_layout=False,
-            returnfig=True,
-        )
-        if apds:
-            plot_kwargs['addplot']      = apds
-            plot_kwargs['panel_ratios'] = (3, 1) if rsi_data is not None else (1,)
-
-        fig, axes = mpf.plot(plot_df, **plot_kwargs)
-
-        # ── Draw horizontal lines via matplotlib (no mplfinance scaling) ─────
-        ax_candle = axes[0]
-        ax_candle.axhline(entry,  color='#00ff88', linewidth=1.0, linestyle='--', alpha=0.9)
-        ax_candle.axhline(target, color='#00cc44', linewidth=1.0, linestyle='-',  alpha=0.9)
-        ax_candle.axhline(stop,   color='#ff3333', linewidth=1.0, linestyle='-',  alpha=0.9)
-
-        if rsi_data is not None and len(axes) > 1:
-            ax_rsi = axes[1]
-            ax_rsi.axhline(30, color='#ff4444', linewidth=0.6, linestyle='--', alpha=0.7)
-            ax_rsi.axhline(50, color='#888888', linewidth=0.6, linestyle='--', alpha=0.7)
-            ax_rsi.axhline(70, color='#44ff44', linewidth=0.6, linestyle='--', alpha=0.7)
-            ax_rsi.set_ylim(0, 100)
-
-        fig.savefig(out_path, dpi=130, bbox_inches='tight', facecolor='#1a1a2e')
+        fig.savefig(out_path, dpi=130, facecolor=BG)
         plt.close(fig)
         print(f"   📸 Chart saved: {out_path}")
         return out_path
@@ -2322,6 +2345,8 @@ if __name__ == "__main__":
         help='Scan a single ticker, e.g. --ticker NVDA')
     parser.add_argument('--dry-run', action='store_true',
         help='Skip Alpaca duplicate guard and order placement. Safe for after-hours testing.')
+    parser.add_argument('--force', action='store_true',
+        help='Force scan even if market is closed. Use for manual after-hours testing.')
     args = parser.parse_args()
 
     DRY_RUN = args.dry_run
@@ -2334,6 +2359,13 @@ if __name__ == "__main__":
         mode = get_scan_mode(et_now)
     else:
         mode = args.mode
+
+    if mode == 'closed' and not args.force:
+        print("🚫 Market closed — nothing to do. Exiting.")
+        sys.exit(0)
+    elif mode == 'closed' and args.force:
+        print("⚡ --force override — running swing scan outside market hours.")
+        mode = 'swing'
 
     tickers_override = [args.ticker.upper()] if args.ticker else None
     check_market(mode=mode, tickers_override=tickers_override)
