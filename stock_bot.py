@@ -1304,9 +1304,9 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
     Returns the Path to the saved PNG, or None if chart generation fails.
 
     Layout:
-      - Top panel:    60-day OHLC candles + EMA 21 (blue) / EMA 50 (orange) / EMA 200 (purple)
-                      Horizontal lines: entry (green dashed), target (lime), stop (red)
-      - Bottom panel: RSI 14 with 30/50/70 reference lines
+      - Top panel:    60-day OHLC candles + EMA 21/50/200 overlays
+                      axhline: entry (green dashed), target (lime), stop (red)
+      - Bottom panel: RSI 14 with axhline 30/50/70 reference lines
     """
     if not CHART_AVAILABLE:
         return None
@@ -1315,7 +1315,7 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
         import traceback as _tb
         import numpy as np
 
-        # ── Slice to last 60 candles ────────────────────────────────────────
+        # ── Slice to last 60 candles ─────────────────────────────────────────
         plot_df = df[['Open','High','Low','Close','Volume']].tail(60).copy()
         plot_df.index = pd.DatetimeIndex(plot_df.index)
         if plot_df.index.tz is not None:
@@ -1327,47 +1327,39 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
         target = signal.get("take_profit", 0)
         stop   = signal.get("stop_loss", 0)
 
-        # ── Helper: safe column extract — fills NaN with forward-fill then 0 ─
+        # ── Safe column extract: forward-fill NaN, return None if all-NaN ────
         def safe_col(col):
             if col not in df.columns:
-                return np.full(n, np.nan)
+                return None
             vals = df[col].tail(n).values.astype(float)
-            # Forward-fill NaN (first bars of EMA_200 are NaN)
+            if np.all(np.isnan(vals)):
+                return None
             mask = np.isnan(vals)
-            if mask.all():
-                return np.full(n, np.nan)
-            idx  = np.where(~mask, np.arange(n), 0)
-            np.maximum.accumulate(idx, out=idx)
-            vals[mask] = vals[idx[mask]]
+            if mask.any():
+                idx = np.where(~mask, np.arange(n), 0)
+                np.maximum.accumulate(idx, out=idx)
+                vals[mask] = vals[idx[mask]]
             return vals
 
-        rsi    = safe_col('RSI')
-        ema21  = safe_col('EMA_21')
-        ema50  = safe_col('EMA_50')
-        ema200 = safe_col('EMA_200')
-
-        # Panel layout: 0=candles, 1=RSI
-        # Volume excluded — zero/NaN volume causes mplfinance scaling errors
-        apds = [
-            mpf.make_addplot(ema21,  color='#3399ff', width=1.2, panel=0),
-            mpf.make_addplot(ema50,  color='#ff9933', width=1.2, panel=0),
-            mpf.make_addplot(ema200, color='#cc44ff', width=1.0, panel=0),
-            mpf.make_addplot(rsi,    color='#ffffff', width=1.2, panel=1, ylabel='RSI', ylim=(0, 100)),
+        # ── Only EMAs go into addplot — no constant arrays ───────────────────
+        # Constant-value addplot arrays trigger mplfinance's y-axis log-scale
+        # calculation on a zero-size range, causing ValueError. All horizontal
+        # lines are drawn via matplotlib axhline after the plot is rendered.
+        apds = []
+        ema_specs = [
+            ('EMA_21',  '#3399ff', 1.2),
+            ('EMA_50',  '#ff9933', 1.2),
+            ('EMA_200', '#cc44ff', 1.0),
         ]
+        for col, color, width in ema_specs:
+            data = safe_col(col)
+            if data is not None:
+                apds.append(mpf.make_addplot(data, color=color, width=width, panel=0))
 
-        # ── RSI reference levels ─────────────────────────────────────────────
-        apds += [
-            mpf.make_addplot([30]*n, color='#ff4444', width=0.6, linestyle='--', panel=1),
-            mpf.make_addplot([50]*n, color='#888888', width=0.6, linestyle='--', panel=1),
-            mpf.make_addplot([70]*n, color='#44ff44', width=0.6, linestyle='--', panel=1),
-        ]
-
-        # ── Horizontal lines (entry / target / stop) ────────────────────────
-        apds += [
-            mpf.make_addplot([entry]*n,  color='#00ff88', width=1.0, linestyle='--', panel=0),
-            mpf.make_addplot([target]*n, color='#00cc44', width=1.0, linestyle='-',  panel=0),
-            mpf.make_addplot([stop]*n,   color='#ff3333', width=1.0, linestyle='-',  panel=0),
-        ]
+        rsi_data = safe_col('RSI')
+        if rsi_data is not None:
+            apds.append(mpf.make_addplot(rsi_data, color='#ffffff', width=1.2,
+                                         panel=1, ylabel='RSI', ylim=(0, 100)))
 
         # ── Style ────────────────────────────────────────────────────────────
         style = mpf.make_mpf_style(
@@ -1390,21 +1382,35 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
                     f"\nEntry ${entry:.2f}  ▲ Target ${target:.2f}"
                     f"  ▼ Stop ${stop:.2f}")
 
-        # ── Save ─────────────────────────────────────────────────────────────
         out_path = CHARTS_DIR / f"{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
 
-        fig, axes = mpf.plot(
-            plot_df,
+        plot_kwargs = dict(
             type='candle',
             style=style,
-            addplot=apds,
             volume=False,
-            panel_ratios=(4, 1),
             title=title,
             figsize=(14, 8),
             tight_layout=True,
             returnfig=True,
         )
+        if apds:
+            plot_kwargs['addplot']      = apds
+            plot_kwargs['panel_ratios'] = (4, 1) if rsi_data is not None else (1,)
+
+        fig, axes = mpf.plot(plot_df, **plot_kwargs)
+
+        # ── Draw horizontal lines via matplotlib (no mplfinance scaling) ─────
+        ax_candle = axes[0]
+        ax_candle.axhline(entry,  color='#00ff88', linewidth=1.0, linestyle='--', alpha=0.9)
+        ax_candle.axhline(target, color='#00cc44', linewidth=1.0, linestyle='-',  alpha=0.9)
+        ax_candle.axhline(stop,   color='#ff3333', linewidth=1.0, linestyle='-',  alpha=0.9)
+
+        if rsi_data is not None and len(axes) > 1:
+            ax_rsi = axes[1]
+            ax_rsi.axhline(30, color='#ff4444', linewidth=0.6, linestyle='--', alpha=0.7)
+            ax_rsi.axhline(50, color='#888888', linewidth=0.6, linestyle='--', alpha=0.7)
+            ax_rsi.axhline(70, color='#44ff44', linewidth=0.6, linestyle='--', alpha=0.7)
+            ax_rsi.set_ylim(0, 100)
 
         fig.savefig(out_path, dpi=130, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close(fig)
