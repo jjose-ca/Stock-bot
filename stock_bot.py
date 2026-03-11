@@ -499,6 +499,13 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         if hist_cols:
             df['MACD_H'] = macd[hist_cols[0]]
 
+    # Write indicators back to df_daily so generate_signal_chart can access
+    # RSI/EMA columns via the df_d reference passed to send_setup_alert.
+    # Without this, df_daily has no RSI/EMA and chart generation fails with KeyError.
+    for col in ['EMA_21', 'EMA_50', 'EMA_200', 'RSI', 'ATR', 'MACD_H']:
+        if col in df.columns:
+            df_daily[col] = df[col]
+
     bb = ta.bbands(df['Close'], length=20, std=2)
     if bb is not None and not bb.empty:
         lower_col = [c for c in bb.columns if c.startswith('BBL')]
