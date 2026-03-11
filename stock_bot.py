@@ -1345,24 +1345,21 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
         ema21  = safe_col('EMA_21')
         ema50  = safe_col('EMA_50')
         ema200 = safe_col('EMA_200')
-        vol    = df['Volume'].tail(n).values.astype(float)
 
-        # Panel layout: 0=candles, 1=volume, 2=RSI
-        # volume=False in mpf.plot — we draw it manually so panel numbering
-        # is explicit and consistent across mplfinance versions.
+        # Panel layout: 0=candles, 1=RSI
+        # Volume excluded — zero/NaN volume causes mplfinance scaling errors
         apds = [
             mpf.make_addplot(ema21,  color='#3399ff', width=1.2, panel=0),
             mpf.make_addplot(ema50,  color='#ff9933', width=1.2, panel=0),
             mpf.make_addplot(ema200, color='#cc44ff', width=1.0, panel=0),
-            mpf.make_addplot(vol,    color='#4466aa', width=1.0, panel=1, type='bar', ylabel='Vol'),
-            mpf.make_addplot(rsi,    color='#ffffff', width=1.2, panel=2, ylabel='RSI', ylim=(0, 100)),
+            mpf.make_addplot(rsi,    color='#ffffff', width=1.2, panel=1, ylabel='RSI', ylim=(0, 100)),
         ]
 
         # ── RSI reference levels ─────────────────────────────────────────────
         apds += [
-            mpf.make_addplot([30]*n, color='#ff4444', width=0.6, linestyle='--', panel=2),
-            mpf.make_addplot([50]*n, color='#888888', width=0.6, linestyle='--', panel=2),
-            mpf.make_addplot([70]*n, color='#44ff44', width=0.6, linestyle='--', panel=2),
+            mpf.make_addplot([30]*n, color='#ff4444', width=0.6, linestyle='--', panel=1),
+            mpf.make_addplot([50]*n, color='#888888', width=0.6, linestyle='--', panel=1),
+            mpf.make_addplot([70]*n, color='#44ff44', width=0.6, linestyle='--', panel=1),
         ]
 
         # ── Horizontal lines (entry / target / stop) ────────────────────────
@@ -1402,9 +1399,9 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
             style=style,
             addplot=apds,
             volume=False,
-            panel_ratios=(4, 1, 1),
+            panel_ratios=(4, 1),
             title=title,
-            figsize=(14, 9),
+            figsize=(14, 8),
             tight_layout=True,
             returnfig=True,
         )
