@@ -1241,8 +1241,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 185.32,
-    "min_price": 185.32
+    "max_price": 187.6199951171875,
+    "min_price": 184.45010375976562
   },
   {
     "id": "TSM_20260311_1439",
@@ -1282,7 +1282,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 354.33,
-    "min_price": 354.33
+    "max_price": 357.3500061035156,
+    "min_price": 350.360107421875
   }
 ]
