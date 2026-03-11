@@ -32,6 +32,12 @@ on:
     - cron: '45 20 * * 1-5'
 
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force scan even if market is closed (for testing)'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   build:
@@ -59,7 +65,7 @@ jobs:
           DISCORD_URL: ${{ secrets.DISCORD_URL }}
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: python stock_bot.py
+        run: python stock_bot.py ${{ github.event.inputs.force == 'true' && '--force' || '' }}
 
       - name: Commit trade log
         run: |
