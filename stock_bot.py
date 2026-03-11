@@ -1361,12 +1361,12 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
         ]
 
         # ── Horizontal lines (entry / target / stop) ────────────────────────
-        hlines = dict(
-            hlines=[entry, target, stop],
-            colors=['#00ff88', '#00cc44', '#ff3333'],
-            linestyle=['--', '-', '-'],
-            linewidths=[1.0, 1.0, 1.0],
-        )
+        # Drawn as addplot constant arrays — version-agnostic, no kwarg issues.
+        apds += [
+            mpf.make_addplot([entry]*n,  color='#00ff88', width=1.0, linestyle='--', panel=0),
+            mpf.make_addplot([target]*n, color='#00cc44', width=1.0, linestyle='-',  panel=0),
+            mpf.make_addplot([stop]*n,   color='#ff3333', width=1.0, linestyle='-',  panel=0),
+        ]
 
         # ── Style ────────────────────────────────────────────────────────────
         style = mpf.make_mpf_style(
@@ -1403,7 +1403,6 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
             figsize=(14, 9),
             tight_layout=True,
             returnfig=True,
-            **hlines,
         )
 
         fig.savefig(out_path, dpi=130, bbox_inches='tight', facecolor='#1a1a2e')
