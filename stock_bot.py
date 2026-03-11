@@ -1389,13 +1389,13 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
             style=style,
             volume=False,
             title=title,
-            figsize=(14, 8),
-            tight_layout=True,
+            figsize=(14, 10),
+            tight_layout=False,
             returnfig=True,
         )
         if apds:
             plot_kwargs['addplot']      = apds
-            plot_kwargs['panel_ratios'] = (4, 1) if rsi_data is not None else (1,)
+            plot_kwargs['panel_ratios'] = (3, 1) if rsi_data is not None else (1,)
 
         fig, axes = mpf.plot(plot_df, **plot_kwargs)
 
