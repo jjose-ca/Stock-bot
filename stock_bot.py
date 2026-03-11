@@ -1390,6 +1390,7 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
             volume=False,
             title=title,
             figsize=(14, 10),
+            tight_layout=False,
             returnfig=True,
         )
         if apds:
@@ -1411,9 +1412,7 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
             ax_rsi.axhline(70, color='#44ff44', linewidth=0.6, linestyle='--', alpha=0.7)
             ax_rsi.set_ylim(0, 100)
 
-        # subplots_adjust ensures RSI panel is inside the saved figure bounds
-        fig.subplots_adjust(top=0.88, bottom=0.08, left=0.06, right=0.97, hspace=0.08)
-        fig.savefig(out_path, dpi=130, facecolor='#1a1a2e')
+        fig.savefig(out_path, dpi=130, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close(fig)
         print(f"   📸 Chart saved: {out_path}")
         return out_path
