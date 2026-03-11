@@ -536,6 +536,14 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     macd_h   = float(scored['MACD_H'])   if 'MACD_H'   in df.columns else 0.0
     prev_mh  = float(prev['MACD_H'])     if 'MACD_H'   in df.columns else 0.0
 
+    # OHLC of scored bar — used for candlestick pattern detection
+    bar_open  = float(scored['Open'])
+    bar_high  = float(scored['High'])
+    bar_low   = float(scored['Low'])
+    bar_close = float(scored['Close'])   # same as `price` — named explicitly for clarity
+    prev_open = float(prev['Open'])
+    prev_close= float(prev['Close'])
+
     reasons = []
 
     # ── PATH A — DEEP OVERSOLD BYPASS ────────────────────────────────────────
@@ -574,7 +582,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
             "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
             "rr_ratio": round(rr_ratio, 2), "score": score, "threshold": threshold,
             "trend_score": trend_score, "momentum_score": momentum_score,
-            "oversold_bypass": oversold_bypass, "atr": round(atr, 4),
+            "oversold_bypass": oversold_bypass, "atr": round(atr, 4), "atr_source": "Daily",
             "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
             "ema_200": round(ema_200, 2) if ema_200 else None,
             "rsi": round(rsi, 1), "bbl": round(bbl, 2) if bbl else None,
@@ -667,12 +675,51 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     # averaged only +0.08% exp vs +0.92% for non-BB signals. Actively hurt quality.
 
     # F. MACD
-    if macd_h > 0:
+    # Backtest: negative MACD outperforms positive by +0.48pp expectancy.
+    # Negative MACD = momentum pointing down = deeper pullback = better MR setup.
+    # Positive MACD = momentum still up = less oversold = weaker bounce.
+    # Old logic rewarded MACD>0 which was backwards for mean-reversion.
+    if macd_h < 0 and macd_h > prev_mh:
+        # Negative but improving — momentum turning, ideal MR entry timing
         momentum_score += 2
-        reasons.append("🚀 Daily MACD: Positive Histogram")
-    elif macd_h > prev_mh:
+        reasons.append(f"🔄 Daily MACD: Negative & Turning ({macd_h:.3f} ↑ {prev_mh:.3f})")
+    elif macd_h < 0:
+        # Negative and still falling — deeply in pullback, valid MR setup
         momentum_score += 1
-        reasons.append("🔄 Daily MACD: Improving Momentum")
+        reasons.append(f"📉 Daily MACD: Negative Histogram ({macd_h:.3f})")
+    # MACD>0: 0 points — momentum still elevated, weaker mean-reversion setup
+
+    # G. CANDLESTICK PATTERNS — reversal quality at support
+    # Detects two high-quality mean-reversion candles on the scored (yesterday) bar.
+    # Only fires when price is near a support level (within 4% of 21 or 50 EMA)
+    # to avoid rewarding random candles in the middle of nowhere.
+    #
+    # Hammer:           Long lower wick (≥2× body) + small upper wick (≤50% body)
+    #                   = price rejected lower levels, buyers stepped in hard
+    # Bullish Engulfing: Today's body fully engulfs prior bar's body (close > prev_open,
+    #                   open < prev_close, and today closed green)
+    #
+    # Worth +1 point only — a quality filter, not a primary signal.
+    # Does not interact with momentum cap since it's added after other momentum scoring.
+    candle_body       = abs(bar_close - bar_open)
+    candle_range      = bar_high - bar_low
+    lower_wick        = min(bar_open, bar_close) - bar_low
+    upper_wick        = bar_high - max(bar_open, bar_close)
+    near_support      = (abs(price - ema_21) / ema_21 < 0.04 or
+                         abs(price - ema_50) / ema_50 < 0.04)
+    is_hammer         = (candle_body > 0 and
+                         lower_wick >= 2.0 * candle_body and
+                         upper_wick <= 0.5 * candle_body and
+                         bar_close > bar_open)   # must close green
+    is_engulfing      = (bar_close > bar_open and           # green candle
+                         prev_close < prev_open and         # prior was red
+                         bar_close > prev_open and          # engulfs prior body
+                         bar_open  < prev_close)
+
+    if near_support and (is_hammer or is_engulfing):
+        momentum_score += 1
+        pattern_name = "Hammer" if is_hammer else "Bullish Engulfing"
+        reasons.append(f"🕯️ {pattern_name} at Support (reversal candle)")
 
     momentum_score = min(momentum_score, momentum_cap)
 
@@ -722,6 +769,14 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
               f"consolidation not pullback. Rejected.")
         return None
 
+    # Score 8 + RSI > 45: every indicator maxed but no real pullback.
+    # Mean-reversion premise isn't true — nothing is actually mean-reverting.
+    # Backtest: -1.80% avg return on 9 signals. Logic-driven gate, not curve-fit.
+    if score >= 8 and rsi > 45:
+        print(f"   [{ticker}] ❌ Score {score} but RSI {rsi:.1f} > 45 — "
+              f"all boxes ticked but no genuine pullback. Rejected.")
+        return None
+
     print(f"   [{ticker}] ✅ Score {score}/{threshold} — "
           f"trend={trend_score} momentum={momentum_score} penalty=-{penalty}")
     is_bullish = price > ema_21
@@ -730,23 +785,20 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     # Support levels come from yesterday's scored bar (structurally grounded).
     # ATR also comes from yesterday's completed bar.
     #
-    # Five support cases — always anchor to the nearest level BELOW entry price:
-    #   1. Near BB lower band                    → anchor to BBL
-    #   2. Price above 21 EMA (near it)          → anchor to 21 EMA
-    #   3. Price above 21 EMA, below 50 EMA      → anchor to 21 EMA (50 EMA is above = resistance)
-    #   4. Price below 21 EMA, above 50 EMA      → volatility stop (neither EMA is clean support)
-    #   5. Price near/above 50 EMA (from below)  → anchor to 50 EMA
+    # Four support cases — always anchor to the nearest level BELOW entry price:
+    #   BB Lower Band removed — 159 signals, 48% WR, +0.35% avg return.
+    #   Weakest source by every metric. Marks where price has already fallen,
+    #   not where buyers defend. EMA anchors are structurally superior.
+    #   1. Price above 21 EMA (near it)          → anchor to 21 EMA
+    #   2. Price above 21 EMA, below 50 EMA      → anchor to 21 EMA (50 EMA is above = resistance)
+    #   3. Price below 21 EMA, above 50 EMA      → volatility stop (neither EMA is clean support)
+    #   4. Price near/above 50 EMA (from below)  → anchor to 50 EMA
 
     above_21  = price >= ema_21
     above_50  = price >= ema_50
     near_50   = abs(price - ema_50) / ema_50 < 0.03   # within 3% of 50 EMA
 
-    if bbl is not None and price <= bbl * 1.02:
-        # Case 1: BB lower band is nearest support
-        support        = bbl
-        support_source = "BB Lower Band"
-
-    elif above_21 and near_21:
+    if above_21 and near_21:
         # Case 2: Price sitting just above 21 EMA — classic pullback support
         support        = ema_21
         support_source = "21 EMA"
