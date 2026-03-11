@@ -1312,28 +1312,52 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
         return None
 
     try:
+        import traceback as _tb
+        import numpy as np
+
         # ── Slice to last 60 candles ────────────────────────────────────────
         plot_df = df[['Open','High','Low','Close','Volume']].tail(60).copy()
         plot_df.index = pd.DatetimeIndex(plot_df.index)
         if plot_df.index.tz is not None:
             plot_df.index = plot_df.index.tz_localize(None)
 
+        n = len(plot_df)
+
         entry  = signal.get("price", 0)
         target = signal.get("take_profit", 0)
         stop   = signal.get("stop_loss", 0)
-        rsi    = df['RSI'].tail(60).values
 
-        # ── EMA overlays ────────────────────────────────────────────────────
-        ema21  = df['EMA_21'].tail(60).values
-        ema50  = df['EMA_50'].tail(60).values
-        ema200 = df['EMA_200'].tail(60).values
+        # ── Helper: safe column extract — fills NaN with forward-fill then 0 ─
+        def safe_col(col):
+            if col not in df.columns:
+                return np.full(n, np.nan)
+            vals = df[col].tail(n).values.astype(float)
+            # Forward-fill NaN (first bars of EMA_200 are NaN)
+            mask = np.isnan(vals)
+            if mask.all():
+                return np.full(n, np.nan)
+            idx  = np.where(~mask, np.arange(n), 0)
+            np.maximum.accumulate(idx, out=idx)
+            vals[mask] = vals[idx[mask]]
+            return vals
+
+        rsi    = safe_col('RSI')
+        ema21  = safe_col('EMA_21')
+        ema50  = safe_col('EMA_50')
+        ema200 = safe_col('EMA_200')
 
         apds = [
-            mpf.make_addplot(ema21,  color='#3399ff', width=1.2,  panel=0, label='EMA 21'),
-            mpf.make_addplot(ema50,  color='#ff9933', width=1.2,  panel=0, label='EMA 50'),
-            mpf.make_addplot(ema200, color='#cc44ff', width=1.0,  panel=0, label='EMA 200'),
-            mpf.make_addplot(rsi,    color='#ffffff', width=1.2,  panel=1, ylabel='RSI',
-                             ylim=(0, 100)),
+            mpf.make_addplot(ema21,  color='#3399ff', width=1.2, panel=0),
+            mpf.make_addplot(ema50,  color='#ff9933', width=1.2, panel=0),
+            mpf.make_addplot(ema200, color='#cc44ff', width=1.0, panel=0),
+            mpf.make_addplot(rsi,    color='#ffffff', width=1.2, panel=1, ylim=(0, 100)),
+        ]
+
+        # ── RSI reference levels ─────────────────────────────────────────────
+        apds += [
+            mpf.make_addplot([30]*n, color='#ff4444', width=0.6, linestyle='--', panel=1),
+            mpf.make_addplot([50]*n, color='#888888', width=0.6, linestyle='--', panel=1),
+            mpf.make_addplot([70]*n, color='#44ff44', width=0.6, linestyle='--', panel=1),
         ]
 
         # ── Horizontal lines (entry / target / stop) ────────────────────────
@@ -1343,16 +1367,6 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
             linestyle=['--', '-', '-'],
             linewidths=[1.0, 1.0, 1.0],
         )
-
-        # ── RSI reference levels as separate addplot lines ──────────────────
-        rsi_30 = [30] * len(plot_df)
-        rsi_50 = [50] * len(plot_df)
-        rsi_70 = [70] * len(plot_df)
-        apds += [
-            mpf.make_addplot(rsi_30, color='#ff4444', width=0.6, linestyle='--', panel=1),
-            mpf.make_addplot(rsi_50, color='#888888', width=0.6, linestyle='--', panel=1),
-            mpf.make_addplot(rsi_70, color='#44ff44', width=0.6, linestyle='--', panel=1),
-        ]
 
         # ── Style ────────────────────────────────────────────────────────────
         style = mpf.make_mpf_style(
@@ -1366,14 +1380,14 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
             }
         )
 
-        score     = signal.get('score', '?')
-        rsi_val   = signal.get('rsi', 0)
-        scenario  = signal.get('scenario_label', '')
-        date_str  = datetime.now().strftime('%Y-%m-%d %H:%M')
-        title     = (f"{ticker}  |  Score {score}  |  RSI {rsi_val:.1f}"
-                     f"\n{scenario}  |  {date_str} ET"
-                     f"\nEntry ${entry:.2f}  ▲ Target ${target:.2f}"
-                     f"  ▼ Stop ${stop:.2f}")
+        score    = signal.get('score', '?')
+        rsi_val  = signal.get('rsi', 0)
+        scenario = signal.get('scenario_label', '')
+        date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+        title    = (f"{ticker}  |  Score {score}  |  RSI {rsi_val:.1f}"
+                    f"\n{scenario}  |  {date_str} ET"
+                    f"\nEntry ${entry:.2f}  ▲ Target ${target:.2f}"
+                    f"  ▼ Stop ${stop:.2f}")
 
         # ── Save ─────────────────────────────────────────────────────────────
         out_path = CHARTS_DIR / f"{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
@@ -1384,7 +1398,7 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
             style=style,
             addplot=apds,
             volume=True,
-            panel_ratios=(4, 1, 1),   # candles : volume : RSI
+            panel_ratios=(4, 1, 1),
             title=title,
             figsize=(14, 9),
             tight_layout=True,
@@ -1392,14 +1406,15 @@ def generate_signal_chart(ticker: str, df: pd.DataFrame, signal: dict) -> Path |
             **hlines,
         )
 
-        fig.savefig(out_path, dpi=130, bbox_inches='tight',
-                    facecolor='#1a1a2e')
+        fig.savefig(out_path, dpi=130, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close(fig)
         print(f"   📸 Chart saved: {out_path}")
         return out_path
 
     except Exception as e:
+        import traceback as _tb
         print(f"   ⚠️  Chart generation failed for {ticker}: {e}")
+        print(f"   ⚠️  Traceback: {_tb.format_exc()}")
         return None
 
 
