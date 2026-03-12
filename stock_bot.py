@@ -1828,7 +1828,7 @@ def check_market(mode: str, tickers_override: list | None = None):
             swing_signal = run_swing_engine(df_daily, total_penalty, ticker=ticker)
 
             if swing_signal is not None:
-                candidates.append((ticker, swing_signal, False))
+                candidates.append((ticker, swing_signal, False, df_daily))
 
         except Exception as e:
             print(f"   ⚠️ [{ticker}] Stage 2 error: {e}")
@@ -1840,7 +1840,7 @@ def check_market(mode: str, tickers_override: list | None = None):
     print(f"⚡ STAGE 3: Signal validation for {len(candidates)} swing candidates...\n")
     alerts_sent = 0
 
-    for ticker, swing_signal, _ in candidates:
+    for ticker, swing_signal, _, df_daily in candidates:
         try:
             currency = get_currency(ticker)
             print(f"── {ticker} ({currency}) ──")
@@ -1884,11 +1884,9 @@ def check_market(mode: str, tickers_override: list | None = None):
             else:
                 earnings_msg = ""
 
-            # Daily relative volume — use df_daily which already has indicators
-            # written back by run_swing_engine. A fresh extract() would be raw
-            # (no RSI/EMA columns) and cause KeyError in generate_signal_chart.
-            df_d    = df_daily
-            rel_vol = calculate_daily_relative_volume(df_d) if df_d is not None else 1.0
+            # Daily relative volume — df_daily unpacked from candidates tuple,
+            # so it always matches this ticker with indicators already written back.
+            rel_vol = calculate_daily_relative_volume(df_daily) if df_daily is not None else 1.0
 
             # ── Volume Pace Gate ──────────────────────────────────────────────
             # Raw volume is meaningless without context of how much of the day
@@ -1915,7 +1913,7 @@ def check_market(mode: str, tickers_override: list | None = None):
                 ticker=ticker, currency=currency, signal=final_signal,
                 rel_vol=rel_vol, elapsed_minutes=elapsed_min, mode=mode,
                 regime_bullish=regime_bullish, earnings_msg=earnings_msg,
-                df=df_d,
+                df=df_daily,
             )
             alerts_sent += 1
 
