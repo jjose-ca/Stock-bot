@@ -115,33 +115,43 @@ def get_alpaca_client():
 # =============================================================================
 
 # ── Your watchlist ────────────────────────────────────────────────────────────
+# Backtest period: 2022-2024 | Hold: 10 days | Last updated: 2026-03-12
+# Removed: MSTR(-6.18exp) TSLA(0%WR) COIN(0%WR) CCL(-1.60exp)
+#          UNH(0%WR) DVN(0%WR) PG(-exp) JNJ(-exp) CVX(-exp)
+# Added:   GOOGL(+2.65exp) UBER(+2.86exp) NFLX(+2.04exp) HUBS(+2.96exp)
+#          DKNG(+2.89exp) PLTR(+3.01exp) HOOD(+3.08exp) SPOT(+1.98exp)
+#          JPM(+1.67exp) CRWD(0loss/19sig) DDOG(0loss/7sig)
+# Kept:    NVDA (open orders active, revisit after completion)
 # USD tickers (NYSE / NASDAQ)
 TICKERS_USD = [
     'VTI',          # ← Keep this — used for market regime check, not traded
 
-    # ETFs — slow ETFs (GDX, SOXQ, GLD, SLV, VWO, VEA) removed: low ATR, rarely
-    # reach ATR-scaled targets in 10-day hold, negative or near-zero backtest exp
+    # ETFs
     'SPY', 'QQQM', 'QQQ', 'IWM',
     'XLY', 'XLF', 'XLK', 'SMH', 'ITB', 'SPMO',
 
-    # Mega Cap / Defensive — MSFT, KO, PG, JNJ removed: negative backtest exp
+    # Mega-cap
     'AAPL', 'GOOGL', 'AMZN', 'META',
+
+    # Financials
     'JPM', 'BAC', 'XOM',
     'V', 'MA',
 
-    # Mid-risk — AMAT, DKNG, CVX, DDOG, CRWD removed: negative backtest exp
-    # DVN removed: low ATR oil play, inconsistent mean-reversion
-    'NVDA', 'AVGO',
-    'NFLX', 'ORCL', 'CRM', 'NOW',
-    'SHOP', 'UBER', 'TGT',
-    'CCL', 'TSM',
-    'APP', 'SPOT', 'TTD',
-    'NET', 'HIMS', 'DASH',
+    # Semiconductors
+    'NVDA', 'AVGO', 'TSM', 'AMD', 'ARM',
 
-    # High beta
-    'TSLA', 'PLTR', 'AMD', 'ARM', 'IOT',
-    'HOOD', 'COIN', 'MSTR',
-    'DUOL', 'RDDT',
+    # Enterprise software / cloud
+    'NFLX', 'ORCL', 'CRM', 'NOW', 'HUBS', 'DDOG', 'CRWD', 'NET',
+
+    # High-growth platform / SaaS
+    'SHOP', 'APP', 'IOT', 'DUOL', 'RDDT',
+    'UBER', 'SPOT', 'TTD', 'DASH', 'HIMS',
+
+    # Consumer / retail
+    'TGT', 'DKNG',
+
+    # High-beta
+    'PLTR', 'HOOD',
 ]
 
 # CAD tickers (TSX) — alerts will be tagged CA$ automatically
