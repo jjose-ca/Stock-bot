@@ -1949,7 +1949,10 @@ def check_market(mode: str, tickers_override: list | None = None):
                             print(f"   ⏭️  {ticker} — open Alpaca position exists, skipping")
                             already_active = True
                         if not already_active:
-                            _orders = _ac.get_orders()
+                            from alpaca.trading.requests import GetOrdersRequest
+                            from alpaca.trading.enums import QueryOrderStatus
+                            _req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+                            _orders = _ac.get_orders(filter=_req)
                             if any(o.symbol == ticker for o in _orders):
                                 print(f"   ⏭️  {ticker} — pending Alpaca order exists, skipping")
                                 already_active = True
@@ -2071,7 +2074,9 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
             print(f"   ⏭️ {ticker} — already has an open position on Alpaca, skipping")
             return False
 
-        existing_orders = client.get_orders()
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        existing_orders = client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN))
         if any(o.symbol == ticker for o in existing_orders):
             print(f"   ⏭️ {ticker} — already has a pending order on Alpaca, skipping")
             return False
