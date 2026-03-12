@@ -1,44 +1,44 @@
 """
 =============================================================================
-  STOCK ALERT BOT v5.0 — Single File Edition
+  STOCK ALERT BOT v6.0 — Swing-Only Edition
 =============================================================================
 
 WHAT THIS BOT DOES:
-  Scans your watchlist every 5 minutes during market hours (Mon–Fri).
-  Detects day trade and swing trade opportunities.
-  Sends rich Discord alerts with entry, stop loss, target, and R/R ratio.
+  Swing trade scanner — scans 62 tickers once per hour during market hours,
+  with 4 extra scans during power hour (3:00–3:45pm ET).
+  Sends rich Discord alerts with entry, stop, target, R/R ratio, and chart.
+  Places GTC bracket orders on Alpaca (paper trading).
   Runs automatically via GitHub Actions — no server needed.
 
-v5.0 CHANGES:
-  1. COMPLETED-BAR SIGNALING — Day engine now signals on the last completed
-     5m candle (iloc[-1]) — today's bar at 3:45pm. Market order fills immediately
-     from partial candles that reverse before close.
-  2. CATEGORY-CAPPED SCORING — Signals are grouped into categories (Trend,
-     Momentum, Confirmation) with independent hard caps. This forces setups
-     to show alignment across different market dynamics instead of stacking
-     points from correlated signals.
-  3. DAILY ATR STOPS — Day trade stops now use daily ATR instead of 5m ATR.
-     The old 5m ATR × 1.5 stop was ~0.5–1% on most stocks and got hit by
-     routine noise. Daily ATR gives structurally meaningful stop levels.
+SIGNAL LOGIC:
+  - Scores on today's daily candle at 3:45pm ET (iloc[-1])
+  - Entry window enforced: signals only fire 12:30–4:00pm ET
+  - Market order fills immediately at 3:45pm price
+  - Hold period: 10 days (GTC bracket with stop + limit target)
+  - US tickers only on Alpaca (.TO tickers skipped)
+
+SCORING SYSTEM:
+  Path A: RSI < 35 + above 200 EMA → instant score 6 (deep oversold bypass)
+  Path B: Additive scoring across Trend (cap 4) + Momentum (cap 4), need ≥ 6
+  Gates:  below both EMAs, gap filter, earnings filter, cooldown, open position
 
 HOW TO RUN MANUALLY:
-  python bot.py                        # Auto-detects mode from time of day
-  python bot.py --mode premarket       # Morning gap summary
-  python bot.py --mode swing           # Swing scan (3:00–3:45pm ET)
-  python bot.py --mode swing           # Swing scan (3:00–3:45pm ET)
-  python bot.py --ticker NVDA          # Scan one ticker only
+  python stock_bot.py                  # Auto-detects mode from time of day
+  python stock_bot.py --mode premarket # Morning gap summary
+  python stock_bot.py --mode swing     # Force swing scan
+  python stock_bot.py --ticker NVDA    # Scan one ticker only
+  python stock_bot.py --force          # Override market-closed gate (testing)
+  python stock_bot.py --dry-run        # Skip Alpaca orders (safe for testing)
 
-HOW TO SET UP:
-  1. Add your tickers to the TICKERS_USD / TICKERS_CAD lists below
-  2. Set your Discord webhook as an environment variable: DISCORD_URL
-  3. Push to GitHub and add DISCORD_URL as a GitHub Secret
-  4. The GitHub Actions schedule (in .github/workflows/stock_bot.yml) runs it automatically
+ARCHITECTURE:
+  Stage 1: Bulk daily data download for all tickers (1 API call)
+  Stage 2: Swing scoring on daily bars — no intraday data needed
+  Note: Day trade engine and intraday fetch removed in v6.0 (swing-only)
 
-ARCHITECTURE — Three-Stage Funnel:
-  Stage 1: One bulk API call downloads 1 year of daily data for ALL tickers
-  Stage 2: Swing filter runs on daily data (no extra API calls)
-  Stage 3: 5-minute intraday data fetched ONLY for tickers that passed Stage 2
-  This means a 50-ticker list typically makes only 5–15 intraday API calls.
+LIMITATIONS:
+  - GitHub Actions deduplication: cooldown uses /tmp — resets each run
+  - Alpaca paper only, US tickers only (.TO tickers send Discord alert only)
+  - Signal fires on in-progress daily candle — most reliable after 3:30pm ET
 =============================================================================
 """
 
@@ -192,6 +192,13 @@ SWING_ATR_TARGET_MULT = 3.5    # Swing target = entry + (ATR × 3.5)
 VOLUME_STRONG   = 2.0    # 2x relative volume = strong institutional activity
 VOLUME_MODERATE = 1.2    # 1.2x = moderate interest
 
+# ── Entry window: signals only fire in this window ───────────────────────────
+# Signals fire from 12:30pm ET onwards — morning gap noise (9:30-12:30) is
+# excluded since the daily candle is too immature. Afternoon setups from
+# 12:30pm are valid; near-close (3:30-4pm) signals are the highest quality.
+ENTRY_WINDOW_START_MIN = 180   # 180 min after 9:30am open = 12:30pm ET
+ENTRY_WINDOW_END_MIN   = 390   # 390 min = 4:00pm ET (market close)
+
 # ── Power hour (3–4pm ET) ─────────────────────────────────────────────────────
 # High-confidence setups during this window get a "buy before close" recommendation
 POWER_HOUR_MIN_VOL_RATIO = 2.0  # Need 2x+ volume to recommend buying before close
@@ -205,7 +212,10 @@ OPENING_NOISE_MINUTES = 30   # First 30 min of session: threshold +1
 LATE_FRIDAY_MINUTES   = 300  # After 2:30pm Friday: threshold +1 (9:30am + 300min = 2:30pm)
 
 # ── State & cooldown persistence ──────────────────────────────────────────────
-# These files survive between steps in a single GitHub Actions run.
+# /tmp files: survive within a single GitHub Actions run only (ephemeral runner).
+# Cooldown is effectively per-session only — resets between cron runs.
+# Not a problem in practice: entry window gate (3:30-4:00pm) limits signals to
+# one window per day, so same-ticker repeat alerts within a day are rare.
 # They reset between separate runs (i.e., between 5-min cron jobs).
 # To use them for intraday deduplication, you'd need GitHub Actions cache or
 # an external store. For now they're ready to use but disabled by default.
@@ -461,7 +471,7 @@ def check_market_regime(bulk_data: pd.DataFrame) -> tuple[int, bool]:
 #  Runs on ~252 daily bars from the bulk download.
 #  EMA-50 is mathematically valid at this bar count (was broken in v2 with ~43 bars).
 #
-#  v5.0: Scoring uses category caps to decorrelate signals.
+#  v6.0: Scoring uses category caps to decorrelate signals.
 #
 #  Categories (capped independently):
 #    TREND/STRUCTURE (max 4):
@@ -827,7 +837,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     elif not above_21 and above_50:
         # Case 4b: Price between EMAs — neither is clean support
-        # Use volatility stop: entry - ATR×1.5
+        # Use volatility stop: entry - ATR×2.5
         support        = entry_price
         support_source = "Volatility Stop (between EMAs)"
 
@@ -878,7 +888,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     dynamic_max_gap = max(2.0, min(atr_pct_gap * 1.5, 7.0))
     if abs(gap_pct) > dynamic_max_gap:
         print(f"   [{ticker}] ❌ Gap too large ({gap_pct:+.1f}% vs {dynamic_max_gap:.1f}% dynamic max "
-              f"[ATR {atr_pct_gap:.1f}% × 1.5]). Overnight gap breaks scored structure. Rejected.")
+              f"[ATR {atr_pct_gap:.1f}% × 1.5, gap rule]). Overnight gap breaks scored structure. Rejected.")
         return None
 
     return {
@@ -911,7 +921,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 #    C: Swing engine only  → Half size, wait for VWAP reclaim at next open
 # =============================================================================
 
-# signals_conflict removed — no day engine to conflict with
+# signals_conflict removed — swing-only bot, no conflict resolution needed
 
 
 def calculate_position_size(score: int, threshold: int,
@@ -977,7 +987,7 @@ def calculate_position_size(score: int, threshold: int,
 
 
 def build_final_signal(swing_signal: dict | None) -> dict | None:
-    """Wraps swing signal as a Scenario C alert. Returns None if no swing signal."""
+    """Wraps swing signal as a SWING alert. Returns None if no swing signal."""
     if swing_signal is None:
         return None
 
@@ -1042,13 +1052,9 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
               f"[ATR {atr_pct*100:.1f}% × 3.5]). Rejected.")
         return None
 
-    # R/R uses ATR-based ratio, not support-anchored stop distance.
-    # Support-anchored stop inflates risk when support is far below entry,
-    # causing valid setups to fail R/R even though the setup is sound.
-    # ATR ratio = 3.5 / 2.5 = 1.40 — clean and always predictable.
-    # Actual stop is still placed at support for structural validity.
+    # ATR model R/R — fixed ratio from multipliers (always 3.5/2.5 = 1.40)
+    # Used for the rejection gate only — predictable regardless of stop placement.
     atr_rr = round(SWING_ATR_TARGET_MULT / SWING_ATR_STOP_MULT, 2)
-    signal["rr_ratio"] = atr_rr
 
     if atr_rr < MIN_RR_RATIO:
         print(f"   [{ticker}] ❌ ATR R/R {atr_rr:.2f} below minimum {MIN_RR_RATIO}. Rejected.")
@@ -1058,6 +1064,16 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
     if risk <= 0:
         print(f"   [{ticker}] ❌ Invalid stop (risk ≤ 0). Rejected.")
         return None
+
+    # Structural R/R — actual realized ratio from entry/stop/target price levels.
+    # This is what the user actually experiences. Often differs from ATR model
+    # when stop is EMA-anchored far below entry (structural R/R > 1.40).
+    entry  = signal.get("price", price)
+    target = signal.get("take_profit", 0)
+    structural_rr = round((target - entry) / risk, 2) if risk > 0 else atr_rr
+
+    signal["rr_ratio"]       = structural_rr  # shown in Discord alert
+    signal["rr_ratio_model"] = atr_rr         # always 1.40, stored for reference
 
     return signal
 
@@ -1497,6 +1513,7 @@ def send_setup_alert(ticker, currency, signal,
     stop_loss  = signal["stop_loss"]
     target     = signal["take_profit"]
     rr         = signal.get("rr_ratio", 0.0)
+    rr_model   = signal.get("rr_ratio_model", 1.40)
     atr_val    = signal.get("atr", 0.0)
     score      = signal.get("score", 0)
     threshold  = signal.get("threshold", 0)
@@ -1542,7 +1559,7 @@ def send_setup_alert(ticker, currency, signal,
     desc += f"• **Entry:**      `{curr_sym}{price:.2f}`\n"
     desc += f"• **Target:**     `{curr_sym}{target:.2f}` (+{tgt_pct:.1f}%) 🎯\n"
     desc += f"• **Stop:**       `{curr_sym}{stop_loss:.2f}` (−{stop_pct:.1f}%) 🛑\n"
-    desc += f"• **R/R:**        `1:{rr:.2f}` ⚖️\n"
+    desc += f"• **R/R:**        `1:{rr:.2f}` (structural) · `1:{rr_model:.2f}` (ATR model) ⚖️\n"
     desc += f"• **Risk/Share:** `{curr_sym}{risk_share:.2f}` | ATR `{curr_sym}{atr_val:.2f}`\n"
     desc += f"• **Size:**       `{signal.get('size_guidance', '—')}`\n"
 
@@ -1559,9 +1576,9 @@ def send_setup_alert(ticker, currency, signal,
         if support_src == "Volatility Stop (between EMAs)":
             desc += (f"• **Stop Anchor:** Volatility stop — price between EMAs\n"
                      f"  21 EMA `{curr_sym}{ema_21_val:.2f}` broken (resistance) | "
-                     f"50 EMA too far | stop = entry − ATR×1.5\n")
+                     f"50 EMA too far | stop = entry − ATR×{SWING_ATR_STOP_MULT}\n")
         else:
-            desc += f"• **Stop Anchor:** `{curr_sym}{support_val:.2f}` ({support_src}) — stop is ATR×1.5 below this\n"
+            desc += f"• **Stop Anchor:** `{curr_sym}{support_val:.2f}` ({support_src}) — stop is ATR×{SWING_ATR_STOP_MULT} below this\n"
     if rel_vol > 2.0:    vol_label = "🔥 Heavy"
     elif rel_vol > 1.2:  vol_label = "💪 Above Average"
     else:                vol_label = "😐 Below Average"
@@ -1601,7 +1618,7 @@ def send_setup_alert(ticker, currency, signal,
                         "value": (f"[TradingView](https://www.tradingview.com/chart/?symbol={ticker}) · "
                                   f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})"),
                         "inline": False}],
-            "footer": {"text": f"Stock Alert Bot v5.0 | ATR: {signal.get('atr_source','—')}"},
+            "footer": {"text": f"Stock Alert Bot v6.0 | ATR: {signal.get('atr_source','—')}"},
         }],
     }
 
@@ -1667,7 +1684,7 @@ def check_market(mode: str, tickers_override: list | None = None):
     et_now = datetime.now(tz)
 
     print(f"\n{'='*60}")
-    print(f"  Stock Alert Bot v5.0 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
+    print(f"  Stock Alert Bot v6.0 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
     print(f"  Mode: {mode.upper()}")
     print(f"{'='*60}\n")
 
@@ -1676,6 +1693,17 @@ def check_market(mode: str, tickers_override: list | None = None):
 
     for r in penalty_reasons:
         print(f"⚠️  {r}")
+
+    # ── Entry window gate ─────────────────────────────────────────────────────
+    # Swing signals score on today's daily candle (iloc[-1]). Before 3:30pm
+    # the candle is too incomplete — wicks, RSI, and patterns are unreliable.
+    # Allow --force to bypass for after-hours testing.
+    in_entry_window = ENTRY_WINDOW_START_MIN <= elapsed_min < ENTRY_WINDOW_END_MIN
+    force_override  = globals().get('FORCE_RUN', False)
+    if mode == 'swing' and not in_entry_window and not force_override:
+        print(f"⏳ Entry window is 12:30–4:00pm ET (elapsed={elapsed_min:.0f} min) — skipping swing scan."
+              f"(elapsed={elapsed_min:.0f} min) — skipping swing scan.")
+        return
 
     # ── Build ticker list ─────────────────────────────────────────────────────
     if tickers_override:
@@ -1856,8 +1884,10 @@ def check_market(mode: str, tickers_override: list | None = None):
             else:
                 earnings_msg = ""
 
-            # Daily relative volume — today vs 20-day average
-            df_d    = extract_ticker_daily(bulk_data, ticker)
+            # Daily relative volume — use df_daily which already has indicators
+            # written back by run_swing_engine. A fresh extract() would be raw
+            # (no RSI/EMA columns) and cause KeyError in generate_signal_chart.
+            df_d    = df_daily
             rel_vol = calculate_daily_relative_volume(df_d) if df_d is not None else 1.0
 
             # ── Volume Pace Gate ──────────────────────────────────────────────
@@ -2014,10 +2044,10 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
         print(f"   🍁 {ticker} — TSX not supported on Alpaca, skipping")
         return False
 
-    # Orders fire whenever the bot runs during market hours (no time restriction).
-    # Only skip if market is closed (elapsed_min == 0 and not test mode).
-    if elapsed_min >= 390:
-        print(f"   ⏰ {ticker} — market closed, skipping Alpaca order")
+    # Only place orders within the entry window (3:30–4:00pm ET) or --force.
+    force_override = globals().get('FORCE_RUN', False)
+    if not force_override and not (ENTRY_WINDOW_START_MIN <= elapsed_min < ENTRY_WINDOW_END_MIN):
+        print(f"   ⏰ {ticker} — outside entry window (elapsed={elapsed_min:.0f} min), skipping order")
         return False
 
     client = get_alpaca_client()
@@ -2322,7 +2352,7 @@ def send_outcome_summary(resolved: list, bulk_data):
             "title":       "📈 Trade Outcome Tracker",
             "description": desc[:4096],
             "color":       5763719 if win_rate >= 50 else 15548997,
-            "footer":      {"text": f"Stock Alert Bot v5.0 | {len(trades)} total trades logged"},
+            "footer":      {"text": f"Stock Alert Bot v6.0 | {len(trades)} total trades logged"},
         }]}
         _post_discord(payload)
         print(f"   📊 Outcome summary sent ({len(open_tr)} open, {len(resolved)} resolved)")
@@ -2335,7 +2365,7 @@ def send_outcome_summary(resolved: list, bulk_data):
 # =============================================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Stock Alert Bot v5.0")
+    parser = argparse.ArgumentParser(description="Stock Alert Bot v6.0")
     parser.add_argument('--mode',
         choices=['auto', 'premarket', 'swing'],
         default='auto',
@@ -2352,6 +2382,11 @@ if __name__ == "__main__":
     DRY_RUN = args.dry_run
     if DRY_RUN:
         print("⚠️  DRY RUN — Alpaca duplicate guard and order placement disabled")
+
+    global FORCE_RUN
+    FORCE_RUN = args.force
+    if FORCE_RUN:
+        print("⚡ --force active — entry window gate bypassed")
 
     et_now = datetime.now(pytz.timezone(TIMEZONE))
 
