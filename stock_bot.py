@@ -1704,16 +1704,15 @@ def check_market(mode: str, tickers_override: list | None = None):
     for r in penalty_reasons:
         print(f"⚠️  {r}")
 
-    # ── Entry window gate ─────────────────────────────────────────────────────
-    # Swing signals score on today's daily candle (iloc[-1]). Before 3:30pm
-    # the candle is too incomplete — wicks, RSI, and patterns are unreliable.
-    # Allow --force to bypass for after-hours testing.
+    # ── Entry window ─────────────────────────────────────────────────────────────
+    # Scans run every hour all day — Discord alerts fire any time a signal scores.
+    # Alpaca orders only placed during 12:30–4:00pm ET when the daily candle
+    # is mature enough to trust. --force bypasses for after-hours testing.
     in_entry_window = ENTRY_WINDOW_START_MIN <= elapsed_min < ENTRY_WINDOW_END_MIN
     force_override  = globals().get('FORCE_RUN', False)
-    if mode == 'swing' and not in_entry_window and not force_override:
-        print(f"⏳ Entry window is 12:30–4:00pm ET (elapsed={elapsed_min:.0f} min) — skipping swing scan."
-              f"(elapsed={elapsed_min:.0f} min) — skipping swing scan.")
-        return
+    if not in_entry_window and not force_override:
+        print(f"ℹ️  Outside order window (elapsed={elapsed_min:.0f} min) — "
+              f"alerts will fire but no Alpaca orders will be placed.")
 
     # ── Build ticker list ─────────────────────────────────────────────────────
     if tickers_override:
@@ -2052,7 +2051,7 @@ def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) ->
         print(f"   🍁 {ticker} — TSX not supported on Alpaca, skipping")
         return False
 
-    # Only place orders within the entry window (3:30–4:00pm ET) or --force.
+    # Only place orders within the entry window (12:30–4:00pm ET) or --force.
     force_override = globals().get('FORCE_RUN', False)
     if not force_override and not (ENTRY_WINDOW_START_MIN <= elapsed_min < ENTRY_WINDOW_END_MIN):
         print(f"   ⏰ {ticker} — outside entry window (elapsed={elapsed_min:.0f} min), skipping order")
