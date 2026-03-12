@@ -74,5 +74,9 @@
   "TSM": {
     "earnings_date": "2026-04-16",
     "fetched": "2026-03-11"
+  },
+  "XOM": {
+    "earnings_date": "2026-05-01",
+    "fetched": "2026-03-11"
   }
 }
