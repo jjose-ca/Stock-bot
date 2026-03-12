@@ -1133,7 +1133,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 66.27999877929688,
+    "max_price": 66.37999725341797,
     "min_price": 61.709999084472656
   },
   {
@@ -1162,7 +1162,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 404.3900146484375,
-    "min_price": 387.42999267578125
+    "min_price": 386.739990234375
   },
   {
     "id": "MFC.TO_20260311_1050",
@@ -1283,7 +1283,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 357.3500061035156,
-    "min_price": 337.0849914550781
+    "min_price": 336.3800048828125
   },
   {
     "id": "XOM_20260311_2030",
@@ -1323,7 +1323,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 154.02999877929688,
+    "max_price": 154.77999877929688,
     "min_price": 147.66000366210938
   },
   {
@@ -1363,6 +1363,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 46.939998626708984,
-    "min_price": 46.560001373291016
+    "min_price": 46.5
   }
 ]
