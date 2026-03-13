@@ -937,7 +937,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 220.47000122070312,
-    "min_price": 206.5399932861328
+    "min_price": 206.22000122070312
   },
   {
     "id": "META_20260305_1012",
@@ -1076,7 +1076,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 353.1400146484375,
-    "min_price": 322.94000244140625
+    "min_price": 321.95001220703125
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1104,7 +1104,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 82.61000061035156,
+    "max_price": 82.6500015258789,
     "min_price": 79.5
   },
   {
@@ -1133,7 +1133,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 67.25,
+    "max_price": 67.54000091552734,
     "min_price": 61.709999084472656
   },
   {
@@ -1162,7 +1162,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 404.3900146484375,
-    "min_price": 386.739990234375
+    "min_price": 386.1099853515625
   },
   {
     "id": "MFC.TO_20260311_1050",
@@ -1242,7 +1242,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 187.6199951171875,
-    "min_price": 180.72000122070312
+    "min_price": 180.00999450683594
   },
   {
     "id": "TSM_20260311_1439",
@@ -1323,7 +1323,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 155.89720153808594,
+    "max_price": 156.75999450683594,
     "min_price": 147.66000366210938
   },
   {
@@ -1363,7 +1363,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 47.15999984741211,
-    "min_price": 46.5
+    "min_price": 46.45000076293945
   },
   {
     "id": "IWM_20260312_1554",
@@ -1402,7 +1402,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 250.61000061035156,
-    "min_price": 245.6300048828125
+    "min_price": 245.53500366210938
   },
   {
     "id": "SPY_20260313_1143",
@@ -1441,6 +1441,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 672.3350219726562,
-    "min_price": 663.1099853515625
+    "min_price": 662.0800170898438
   }
 ]
