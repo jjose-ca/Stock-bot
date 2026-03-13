@@ -1076,7 +1076,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 353.1400146484375,
-    "min_price": 321.95001220703125
+    "min_price": 321.42999267578125
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1283,7 +1283,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 357.3500061035156,
-    "min_price": 336.3800048828125
+    "min_price": 336.2799987792969
   },
   {
     "id": "XOM_20260311_2030",
@@ -1363,7 +1363,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 47.15999984741211,
-    "min_price": 46.45000076293945
+    "min_price": 46.40999984741211
   },
   {
     "id": "IWM_20260312_1554",
@@ -1441,6 +1441,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 672.3350219726562,
-    "min_price": 662.0800170898438
+    "min_price": 661.3599853515625
   }
 ]
