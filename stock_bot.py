@@ -170,6 +170,14 @@ DISCORD_WEBHOOK_URL = os.getenv('DISCORD_URL')
 # ── Scoring thresholds ────────────────────────────────────────────────────────
 SWING_SCORE_THRESHOLD = 6
 
+# ── Portfolio Manager Constants ───────────────────────────────────────────────
+# Option B: cap new trades per run to avoid over-deploying on cluster signals
+MAX_TRADES_PER_DAY    = 3
+
+# Option A: path priority for ranking (lower = higher priority)
+# Path A (deep capitulation) > Path D (pivot low) > Path B (standard)
+PATH_PRIORITY = {"A": 0, "D": 1, "B": 2}
+
 # ── Swing category caps and floors ───────────────────────────────────────────
 # Trend/Structure   — Max 4: EMA 21 wick/support, EMA 50 proximity,
 #                             bullish structure, 52-week high
@@ -618,7 +626,66 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
             "bb_width": round(bb_width, 4), "macd_h": round(macd_h, 4),
             "support": round(support, 2), "support_source": support_source,
             "is_bullish": is_bullish, "near_52w_high": near_52w_high,
-            "mode": "SWING", "reasons": reasons,
+            "mode": "SWING", "reasons": reasons, "path": "A",
+            "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
+        }
+
+    # ── PATH D — DAY 2 REVERSAL / PIVOT LOW ──────────────────────────────────
+    # Fires in the "dead zone" (below both 21 & 50 EMA) but only AFTER the
+    # market proves the bottom exists via price confirmation on today's bar:
+    #   - Today's low > yesterday's low  (sellers couldn't push lower)
+    #   - Today closes green (close > open) (buyers stepped in intraday)
+    #   - RSI < 50 AND rising vs yesterday (momentum turning, not drifting)
+    #   - Above 200 EMA                   (long-term uptrend intact)
+    # RSI must be 35–50: below 35 is Path A territory (better expectancy there).
+    # Stop anchored to yesterday's low — the market drew the bottom, not a formula.
+    # Scores today's live bar at 3:45pm, enters today near close — same timing as Path A/B.
+    if (
+        ema_200 is not None and
+        price > ema_200 and
+        price < ema_21 and price < ema_50 and     # dead zone
+        rsi >= 35 and rsi < 50 and                # not deep oversold (Path A handles that)
+        bar_low > float(prev['Low']) and          # higher low vs yesterday
+        bar_close > bar_open and                  # green close today
+        rsi > float(prev['RSI']) if not pd.isna(prev.get('RSI', float('nan'))) else False
+    ):
+        trend_score     = 3
+        momentum_score  = 3
+        score           = trend_score + momentum_score
+        threshold       = SWING_SCORE_THRESHOLD + total_penalty
+        oversold_bypass = False
+        is_bullish      = False
+        high_52w        = float(df['High'].tail(252).max())
+        near_52w_high   = price >= high_52w * 0.98
+        prev_low        = float(prev['Low'])
+        support         = prev_low
+        support_source  = "Prior Day Pivot Low (Path D)"
+        stop_loss       = support - (atr * SWING_ATR_STOP_MULT)
+        if stop_loss >= entry_price:
+            stop_loss = entry_price - atr
+        take_profit = entry_price + (atr * SWING_ATR_TARGET_MULT)
+        rr_ratio = 0.0  # placeholder — validate_risk overwrites with ATR ratio
+        reasons = [
+            f"🔄 Path D — Day 2 Reversal",
+            f"📈 Higher Low (${bar_low:.2f} > ${prev_low:.2f}) + Green Close",
+            f"📉 RSI Turning Up {float(prev['RSI']):.1f} → {rsi:.1f} (oversold zone)",
+            f"🏔️  Above 200 EMA ${ema_200:.2f} (Long-term Uptrend Intact)",
+        ]
+        print(f"   [{ticker}] ✅ PATH D — Day 2 Reversal "
+              f"RSI={rsi:.1f} HL=${bar_low:.2f}>${prev_low:.2f} above 200EMA=${ema_200:.2f}")
+        return {
+            "price": entry_price, "entry_price": entry_price,
+            "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
+            "rr_ratio": round(rr_ratio, 2), "score": score, "threshold": threshold,
+            "trend_score": trend_score, "momentum_score": momentum_score,
+            "oversold_bypass": oversold_bypass, "atr": round(atr, 4), "atr_source": "Daily",
+            "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
+            "ema_200": round(ema_200, 2) if ema_200 else None,
+            "rsi": round(rsi, 1), "bbl": round(bbl, 2) if bbl else None,
+            "bb_width": round(bb_width, 4), "macd_h": round(macd_h, 4),
+            "support": round(support, 2), "support_source": support_source,
+            "is_bullish": is_bullish, "near_52w_high": near_52w_high,
+            "mode": "SWING", "reasons": reasons, "path": "D",
             "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
         }
 
@@ -915,6 +982,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         "direction": "long",
         "mode": "SWING", "near_52w_high": near_52w_high,
         "support": round(support, 2), "support_source": support_source,
+        "path": "B",
     }
 
 
@@ -1845,6 +1913,64 @@ def check_market(mode: str, tickers_override: list | None = None):
     print(f"   ✅ {len(candidates)} swing setups advance to Stage 3\n")
 
     # ═════════════════════════════════════════════════════════════════════════
+    #  PORTFOLIO MANAGER — runs between Stage 2 and Stage 3
+    #  Option A: Rank candidates by path priority → score → RSI
+    #  Option B: Cap to MAX_TRADES_PER_DAY highest-conviction setups
+    #  Option C: Live buying power check (Alpaca syntax — swap for IBKR later)
+    # ═════════════════════════════════════════════════════════════════════════
+
+    # ── Option A: Rank candidates ─────────────────────────────────────────────
+    # Path A (capitulation, +3.03% exp) > Path D (pivot, +1.93% exp) > Path B (standard)
+    # Within same path: higher score first, then lower RSI (more oversold)
+    def _candidate_sort_key(c):
+        sig = c[1]
+        path     = sig.get("path", "B")
+        priority = PATH_PRIORITY.get(path, 2)
+        score    = sig.get("score", 0)
+        rsi      = sig.get("rsi", 50)
+        return (priority, -score, rsi)
+
+    candidates.sort(key=_candidate_sort_key)
+
+    if len(candidates) > 1:
+        print(f"   📊 Ranked {len(candidates)} candidates by path priority → score → RSI:")
+        for i, (t, sig, _, _df) in enumerate(candidates):
+            print(f"      {i+1}. [{t}] Path {sig.get('path','?')} | "
+                  f"Score {sig.get('score','?')} | RSI {sig.get('rsi','?')}")
+        print()
+
+    # ── Option B: Daily trade cap ─────────────────────────────────────────────
+    # Never deploy capital into more than MAX_TRADES_PER_DAY new positions per run.
+    # Protects against cluster signals during selloffs deploying all capital at once.
+    if len(candidates) > MAX_TRADES_PER_DAY:
+        skipped = candidates[MAX_TRADES_PER_DAY:]
+        candidates = candidates[:MAX_TRADES_PER_DAY]
+        print(f"   🚦 Daily cap: keeping top {MAX_TRADES_PER_DAY}, "
+              f"skipping {len(skipped)}: {[t for t,_,_,_ in skipped]}")
+        _post_discord({"embeds": [{"title": "🚦 Daily Trade Cap Reached",
+            "description": (f"**{len(skipped)} signal(s) skipped** — daily cap of "
+                            f"{MAX_TRADES_PER_DAY} reached.\n"
+                            f"Skipped: {', '.join(t for t,_,_,_ in skipped)}\n"
+                            f"_Top {MAX_TRADES_PER_DAY} by path priority → score → RSI were kept._"),
+            "color": COLOR_YELLOW}]})
+        print()
+
+    # ── Option C: Buying power check ─────────────────────────────────────────
+    # Query available cash before the execution loop.
+    # Deduct each trade's dollar amount as we go — skip if insufficient.
+    # ⚠️  ALPACA SYNTAX — swap get_account().cash for IBKR equivalent when migrating.
+    available_cash = None
+    try:
+        _client = get_alpaca_client()
+        if _client:
+            _acct = _client.get_account()
+            available_cash = float(_acct.cash)  # use .cash not .buying_power (avoids margin)
+            print(f"   💰 Available cash: ${available_cash:,.2f}\n")
+    except Exception as _e:
+        print(f"   ⚠️  Could not retrieve buying power ({_e}) — proceeding without cash check\n")
+        available_cash = None
+
+    # ═════════════════════════════════════════════════════════════════════════
     # ═════════════════════════════════════════════════════════════════════════
     print(f"⚡ STAGE 3: Signal validation for {len(candidates)} swing candidates...\n")
     alerts_sent = 0
@@ -1962,6 +2088,25 @@ def check_market(mode: str, tickers_override: list | None = None):
 
             if already_active:
                 continue
+
+            # ── Option C: Cash sufficiency check ─────────────────────────────
+            # ⚠️  IBKR MIGRATION NOTE: replace get_alpaca_client().get_account().cash
+            # with the IBKR Client Portal equivalent when migrating:
+            #   GET /portfolio/{accountId}/ledger → ['USD']['cashbalance']
+            # Everything else in this block (deduction logic, Discord alert) stays identical.
+            position_pct  = final_signal.get("position_size_pct", 4.8) / 100
+            trade_cost    = PORTFOLIO_VALUE * position_pct
+            if available_cash is not None:
+                if available_cash < trade_cost:
+                    msg = (f"Needed **${trade_cost:,.2f}** but only "
+                           f"**${available_cash:,.2f}** available.")
+                    print(f"   ⚠️  {ticker} — Insufficient buying power. {msg} Skipping.")
+                    _post_discord({"embeds": [{"title": f"⚠️ Skipped — {ticker} Insufficient Cash",
+                        "description": msg, "color": COLOR_YELLOW}]})
+                    continue
+                available_cash -= trade_cost  # deduct so next ticker sees updated balance
+                print(f"   💰 Cash check passed — ${available_cash + trade_cost:,.2f} "
+                      f"→ ${available_cash:,.2f} after this trade")
 
             # Log the trade for outcome tracking
             log_new_trade(ticker, currency, final_signal)
