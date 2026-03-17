@@ -855,7 +855,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 79.13749694824219,
+    "max_price": 79.2300033569336,
     "min_price": 71.94000244140625
   },
   {
@@ -1076,7 +1076,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 353.1400146484375,
-    "min_price": 317.45001220703125
+    "min_price": 317.25
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1481,7 +1481,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 255.0749969482422,
+    "max_price": 255.12989807128906,
     "min_price": 249.8800048828125
   },
   {
