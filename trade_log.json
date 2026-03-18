@@ -1076,7 +1076,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 353.1400146484375,
-    "min_price": 317.25
+    "min_price": 317.0299987792969
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1523,7 +1523,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 101.37000274658203,
-    "min_price": 100.19000244140625
+    "min_price": 100.16999816894531
   },
   {
     "id": "AMD_20260318_1005",
