@@ -1076,7 +1076,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 353.1400146484375,
-    "min_price": 317.0299987792969
+    "min_price": 315.80999755859375
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1482,7 +1482,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 255.1300048828125,
-    "min_price": 249.8800048828125
+    "min_price": 249.77499389648438
   },
   {
     "id": "ZSP.TO_20260316_1047",
@@ -1523,7 +1523,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 101.37000274658203,
-    "min_price": 100.1500015258789
+    "min_price": 99.91000366210938
   },
   {
     "id": "AMD_20260318_1005",
@@ -1563,7 +1563,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 202.44000244140625,
+    "max_price": 202.85000610351562,
     "min_price": 195.75
   }
 ]
