@@ -1523,7 +1523,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 101.37000274658203,
-    "min_price": 100.23999786376953
+    "min_price": 100.19000244140625
   },
   {
     "id": "AMD_20260318_1005",
@@ -1563,7 +1563,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 199.7100067138672,
-    "min_price": 199.7100067138672
+    "max_price": 200.74000549316406,
+    "min_price": 195.75
   }
 ]
