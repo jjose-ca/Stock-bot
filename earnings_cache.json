@@ -57,7 +57,7 @@
   },
   "AVGO": {
     "earnings_date": "2026-06-03",
-    "fetched": "2026-03-09"
+    "fetched": "2026-03-18"
   },
   "ATD.TO": {
     "earnings_date": "2026-03-17",
@@ -65,7 +65,7 @@
   },
   "MFC.TO": {
     "earnings_date": "2026-05-13",
-    "fetched": "2026-03-11"
+    "fetched": "2026-03-18"
   },
   "NVDA": {
     "earnings_date": "2026-05-20",
@@ -82,5 +82,9 @@
   "AAPL": {
     "earnings_date": "2026-04-30",
     "fetched": "2026-03-16"
+  },
+  "AMD": {
+    "earnings_date": "2026-05-05",
+    "fetched": "2026-03-18"
   }
 }
