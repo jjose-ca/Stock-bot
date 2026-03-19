@@ -86,5 +86,9 @@
   "AMD": {
     "earnings_date": "2026-05-05",
     "fetched": "2026-03-18"
+  },
+  "TGT": {
+    "earnings_date": "2026-05-20",
+    "fetched": "2026-03-19"
   }
 }
