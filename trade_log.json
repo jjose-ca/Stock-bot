@@ -33,9 +33,9 @@
     "gap_pct": 0.23,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "EXPIRED",
+    "outcome_date": "2026-03-19",
+    "outcome_pct": 2.91,
     "max_price": 48.5,
     "min_price": 44.36068724794196
   },
@@ -937,7 +937,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 220.47000122070312,
-    "min_price": 206.22000122070312
+    "min_price": 206.05999755859375
   },
   {
     "id": "META_20260305_1012",
@@ -1076,7 +1076,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 353.1400146484375,
-    "min_price": 315.54998779296875
+    "min_price": 308.510009765625
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1105,7 +1105,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 84.66999816894531,
-    "min_price": 77.56999969482422
+    "min_price": 76.80000305175781
   },
   {
     "id": "TOU.TO_20260309_1014",
@@ -1133,7 +1133,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 67.80999755859375,
+    "max_price": 68.18000030517578,
     "min_price": 61.25009496739354
   },
   {
@@ -1162,7 +1162,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 404.3900146484375,
-    "min_price": 386.07000732421875
+    "min_price": 381.44000244140625
   },
   {
     "id": "MFC.TO_20260311_1050",
@@ -1242,7 +1242,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 188.8800048828125,
-    "min_price": 179.94000244140625
+    "min_price": 175.78500366210938
   },
   {
     "id": "TSM_20260311_1439",
@@ -1283,7 +1283,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 357.3500061035156,
-    "min_price": 335.27525137553937
+    "min_price": 325.19000244140625
   },
   {
     "id": "XOM_20260311_2030",
@@ -1363,7 +1363,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 47.68000030517578,
-    "min_price": 46.40999984741211
+    "min_price": 45.77000045776367
   },
   {
     "id": "IWM_20260312_1554",
@@ -1402,7 +1402,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 251.7100067138672,
-    "min_price": 245.1039915500912
+    "min_price": 242.52000427246094
   },
   {
     "id": "SPY_20260313_1143",
@@ -1441,7 +1441,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 674.4400024414062,
-    "min_price": 661.3599853515625
+    "min_price": 655.1699829101562
   },
   {
     "id": "AAPL_20260316_1004",
@@ -1482,7 +1482,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 255.1300048828125,
-    "min_price": 249.0
+    "min_price": 247.3000030517578
   },
   {
     "id": "ZSP.TO_20260316_1047",
@@ -1523,7 +1523,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 101.37000274658203,
-    "min_price": 99.70999908447266
+    "min_price": 98.81999969482422
   },
   {
     "id": "AMD_20260318_1005",
@@ -1563,7 +1563,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 202.85000610351562,
-    "min_price": 195.75
+    "max_price": 202.86000061035156,
+    "min_price": 192.8300018310547
   }
 ]
