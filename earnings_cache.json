@@ -90,5 +90,9 @@
   "TGT": {
     "earnings_date": "2026-05-20",
     "fetched": "2026-03-19"
+  },
+  "NFLX": {
+    "earnings_date": "2026-04-16",
+    "fetched": "2026-03-19"
   }
 }

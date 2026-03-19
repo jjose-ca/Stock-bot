@@ -1563,7 +1563,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 203.96499633789062,
+    "max_price": 205.46499633789062,
     "min_price": 192.8300018310547
   },
   {
@@ -1607,5 +1607,47 @@
     "outcome_pct": null,
     "max_price": 116.08999633789062,
     "min_price": 113.45500183105469
+  },
+  {
+    "id": "NFLX_20260319_1510",
+    "ticker": "NFLX",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-03-19",
+    "alert_time": "15:10 ET",
+    "entry": 91.58,
+    "stop_loss": 83.73,
+    "take_profit": 101.61,
+    "rr_ratio": 1.28,
+    "support": 90.9,
+    "support_source": "50 EMA",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 0,
+    "momentum_score": 0,
+    "penalty": 0,
+    "reasons": [
+      "\u26a0\ufe0f Below 21 EMA \u2014 Testing as Support ($92.08)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($90.90)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (50.9)",
+      "\ud83d\udcc9 Daily MACD: Negative Histogram (-0.377)"
+    ],
+    "rsi": 50.9,
+    "macd_h": 0.0,
+    "atr": 2.8677,
+    "ema_21": 92.08,
+    "ema_50": 90.9,
+    "bbl": 0.0,
+    "bb_width": 0.0,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 91.58,
+    "min_price": 91.58
   }
 ]
