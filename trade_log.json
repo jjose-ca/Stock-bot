@@ -1133,7 +1133,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 69.98999786376953,
+    "max_price": 70.0,
     "min_price": 61.25009496739354
   },
   {
@@ -1323,7 +1323,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 162.25999450683594,
+    "max_price": 162.44000244140625,
     "min_price": 147.66000366210938
   },
   {
@@ -1363,7 +1363,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 47.68000030517578,
-    "min_price": 45.529998779296875
+    "min_price": 45.380001068115234
   },
   {
     "id": "IWM_20260312_1554",
