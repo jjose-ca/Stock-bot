@@ -937,7 +937,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 220.47000122070312,
-    "min_price": 204.4199981689453
+    "min_price": 204.3159942626953
   },
   {
     "id": "META_20260305_1012",
@@ -1105,7 +1105,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 84.66999816894531,
-    "min_price": 75.94999694824219
+    "min_price": 75.80999755859375
   },
   {
     "id": "TOU.TO_20260309_1014",
@@ -1162,7 +1162,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 404.3900146484375,
-    "min_price": 381.05999755859375
+    "min_price": 380.8699951171875
   },
   {
     "id": "MFC.TO_20260311_1050",
@@ -1242,7 +1242,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 188.8800048828125,
-    "min_price": 171.83999633789062
+    "min_price": 171.72500610351562
   },
   {
     "id": "TSM_20260311_1439",
@@ -1363,7 +1363,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 47.68000030517578,
-    "min_price": 44.95000076293945
+    "min_price": 44.90999984741211
   },
   {
     "id": "IWM_20260312_1554",
@@ -1402,7 +1402,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 251.7100067138672,
-    "min_price": 240.40499877929688
+    "min_price": 240.3300018310547
   },
   {
     "id": "SPY_20260313_1143",
@@ -1441,7 +1441,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 674.4400024414062,
-    "min_price": 645.030029296875
+    "min_price": 644.719970703125
   },
   {
     "id": "AAPL_20260316_1004",
@@ -1523,7 +1523,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 101.37000274658203,
-    "min_price": 97.48999786376953
+    "min_price": 97.41999816894531
   },
   {
     "id": "AMD_20260318_1005",
@@ -1606,7 +1606,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 116.08999633789062,
-    "min_price": 112.87000274658203
+    "min_price": 112.80000305175781
   },
   {
     "id": "NFLX_20260319_1510",
