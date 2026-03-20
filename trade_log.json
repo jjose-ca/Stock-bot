@@ -937,7 +937,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 220.47000122070312,
-    "min_price": 206.05999755859375
+    "min_price": 205.14999389648438
   },
   {
     "id": "META_20260305_1012",
@@ -1242,7 +1242,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 188.8800048828125,
-    "min_price": 175.78500366210938
+    "min_price": 175.42999267578125
   },
   {
     "id": "TSM_20260311_1439",
@@ -1363,7 +1363,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 47.68000030517578,
-    "min_price": 45.77000045776367
+    "min_price": 45.70000076293945
   },
   {
     "id": "IWM_20260312_1554",
@@ -1441,7 +1441,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 674.4400024414062,
-    "min_price": 654.6500244140625
+    "min_price": 651.489990234375
   },
   {
     "id": "AAPL_20260316_1004",
@@ -1523,7 +1523,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 101.37000274658203,
-    "min_price": 98.81999969482422
+    "min_price": 98.4800033569336
   },
   {
     "id": "AMD_20260318_1005",
@@ -1606,7 +1606,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 116.08999633789062,
-    "min_price": 113.41999816894531
+    "min_price": 112.9000015258789
   },
   {
     "id": "NFLX_20260319_1510",
@@ -1648,6 +1648,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 95.75,
-    "min_price": 90.7699966430664
+    "min_price": 90.69000244140625
   }
 ]
