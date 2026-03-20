@@ -284,9 +284,9 @@
     "gap_pct": -0.23,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "EXPIRED",
+    "outcome_date": "2026-03-20",
+    "outcome_pct": 16.34,
     "max_price": 213.5,
     "min_price": 171.80999755859375
   },
@@ -1323,7 +1323,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 160.4499969482422,
+    "max_price": 161.75999450683594,
     "min_price": 147.66000366210938
   },
   {
@@ -1441,7 +1441,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 674.4400024414062,
-    "min_price": 655.1699829101562
+    "min_price": 654.6500244140625
   },
   {
     "id": "AAPL_20260316_1004",
@@ -1482,7 +1482,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 255.1300048828125,
-    "min_price": 247.3000030517578
+    "min_price": 246.61000061035156
   },
   {
     "id": "ZSP.TO_20260316_1047",
@@ -1563,7 +1563,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 205.8800048828125,
+    "max_price": 206.3000030517578,
     "min_price": 192.8300018310547
   },
   {
@@ -1606,7 +1606,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 116.08999633789062,
-    "min_price": 113.45500183105469
+    "min_price": 113.41999816894531
   },
   {
     "id": "NFLX_20260319_1510",
@@ -1648,6 +1648,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 95.75,
-    "min_price": 90.7750015258789
+    "min_price": 90.7699966430664
   }
 ]
