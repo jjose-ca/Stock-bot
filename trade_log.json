@@ -1482,7 +1482,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 255.1300048828125,
-    "min_price": 246.61000061035156
+    "min_price": 246.0
   },
   {
     "id": "ZSP.TO_20260316_1047",
@@ -1606,7 +1606,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 116.08999633789062,
-    "min_price": 112.80000305175781
+    "min_price": 112.69000244140625
   },
   {
     "id": "NFLX_20260319_1510",
