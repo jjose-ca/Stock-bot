@@ -94,5 +94,9 @@
   "NFLX": {
     "earnings_date": "2026-04-16",
     "fetched": "2026-03-19"
+  },
+  "GOOGL": {
+    "earnings_date": "2026-04-23",
+    "fetched": "2026-03-23"
   }
 }
