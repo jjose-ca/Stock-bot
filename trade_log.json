@@ -1130,10 +1130,10 @@
     ],
     "alert_date": "2026-03-09",
     "alert_time": "10:14 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
-    "max_price": 70.0,
+    "status": "WON",
+    "outcome_date": "2026-03-24",
+    "outcome_pct": 10.15,
+    "max_price": 70.56999969482422,
     "min_price": 61.25009496739354
   },
   {
@@ -1689,6 +1689,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 305.9800109863281,
-    "min_price": 296.8299865722656
+    "min_price": 295.052490234375
   }
 ]
