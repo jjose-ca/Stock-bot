@@ -772,7 +772,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 161.4499969482422,
+    "max_price": 162.39999389648438,
     "min_price": 138.1999969482422
   },
   {
@@ -1076,7 +1076,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 353.1400146484375,
-    "min_price": 308.510009765625
+    "min_price": 307.8642018246381
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1320,10 +1320,10 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
-    "max_price": 162.44000244140625,
+    "status": "WON",
+    "outcome_date": "2026-03-24",
+    "outcome_pct": 8.93,
+    "max_price": 165.19000244140625,
     "min_price": 147.66000366210938
   },
   {
@@ -1563,7 +1563,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 209.10000610351562,
+    "max_price": 209.11000061035156,
     "min_price": 192.8300018310547
   },
   {
@@ -1688,7 +1688,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 305.9700012207031,
-    "min_price": 300.92999267578125
+    "max_price": 305.9800109863281,
+    "min_price": 296.8299865722656
   }
 ]
