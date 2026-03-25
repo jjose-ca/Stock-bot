@@ -1401,7 +1401,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 252.96299743652344,
+    "max_price": 253.07000732421875,
     "min_price": 240.3300018310547
   },
   {
@@ -1563,7 +1563,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 218.67999267578125,
+    "max_price": 219.83999633789062,
     "min_price": 192.8300018310547
   },
   {
@@ -1689,6 +1689,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 305.9800109863281,
-    "min_price": 290.3299865722656
+    "min_price": 290.1499938964844
   }
 ]
