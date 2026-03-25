@@ -769,9 +769,9 @@
     ],
     "alert_date": "2026-03-03",
     "alert_time": "15:35 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "EXPIRED",
+    "outcome_date": "2026-03-25",
+    "outcome_pct": 10.86,
     "max_price": 162.39999389648438,
     "min_price": 138.1999969482422
   },
@@ -1200,7 +1200,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 47.75,
+    "max_price": 48.119998931884766,
     "min_price": 45.209999084472656
   },
   {
@@ -1401,7 +1401,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 251.7100067138672,
+    "max_price": 252.96299743652344,
     "min_price": 240.3300018310547
   },
   {
@@ -1563,7 +1563,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 209.11000061035156,
+    "max_price": 218.67999267578125,
     "min_price": 192.8300018310547
   },
   {
@@ -1605,7 +1605,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 116.48999786376953,
+    "max_price": 117.6500015258789,
     "min_price": 112.69000244140625
   },
   {
@@ -1689,6 +1689,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 305.9800109863281,
-    "min_price": 290.489990234375
+    "min_price": 290.3299865722656
   }
 ]
