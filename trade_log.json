@@ -1242,7 +1242,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 188.8800048828125,
-    "min_price": 171.72000122070312
+    "min_price": 171.6699981689453
   },
   {
     "id": "TSM_20260311_1439",
@@ -1647,7 +1647,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 95.75,
+    "max_price": 95.86000061035156,
     "min_price": 90.69000244140625
   },
   {
@@ -1685,10 +1685,10 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-03-26",
+    "outcome_pct": -7.64,
     "max_price": 305.9800109863281,
-    "min_price": 281.8399963378906
+    "min_price": 278.5
   }
 ]
