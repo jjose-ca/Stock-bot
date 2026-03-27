@@ -1076,7 +1076,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 353.1400146484375,
-    "min_price": 299.2200012207031
+    "min_price": 298.875
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1162,7 +1162,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 404.3900146484375,
-    "min_price": 373.3301086425781
+    "min_price": 373.0150146484375
   },
   {
     "id": "MFC.TO_20260311_1050",
@@ -1441,7 +1441,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 674.4400024414062,
-    "min_price": 634.0599975585938
+    "min_price": 633.10498046875
   },
   {
     "id": "AAPL_20260316_1004",
@@ -1523,7 +1523,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 101.37000274658203,
-    "min_price": 96.95999908447266
+    "min_price": 96.83999633789062
   },
   {
     "id": "AMD_20260318_1005",
