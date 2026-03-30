@@ -1072,11 +1072,11 @@
     ],
     "alert_date": "2026-03-09",
     "alert_time": "10:14 ET",
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-03-30",
+    "outcome_pct": -13.18,
     "max_price": 353.1400146484375,
-    "min_price": 292.05999755859375
+    "min_price": 291.29400634765625
   },
   {
     "id": "ATD.TO_20260309_1014",
@@ -1162,7 +1162,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 404.3900146484375,
-    "min_price": 362.4200134277344
+    "min_price": 361.8299865722656
   },
   {
     "id": "MFC.TO_20260311_1050",
@@ -1283,7 +1283,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 357.3500061035156,
-    "min_price": 314.55999755859375
+    "min_price": 314.4444885253906
   },
   {
     "id": "XOM_20260311_2030",
@@ -1402,7 +1402,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 253.07000732421875,
-    "min_price": 239.5500030517578
+    "min_price": 239.5
   },
   {
     "id": "SPY_20260313_1143",
@@ -1437,11 +1437,11 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-03-30",
+    "outcome_pct": -4.77,
     "max_price": 674.4400024414062,
-    "min_price": 632.7100219726562
+    "min_price": 631.4500122070312
   },
   {
     "id": "AAPL_20260316_1004",
@@ -1523,7 +1523,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 101.37000274658203,
-    "min_price": 96.79000091552734
+    "min_price": 96.62000274658203
   },
   {
     "id": "AMD_20260318_1005",
@@ -1728,7 +1728,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 279.3699951171875,
-    "min_price": 273.0799865722656
+    "min_price": 272.70001220703125
   },
   {
     "id": "ATZ.TO_20260330_1010",
@@ -1769,6 +1769,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 110.06999969482422,
-    "min_price": 107.51000213623047
+    "min_price": 106.55999755859375
   }
 ]
