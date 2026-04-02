@@ -10,11 +10,6 @@ on:
     # EDT (Mar-Nov): UTC-4  |  EST (Nov-Mar): UTC-5
     # Running both offsets means exactly one fires correctly each season.
 
-    # Premarket: 8:45am ET
-    #   EDT -> 12:45 UTC  |  EST -> 13:45 UTC
-    - cron: '45 12 * * 1-5'
-    - cron: '45 13 * * 1-5'
-
     # Intraday: every hour at :00, 10:00am-2:00pm ET
     #   EDT -> 14:00-18:00 UTC  |  EST -> 15:00-19:00 UTC
     - cron: '0 14-18 * * 1-5'
