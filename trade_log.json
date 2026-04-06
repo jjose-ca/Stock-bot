@@ -1892,8 +1892,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 79.05,
-    "min_price": 79.05
+    "max_price": 79.55000305175781,
+    "min_price": 78.0
   },
   {
     "id": "NET_20260406_1251",
@@ -1933,7 +1933,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 209.51,
-    "min_price": 209.51
+    "max_price": 214.94000244140625,
+    "min_price": 207.4600067138672
   }
 ]
