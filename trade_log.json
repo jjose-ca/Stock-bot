@@ -1478,9 +1478,9 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "EXPIRED",
+    "outcome_date": "2026-04-07",
+    "outcome_pct": 3.74,
     "max_price": 262.1600036621094,
     "min_price": 245.50999450683594
   },
@@ -1605,7 +1605,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 122.44999694824219,
+    "max_price": 122.9000015258789,
     "min_price": 112.69000244140625
   },
   {
@@ -1727,7 +1727,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 300.6199951171875,
+    "max_price": 303.7900085449219,
     "min_price": 272.1099853515625
   },
   {
@@ -1809,7 +1809,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 397.0899963378906,
+    "max_price": 397.7099914550781,
     "min_price": 368.1000061035156
   },
   {
@@ -1851,7 +1851,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 659.719970703125,
-    "min_price": 655.52001953125
+    "min_price": 651.0599975585938
   },
   {
     "id": "ATD.TO_20260406_1251",
@@ -1893,7 +1893,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 79.55000305175781,
-    "min_price": 78.0
+    "min_price": 77.62999725341797
   },
   {
     "id": "NET_20260406_1251",
