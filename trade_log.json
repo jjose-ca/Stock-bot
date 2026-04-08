@@ -1976,7 +1976,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 156.25,
-    "min_price": 144.4499969482422
+    "min_price": 144.1999969482422
   },
   {
     "id": "GOOGL_20260407_1557",
@@ -2060,5 +2060,46 @@
     "outcome_pct": null,
     "max_price": 123.31999969482422,
     "min_price": 119.55999755859375
+  },
+  {
+    "id": "SPOT_20260408_1306",
+    "ticker": "SPOT",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-04-08",
+    "alert_time": "13:06 ET",
+    "entry": 490.34,
+    "stop_loss": 440.99,
+    "take_profit": 559.08,
+    "rr_ratio": 1.39,
+    "support": 490.09,
+    "support_source": "21 EMA",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 0,
+    "momentum_score": 0,
+    "penalty": 0,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA \u2014 Early Bounce ($490.09)",
+      "\u26a0\ufe0f Below 50 EMA \u2014 Testing as Support ($502.41)",
+      "\ud83c\udf0a Daily Momentum Reset (49.3)",
+      "\ud83d\udd04 Daily MACD: Negative & Turning (-0.079 \u2191 -0.991)"
+    ],
+    "rsi": 49.3,
+    "macd_h": 0.0,
+    "atr": 19.6392,
+    "ema_21": 490.09,
+    "ema_50": 502.41,
+    "bbl": 0.0,
+    "bb_width": 0.0,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 490.34,
+    "min_price": 490.34
   }
 ]

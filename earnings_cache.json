@@ -110,5 +110,9 @@
   "DDOG": {
     "earnings_date": "2026-05-05",
     "fetched": "2026-04-08"
+  },
+  "SPOT": {
+    "earnings_date": "2026-04-28",
+    "fetched": "2026-04-08"
   }
 }
