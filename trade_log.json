@@ -1605,7 +1605,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 123.30000305175781,
+    "max_price": 123.33000183105469,
     "min_price": 112.69000244140625
   },
   {
@@ -1934,7 +1934,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 225.1300048828125,
-    "min_price": 207.4600067138672
+    "min_price": 185.9600067138672
   },
   {
     "id": "PLTR_20260407_1517",
@@ -1972,11 +1972,11 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
-    "max_price": 156.25,
-    "min_price": 139.17010498046875
+    "status": "LOST",
+    "outcome_date": "2026-04-09",
+    "outcome_pct": -11.56,
+    "max_price": 156.27999877929688,
+    "min_price": 129.5
   },
   {
     "id": "GOOGL_20260407_1557",
@@ -2017,7 +2017,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 322.052490234375,
+    "max_price": 322.0799865722656,
     "min_price": 297.7200012207031
   },
   {
@@ -2059,7 +2059,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 123.31999969482422,
-    "min_price": 116.0999984741211
+    "min_price": 110.6449966430664
   },
   {
     "id": "SPOT_20260408_1306",
@@ -2100,6 +2100,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 497.8804016113281,
-    "min_price": 480.010009765625
+    "min_price": 477.3299865722656
   }
 ]
