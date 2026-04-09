@@ -1850,7 +1850,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 677.0800170898438,
+    "max_price": 680.75,
     "min_price": 651.0599975585938
   },
   {
@@ -2101,5 +2101,46 @@
     "outcome_pct": null,
     "max_price": 497.8804016113281,
     "min_price": 477.3299865722656
+  },
+  {
+    "id": "XOM_20260409_1219",
+    "ticker": "XOM",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-04-09",
+    "alert_time": "12:19 ET",
+    "entry": 155.15,
+    "stop_loss": 138.62,
+    "take_profit": 174.42,
+    "rr_ratio": 1.17,
+    "support": 152.38,
+    "support_source": "50 EMA",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 0,
+    "momentum_score": 0,
+    "penalty": 0,
+    "reasons": [
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($152.38)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83d\udcc9 Daily RSI Oversold (45.0)",
+      "\ud83d\udcc9 Daily MACD: Negative Histogram (-1.565)"
+    ],
+    "rsi": 45.0,
+    "macd_h": 0.0,
+    "atr": 5.5044,
+    "ema_21": 159.85,
+    "ema_50": 152.38,
+    "bbl": 0.0,
+    "bb_width": 0.0,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 155.15,
+    "min_price": 155.15
   }
 ]
