@@ -1605,7 +1605,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 123.33000183105469,
+    "max_price": 123.5,
     "min_price": 112.69000244140625
   },
   {
@@ -1850,7 +1850,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 680.75,
+    "max_price": 681.1500244140625,
     "min_price": 651.0599975585938
   },
   {
@@ -2059,7 +2059,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 123.31999969482422,
-    "min_price": 110.01000213623047
+    "min_price": 109.75
   },
   {
     "id": "SPOT_20260408_1306",
