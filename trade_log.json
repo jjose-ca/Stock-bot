@@ -1850,7 +1850,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 681.9400024414062,
+    "max_price": 682.030029296875,
     "min_price": 651.0599975585938
   },
   {
@@ -2100,7 +2100,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 497.8999938964844,
-    "min_price": 474.20001220703125
+    "min_price": 469.1600036621094
   },
   {
     "id": "XOM_20260409_1219",
@@ -2142,5 +2142,46 @@
     "outcome_pct": null,
     "max_price": 159.22999572753906,
     "min_price": 151.95010375976562
+  },
+  {
+    "id": "TOU.TO_20260410_1155",
+    "ticker": "TOU.TO",
+    "currency": "CAD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-04-10",
+    "alert_time": "11:55 ET",
+    "entry": 61.900001525878906,
+    "stop_loss": 55.17,
+    "take_profit": 69.39,
+    "rr_ratio": 1.11,
+    "support": 60.52,
+    "support_source": "Prior Day Pivot Low (Path D)",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 3,
+    "momentum_score": 3,
+    "penalty": 0,
+    "reasons": [
+      "\ud83d\udd04 Path D \u2014 Day 2 Reversal",
+      "\ud83d\udcc8 Higher Low ($60.75 > $60.52) + Green Close",
+      "\ud83d\udcc9 RSI Turning Up 36.3 \u2192 40.2 (oversold zone)",
+      "\ud83c\udfd4\ufe0f  Above 200 EMA $61.76 (Long-term Uptrend Intact)"
+    ],
+    "rsi": 40.2,
+    "macd_h": -0.8714,
+    "atr": 2.1408,
+    "ema_21": 64.75,
+    "ema_50": 64.11,
+    "bbl": 60.88,
+    "bb_width": 0.1607,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 61.900001525878906,
+    "min_price": 61.900001525878906
   }
 ]
