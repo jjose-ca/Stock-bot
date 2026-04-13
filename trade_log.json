@@ -1893,7 +1893,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 81.80999755859375,
-    "min_price": 77.5199966430664
+    "min_price": 76.34500122070312
   },
   {
     "id": "NET_20260406_1251",
@@ -2099,8 +2099,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 497.8999938964844,
-    "min_price": 468.4049987792969
+    "max_price": 498.42999267578125,
+    "min_price": 468.3999938964844
   },
   {
     "id": "XOM_20260409_1219",
@@ -2181,7 +2181,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 62.029998779296875,
+    "max_price": 62.58000183105469,
     "min_price": 60.75
   }
 ]
