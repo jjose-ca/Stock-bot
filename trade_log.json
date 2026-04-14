@@ -1847,10 +1847,10 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
-    "max_price": 691.6798706054688,
+    "status": "WON",
+    "outcome_date": "2026-04-14",
+    "outcome_pct": 5.4,
+    "max_price": 693.2999877929688,
     "min_price": 651.0599975585938
   },
   {
@@ -2017,7 +2017,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 329.2087097167969,
+    "max_price": 332.92999267578125,
     "min_price": 297.7200012207031
   },
   {
