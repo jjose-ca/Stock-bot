@@ -1850,7 +1850,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 683.5700073242188,
+    "max_price": 691.6798706054688,
     "min_price": 651.0599975585938
   },
   {
@@ -2017,7 +2017,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 322.0799865722656,
+    "max_price": 329.2087097167969,
     "min_price": 297.7200012207031
   },
   {
@@ -2099,7 +2099,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 502.2799987792969,
+    "max_price": 517.7698974609375,
     "min_price": 468.3999938964844
   },
   {
@@ -2141,7 +2141,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 159.22999572753906,
-    "min_price": 151.3000030517578
+    "min_price": 146.7200927734375
   },
   {
     "id": "TOU.TO_20260410_1155",
@@ -2182,6 +2182,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 62.58000183105469,
-    "min_price": 60.75
+    "min_price": 60.119998931884766
   }
 ]
