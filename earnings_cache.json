@@ -114,5 +114,9 @@
   "SPOT": {
     "earnings_date": "2026-04-28",
     "fetched": "2026-04-08"
+  },
+  "CVE.TO": {
+    "earnings_date": "2026-05-07",
+    "fetched": "2026-04-17"
   }
 }
