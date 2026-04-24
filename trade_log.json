@@ -2223,7 +2223,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 152.67999267578125,
-    "min_price": 139.52999877929688
+    "min_price": 138.92999267578125
   },
   {
     "id": "CVE.TO_20260417_1350",
@@ -2263,7 +2263,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 36.244998931884766,
+    "max_price": 36.25,
     "min_price": 32.45000076293945
   },
   {
@@ -2307,5 +2307,47 @@
     "outcome_pct": null,
     "max_price": 49.119998931884766,
     "min_price": 48.31999969482422
+  },
+  {
+    "id": "BAC_20260424_1110",
+    "ticker": "BAC",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-04-24",
+    "alert_time": "11:10 ET",
+    "entry": 52.18,
+    "stop_loss": 48.99,
+    "take_profit": 56.24,
+    "rr_ratio": 1.27,
+    "support": 51.89,
+    "support_source": "21 EMA",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 0,
+    "momentum_score": 0,
+    "penalty": 0,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA \u2014 Early Bounce ($51.89)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($51.25)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (54.3)",
+      "\ud83d\udcc9 Daily MACD: Negative Histogram (-0.002)"
+    ],
+    "rsi": 54.3,
+    "macd_h": 0.0,
+    "atr": 1.1605,
+    "ema_21": 51.89,
+    "ema_50": 51.25,
+    "bbl": 0.0,
+    "bb_width": 0.0,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 52.18,
+    "min_price": 52.18
   }
 ]
