@@ -1889,9 +1889,9 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "EXPIRED",
+    "outcome_date": "2026-04-28",
+    "outcome_pct": 3.49,
     "max_price": 81.80999755859375,
     "min_price": 76.0199966430664
   },
@@ -2096,11 +2096,11 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "LOST",
+    "outcome_date": "2026-04-28",
+    "outcome_pct": -10.06,
     "max_price": 543.6900024414062,
-    "min_price": 468.3999938964844
+    "min_price": 420.5299987792969
   },
   {
     "id": "XOM_20260409_1219",
@@ -2181,7 +2181,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 63.220001220703125,
+    "max_price": 64.66000366210938,
     "min_price": 58.4900016784668
   },
   {
@@ -2263,7 +2263,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 36.83000183105469,
+    "max_price": 37.65999984741211,
     "min_price": 32.45000076293945
   },
   {
@@ -2347,7 +2347,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 52.93000030517578,
+    "max_price": 53.43000030517578,
     "min_price": 51.83000183105469
   }
 ]
