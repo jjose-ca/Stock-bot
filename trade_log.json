@@ -2389,8 +2389,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 162.69,
-    "min_price": 162.69
+    "max_price": 164.75999450683594,
+    "min_price": 160.64999389648438
   },
   {
     "id": "JPM_20260429_1157",
@@ -2431,7 +2431,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 307.45,
-    "min_price": 307.45
+    "max_price": 312.0450134277344,
+    "min_price": 307.2900085449219
   }
 ]
