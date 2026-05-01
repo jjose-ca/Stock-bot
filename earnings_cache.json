@@ -130,5 +130,9 @@
   "JPM": {
     "earnings_date": "2026-07-14",
     "fetched": "2026-04-29"
+  },
+  "DASH": {
+    "earnings_date": "2026-05-06",
+    "fetched": "2026-05-01"
   }
 }

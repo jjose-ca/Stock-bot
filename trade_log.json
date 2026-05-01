@@ -2137,9 +2137,9 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "EXPIRED",
+    "outcome_date": "2026-05-01",
+    "outcome_pct": 2.63,
     "max_price": 159.22999572753906,
     "min_price": 141.97000122070312
   },
@@ -2181,7 +2181,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 65.75,
+    "max_price": 65.83000183105469,
     "min_price": 58.4900016784668
   },
   {
@@ -2347,7 +2347,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 53.630001068115234,
+    "max_price": 54.060001373291016,
     "min_price": 51.83000183105469
   },
   {
@@ -2389,7 +2389,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 165.17999267578125,
+    "max_price": 170.72000122070312,
     "min_price": 160.3300018310547
   },
   {
@@ -2431,7 +2431,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 314.1000061035156,
+    "max_price": 316.0799865722656,
     "min_price": 306.57000732421875
   }
 ]
