@@ -134,5 +134,9 @@
   "DASH": {
     "earnings_date": "2026-05-06",
     "fetched": "2026-05-01"
+  },
+  "CRM": {
+    "earnings_date": "2026-05-27",
+    "fetched": "2026-05-05"
   }
 }

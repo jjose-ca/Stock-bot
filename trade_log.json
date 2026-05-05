@@ -2389,7 +2389,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 184.38999938964844,
+    "max_price": 186.52000427246094,
     "min_price": 160.3300018310547
   },
   {
@@ -2517,5 +2517,46 @@
     "outcome_pct": null,
     "max_price": 51.76499938964844,
     "min_price": 51.37990188598633
+  },
+  {
+    "id": "CRM_20260505_1524",
+    "ticker": "CRM",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-05-05",
+    "alert_time": "15:24 ET",
+    "entry": 187.18,
+    "stop_loss": 163.71,
+    "take_profit": 213.16,
+    "rr_ratio": 1.11,
+    "support": 182.27,
+    "support_source": "21 EMA (50 EMA above = resistance)",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 0,
+    "momentum_score": 0,
+    "penalty": 0,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA + Strong Recovery (Low $181.10 \u2192 Close $187.18)",
+      "\u26a0\ufe0f Below 50 EMA \u2014 Testing as Support ($188.36)",
+      "\ud83c\udf0a Daily Momentum Reset (54.3)",
+      "\ud83d\udd6f\ufe0f Hammer at Support (reversal candle)"
+    ],
+    "rsi": 54.3,
+    "macd_h": 0.0,
+    "atr": 7.4235,
+    "ema_21": 182.27,
+    "ema_50": 188.36,
+    "bbl": 0.0,
+    "bb_width": 0.0,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 187.18,
+    "min_price": 187.18
   }
 ]
