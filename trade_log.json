@@ -2389,7 +2389,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 183.5,
+    "max_price": 184.38999938964844,
     "min_price": 160.3300018310547
   },
   {
@@ -2432,7 +2432,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 316.0799865722656,
-    "min_price": 306.54998779296875
+    "min_price": 306.510009765625
   },
   {
     "id": "NVDA_20260504_1203",
@@ -2475,5 +2475,47 @@
     "outcome_pct": null,
     "max_price": 201.72999572753906,
     "min_price": 194.74000549316406
+  },
+  {
+    "id": "XLF_20260505_1154",
+    "ticker": "XLF",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-05-05",
+    "alert_time": "11:54 ET",
+    "entry": 51.53,
+    "stop_loss": 49.65,
+    "take_profit": 54.13,
+    "rr_ratio": 1.38,
+    "support": 51.5,
+    "support_source": "21 EMA",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 0,
+    "momentum_score": 0,
+    "penalty": 0,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA \u2014 Early Bounce ($51.50)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($51.29)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (51.9)",
+      "\ud83d\udcc9 Daily MACD: Negative Histogram (-0.083)"
+    ],
+    "rsi": 51.9,
+    "macd_h": 0.0,
+    "atr": 0.743,
+    "ema_21": 51.5,
+    "ema_50": 51.29,
+    "bbl": 0.0,
+    "bb_width": 0.0,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 51.53,
+    "min_price": 51.53
   }
 ]
