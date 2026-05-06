@@ -2223,7 +2223,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 152.67999267578125,
-    "min_price": 134.67999267578125
+    "min_price": 131.1501007080078
   },
   {
     "id": "CVE.TO_20260417_1350",
@@ -2305,7 +2305,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 49.119998931884766,
+    "max_price": 50.22999954223633,
     "min_price": 47.970001220703125
   },
   {
@@ -2347,7 +2347,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 54.060001373291016,
+    "max_price": 54.20000076293945,
     "min_price": 51.83000183105469
   },
   {
@@ -2389,7 +2389,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 186.52000427246094,
+    "max_price": 192.14999389648438,
     "min_price": 160.3300018310547
   },
   {
@@ -2431,7 +2431,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 316.0799865722656,
+    "max_price": 316.2594909667969,
     "min_price": 306.510009765625
   },
   {
@@ -2473,7 +2473,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 201.72999572753906,
+    "max_price": 207.17999267578125,
     "min_price": 194.74000549316406
   },
   {
@@ -2515,7 +2515,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 51.76499938964844,
+    "max_price": 52.23500061035156,
     "min_price": 51.37990188598633
   },
   {
@@ -2556,7 +2556,48 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 187.18,
-    "min_price": 187.18
+    "max_price": 187.38999938964844,
+    "min_price": 181.10000610351562
+  },
+  {
+    "id": "ITB_20260506_1203",
+    "ticker": "ITB",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-05-06",
+    "alert_time": "12:03 ET",
+    "entry": 95.64,
+    "stop_loss": 89.13,
+    "take_profit": 104.74,
+    "rr_ratio": 1.4,
+    "support": 95.63,
+    "support_source": "21 EMA",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 0,
+    "momentum_score": 0,
+    "penalty": 0,
+    "reasons": [
+      "\u26a1 Daily Wick to 21 EMA \u2014 Early Bounce ($95.63)",
+      "\u26a0\ufe0f Below 50 EMA \u2014 Testing as Support ($96.75)",
+      "\ud83c\udf0a Daily Momentum Reset (49.8)",
+      "\ud83d\udd04 Daily MACD: Negative & Turning (-0.427 \u2191 -0.563)"
+    ],
+    "rsi": 49.8,
+    "macd_h": 0.0,
+    "atr": 2.6013,
+    "ema_21": 95.63,
+    "ema_50": 96.75,
+    "bbl": 0.0,
+    "bb_width": 0.0,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 95.64,
+    "min_price": 95.64
   }
 ]
