@@ -2386,10 +2386,10 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
-    "max_price": 192.14999389648438,
+    "status": "WON",
+    "outcome_date": "2026-05-06",
+    "outcome_pct": 18.24,
+    "max_price": 193.25,
     "min_price": 160.3300018310547
   },
   {
@@ -2597,7 +2597,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 95.64,
-    "min_price": 95.64
+    "max_price": 96.08999633789062,
+    "min_price": 94.69999694824219
   }
 ]
