@@ -2223,7 +2223,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 152.67999267578125,
-    "min_price": 131.1501007080078
+    "min_price": 131.14999389648438
   },
   {
     "id": "CVE.TO_20260417_1350",
@@ -2305,7 +2305,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 50.22999954223633,
+    "max_price": 50.36000061035156,
     "min_price": 47.970001220703125
   },
   {
@@ -2431,7 +2431,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 316.2594909667969,
+    "max_price": 316.2900085449219,
     "min_price": 306.510009765625
   },
   {
@@ -2473,7 +2473,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 207.17999267578125,
+    "max_price": 214.1999969482422,
     "min_price": 194.74000549316406
   },
   {
@@ -2515,7 +2515,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 52.23500061035156,
+    "max_price": 52.2400016784668,
     "min_price": 51.37990188598633
   },
   {
@@ -2556,8 +2556,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 187.38999938964844,
-    "min_price": 180.99000549316406
+    "max_price": 188.5800018310547,
+    "min_price": 179.5800018310547
   },
   {
     "id": "ITB_20260506_1203",
@@ -2597,7 +2597,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 96.08999633789062,
-    "min_price": 94.69999694824219
+    "max_price": 96.25499725341797,
+    "min_price": 93.7699966430664
   }
 ]
