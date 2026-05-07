@@ -2598,7 +2598,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 96.25499725341797,
-    "min_price": 93.19999694824219
+    "min_price": 92.88999938964844
   },
   {
     "id": "TGT_20260507_1251",
@@ -2639,7 +2639,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 125.11,
-    "min_price": 125.11
+    "max_price": 129.8000030517578,
+    "min_price": 123.62999725341797
   }
 ]
