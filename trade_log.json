@@ -2348,7 +2348,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 54.20000076293945,
-    "min_price": 51.314998626708984
+    "min_price": 51.154998779296875
   },
   {
     "id": "ORCL_20260429_1157",
@@ -2432,7 +2432,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 316.29998779296875,
-    "min_price": 300.6499938964844
+    "min_price": 300.5
   },
   {
     "id": "NVDA_20260504_1203",
