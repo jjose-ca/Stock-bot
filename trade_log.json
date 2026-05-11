@@ -2348,7 +2348,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 54.20000076293945,
-    "min_price": 51.095001220703125
+    "min_price": 50.275001525878906
   },
   {
     "id": "ORCL_20260429_1157",
@@ -2432,7 +2432,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 316.29998779296875,
-    "min_price": 300.5
+    "min_price": 298.8900146484375
   },
   {
     "id": "NVDA_20260504_1203",
@@ -2516,7 +2516,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 52.2400016784668,
-    "min_price": 51.1349983215332
+    "min_price": 50.95500183105469
   },
   {
     "id": "CRM_20260505_1524",
@@ -2557,7 +2557,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 188.5800018310547,
-    "min_price": 176.88999938964844
+    "min_price": 176.8800048828125
   },
   {
     "id": "ITB_20260506_1203",
@@ -2598,7 +2598,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 96.26000213623047,
-    "min_price": 92.41000366210938
+    "min_price": 91.57499694824219
   },
   {
     "id": "TGT_20260507_1251",
@@ -2640,6 +2640,6 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 129.8000030517578,
-    "min_price": 123.62999725341797
+    "min_price": 117.79000091552734
   }
 ]
