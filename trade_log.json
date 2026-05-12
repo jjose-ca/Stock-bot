@@ -2557,7 +2557,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 188.5800018310547,
-    "min_price": 172.3813934326172
+    "min_price": 171.61000061035156
   },
   {
     "id": "ITB_20260506_1203",
@@ -2721,8 +2721,8 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 505.01,
-    "min_price": 505.01
+    "max_price": 506.30999755859375,
+    "min_price": 500.1700134277344
   },
   {
     "id": "XLY_20260512_1312",
@@ -2763,7 +2763,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 117.75,
-    "min_price": 117.75
+    "max_price": 119.31999969482422,
+    "min_price": 117.44499969482422
   }
 ]
