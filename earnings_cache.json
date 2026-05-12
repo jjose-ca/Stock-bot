@@ -138,5 +138,9 @@
   "CRM": {
     "earnings_date": "2026-05-27",
     "fetched": "2026-05-05"
+  },
+  "MA": {
+    "earnings_date": "2026-07-30",
+    "fetched": "2026-05-12"
   }
 }
