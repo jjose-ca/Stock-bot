@@ -2348,7 +2348,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 54.20000076293945,
-    "min_price": 49.84000015258789
+    "min_price": 49.79999923706055
   },
   {
     "id": "ORCL_20260429_1157",
@@ -2557,7 +2557,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 188.5800018310547,
-    "min_price": 164.75
+    "min_price": 164.32749938964844
   },
   {
     "id": "ITB_20260506_1203",
@@ -2640,7 +2640,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 129.8000030517578,
-    "min_price": 117.66999816894531
+    "min_price": 116.5686540754037
   },
   {
     "id": "ATD.TO_20260512_1220",
@@ -2722,7 +2722,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 506.30999755859375,
-    "min_price": 490.5799865722656
+    "min_price": 489.8500061035156
   },
   {
     "id": "XLY_20260512_1312",
@@ -2763,7 +2763,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 119.3499984741211,
+    "max_price": 119.67500305175781,
     "min_price": 117.44499969482422
   }
 ]
