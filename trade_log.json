@@ -2722,7 +2722,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 506.30999755859375,
-    "min_price": 488.5
+    "min_price": 488.010009765625
   },
   {
     "id": "XLY_20260512_1312",
@@ -2847,7 +2847,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 321.33,
-    "min_price": 321.33
+    "max_price": 323.239990234375,
+    "min_price": 320.25
   }
 ]
