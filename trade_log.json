@@ -2348,7 +2348,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 54.20000076293945,
-    "min_price": 49.79999923706055
+    "min_price": 49.4900016784668
   },
   {
     "id": "ORCL_20260429_1157",
@@ -2765,5 +2765,47 @@
     "outcome_pct": null,
     "max_price": 119.67500305175781,
     "min_price": 117.44499969482422
+  },
+  {
+    "id": "RDDT_20260514_1301",
+    "ticker": "RDDT",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-05-14",
+    "alert_time": "13:01 ET",
+    "entry": 155.74,
+    "stop_loss": 132.48,
+    "take_profit": 188.27,
+    "rr_ratio": 1.4,
+    "support": 155.72,
+    "support_source": "50 EMA",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 0,
+    "momentum_score": 0,
+    "penalty": 0,
+    "reasons": [
+      "\u26a0\ufe0f Below 21 EMA \u2014 Testing as Support ($156.40)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($155.72)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (50.2)",
+      "\ud83d\udcc9 Daily MACD: Negative Histogram (-1.248)"
+    ],
+    "rsi": 50.2,
+    "macd_h": 0.0,
+    "atr": 9.2949,
+    "ema_21": 156.4,
+    "ema_50": 155.72,
+    "bbl": 0.0,
+    "bb_width": 0.0,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 155.74,
+    "min_price": 155.74
   }
 ]
