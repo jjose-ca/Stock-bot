@@ -146,5 +146,9 @@
   "RDDT": {
     "earnings_date": "2026-07-30",
     "fetched": "2026-05-14"
+  },
+  "V": {
+    "earnings_date": "2026-07-28",
+    "fetched": "2026-05-14"
   }
 }

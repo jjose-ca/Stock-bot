@@ -2722,7 +2722,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 506.30999755859375,
-    "min_price": 489.8500061035156
+    "min_price": 488.5
   },
   {
     "id": "XLY_20260512_1312",
@@ -2805,7 +2805,49 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 155.74,
-    "min_price": 155.74
+    "max_price": 157.22999572753906,
+    "min_price": 149.0301055908203
+  },
+  {
+    "id": "V_20260514_1455",
+    "ticker": "V",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-05-14",
+    "alert_time": "14:55 ET",
+    "entry": 321.33,
+    "stop_loss": 301.86,
+    "take_profit": 344.62,
+    "rr_ratio": 1.2,
+    "support": 318.49,
+    "support_source": "21 EMA",
+    "score": 6,
+    "threshold": 6,
+    "trend_score": 0,
+    "momentum_score": 0,
+    "penalty": 0,
+    "reasons": [
+      "\ud83d\udcc8 Daily 21 EMA Support Hold ($318.49)",
+      "\ud83d\udcca Pulling Back to 50 EMA Support ($316.16)",
+      "\u2705 Price Above Daily 50 EMA (Bullish Structure)",
+      "\ud83c\udf0a Daily Momentum Reset (54.2)",
+      "\ud83d\udcc9 Daily MACD: Negative Histogram (-0.110)"
+    ],
+    "rsi": 54.2,
+    "macd_h": 0.0,
+    "atr": 6.6534,
+    "ema_21": 318.49,
+    "ema_50": 316.16,
+    "bbl": 0.0,
+    "bb_width": 0.0,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 321.33,
+    "min_price": 321.33
   }
 ]
