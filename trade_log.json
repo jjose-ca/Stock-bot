@@ -2348,7 +2348,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 54.20000076293945,
-    "min_price": 49.43000030517578
+    "min_price": 49.349998474121094
   },
   {
     "id": "ORCL_20260429_1157",
@@ -2889,7 +2889,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 51.77,
-    "min_price": 51.77
+    "max_price": 51.95000076293945,
+    "min_price": 50.95000076293945
   }
 ]
