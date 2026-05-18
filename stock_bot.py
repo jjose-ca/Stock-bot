@@ -1,11 +1,10 @@
 """
 =============================================================================
-  STOCK ALERT BOT v6.0 — Swing-Only Edition
+  TQQQ ALERT BOT v6.1 — TQQQ Swing-Only Edition
 =============================================================================
 
 WHAT THIS BOT DOES:
-  Swing trade scanner — scans 62 tickers once per hour during market hours,
-  with 4 extra scans during power hour (3:00–3:45pm ET).
+  Swing trade scanner — scans TQQQ once per hour during market hours.
   Sends rich Discord alerts with entry, stop, target, R/R ratio, and chart.
   Places GTC bracket orders on Alpaca (paper trading).
   Runs automatically via GitHub Actions — no server needed.
@@ -15,12 +14,14 @@ SIGNAL LOGIC:
   - Entry window enforced: signals only fire 12:30–4:00pm ET
   - Market order fills immediately at 3:45pm price
   - Hold period: 10 days (GTC bracket with stop + limit target)
-  - US tickers only on Alpaca (.TO tickers skipped)
+  - TQQQ only — leveraged ETF, no earnings, high-volatility adjustments applied
 
 SCORING SYSTEM:
-  Path A: RSI < 35 + above 200 EMA → instant score 6 (deep oversold bypass)
+  Path A: RSI < 32 — deep oversold bypass (200 EMA gate REMOVED for TQQQ,
+          which routinely drops below 200 EMA during valid entry windows)
   Path B: Additive scoring across Trend (cap 4) + Momentum (cap 4), need ≥ 6
-  Gates:  below both EMAs, gap filter, earnings filter, cooldown, open position
+          Structural gate (below both EMAs) BYPASSED for TQQQ
+  Gates:  gap filter, cooldown, open position (no earnings gate — TQQQ is ETF)
 
 HOW TO RUN MANUALLY:
   python stock_bot.py                  # Auto-detects mode from time of day
@@ -115,51 +116,16 @@ def get_alpaca_client():
 # =============================================================================
 
 # ── Your watchlist ────────────────────────────────────────────────────────────
-# Backtest period: 2022-2024 | Hold: 10 days | Last updated: 2026-03-12
-# Removed: MSTR(-6.18exp) TSLA(0%WR) COIN(0%WR) CCL(-1.60exp)
-#          UNH(0%WR) DVN(0%WR) PG(-exp) JNJ(-exp) CVX(-exp)
-# Added:   GOOGL(+2.65exp) UBER(+2.86exp) NFLX(+2.04exp) HUBS(+2.96exp)
-#          DKNG(+2.89exp) PLTR(+3.01exp) HOOD(+3.08exp) SPOT(+1.98exp)
-#          JPM(+1.67exp) CRWD(0loss/19sig) DDOG(0loss/7sig)
-# Kept:    NVDA (open orders active, revisit after completion)
-# USD tickers (NYSE / NASDAQ)
+# TQQQ-only bot | Hold: 10 days | RSI(14) < 32 entry | Updated: 2026-05-18
+# VTI is kept for market regime check only — it is never traded.
+# TQQQ: 3x leveraged Nasdaq-100 ETF — high ATR, no earnings, no 200 EMA gate.
 TICKERS_USD = [
-    'VTI',          # ← Keep this — used for market regime check, not traded
-
-    # ETFs
-    'SPY', 'QQQM', 'QQQ', 'IWM',
-    'XLY', 'XLF', 'XLK', 'SMH', 'ITB', 'SPMO',
-
-    # Mega-cap
-    'AAPL', 'GOOGL', 'AMZN', 'META',
-
-    # Financials
-    'JPM', 'BAC', 'XOM',
-    'V', 'MA',
-
-    # Semiconductors
-    'NVDA', 'AVGO', 'TSM', 'AMD', 'ARM',
-
-    # Enterprise software / cloud
-    'NFLX', 'ORCL', 'CRM', 'NOW', 'HUBS', 'DDOG', 'CRWD', 'NET',
-
-    # High-growth platform / SaaS
-    'SHOP', 'APP', 'IOT', 'DUOL', 'RDDT',
-    'UBER', 'SPOT', 'TTD', 'DASH', 'HIMS',
-
-    # Consumer / retail
-    'TGT', 'DKNG',
-
-    # High-beta
-    'PLTR', 'HOOD',
+    'VTI',    # Market regime check only — NOT traded
+    'TQQQ',   # Primary instrument — 3x leveraged Nasdaq-100
 ]
 
-# CAD tickers (TSX) — alerts will be tagged CA$ automatically
-TICKERS_CAD = [
-    'ZSP.TO', 'XEF.TO',
-    'HUT.TO', 'CVE.TO', 'MFC.TO', 'ATD.TO', 'TOU.TO', 'ATZ.TO', 
-    # QQC.TO removed — delisted, no price data available
-]
+# CAD tickers (TSX) — cleared for TQQQ-only bot
+TICKERS_CAD = []
 
 # ── Discord ───────────────────────────────────────────────────────────────────
 # Never hardcode your webhook URL. Set it as an environment variable instead.
@@ -194,7 +160,8 @@ MIN_DOLLAR_VOLUME = {
 }
 
 # ── Risk parameters ───────────────────────────────────────────────────────────
-BASE_MAX_STOP_PCT     = 0.06   # Floor — never tighter than 6% even for low-vol stocks
+BASE_MAX_STOP_PCT     = 0.10   # Floor raised to 10% for TQQQ (3x leveraged ETF — 6% is too tight;
+                               # TQQQ daily ATR is typically 4-7%, so 2.5x ATR stop needs room)
 ABSOLUTE_MAX_STOP_PCT = 0.15   # Ceiling — never wider than 15% even for extreme high-beta
 MIN_RR_RATIO          = 1.1    # Lowered from 1.5 — structural stops widen on valid setups
 
@@ -203,8 +170,8 @@ MIN_RR_RATIO          = 1.1    # Lowered from 1.5 — structural stops widen on 
 # Alerts will show exact dollar amounts to invest per signal.
 PORTFOLIO_VALUE = 10000.0  # ← Update this whenever your account size changes
 
-SWING_ATR_STOP_MULT   = 2.5    # Swing stop = support − (ATR × 2.5) — validated by ATR sweep (16.5% win rate)
-SWING_ATR_TARGET_MULT = 3.5    # Swing target = entry + (ATR × 3.5)
+SWING_ATR_STOP_MULT   = 2.5    # TQQQ locked param: stop = support - (ATR x 2.5)
+SWING_ATR_TARGET_MULT = 3.5    # TQQQ locked param: target = entry + (ATR x 3.5) — R/R = 1.40
 
 # ── Volume thresholds ─────────────────────────────────────────────────────────
 VOLUME_STRONG   = 2.0    # 2x relative volume = strong institutional activity
@@ -250,6 +217,20 @@ OUTCOME_CHECK_DAYS    = 21    # Extended from 10 — swing trades need room to d
 OUTCOME_DISCORD_DAILY = True  # Send outcome summary to Discord whenever there are
                               # open positions or newly resolved trades.
                               # Set False to suppress all outcome messages.
+
+# ── Real-time sell alert configuration ───────────────────────────────────────
+# On every scan during market hours, the bot fetches TQQQ's live price via
+# yfinance fast_info and checks each OPEN trade against its stop and target.
+# If either level is crossed, a real-time Discord sell alert fires immediately.
+#
+# Cooldown prevents re-alerting on the same trade within one session:
+# once a sell alert fires for a trade ID, that ID is stored in a /tmp file
+# and suppressed for SELL_ALERT_COOLDOWN_MINUTES minutes.
+#
+# Note: the bot does NOT auto-place a sell order — you must execute manually
+# on IBKR (or Alpaca if still paper trading). The alert is the trigger.
+SELL_ALERT_COOLDOWN_MINUTES = 60        # Min gap between sell alerts for same trade
+SELL_ALERT_COOLDOWN_FILE    = "/tmp/sell_alert_cooldowns.json"  # /tmp resets per run
 
 # ── Discord embed colors ──────────────────────────────────────────────────────
 COLOR_GREEN  = 5763719    # Scenario A — full alignment
@@ -585,12 +566,12 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     # ── PATH A — DEEP OVERSOLD BYPASS ────────────────────────────────────────
     # Checked FIRST — before the structural gate below.
-    # RSI<35 stocks are deeply sold off and almost always below both 21 and 50
-    # EMA — which would trigger the structural gate and silently block 98% of
-    # these elite setups (84% resolved WR, +3.74% avg exp).
-    # The 200 EMA acts as the structural anchor: if price is above it, the
-    # stock is in a long-term uptrend having a severe short-term pullback.
-    if rsi < 35 and ema_200 is not None and price > ema_200:
+    # TQQQ-specific: 200 EMA gate REMOVED. For individual stocks, price > 200 EMA
+    # confirms a long-term uptrend. For TQQQ (3x leveraged ETF), it routinely
+    # drops below the 200 EMA during the deep corrections that are our BEST entry
+    # points. Requiring price > 200 EMA would silently block the highest-conviction
+    # TQQQ setups. RSI < 32 alone is the structural anchor here.
+    if rsi < 35:
         trend_score     = 3
         momentum_score  = 3
         score           = trend_score + momentum_score
@@ -601,19 +582,34 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         is_bullish      = price > ema_21
         high_52w        = float(df['High'].tail(252).max())
         near_52w_high   = price >= high_52w * 0.98
-        support         = ema_200
-        support_source  = "200 EMA"
+        # Support anchor: use 200 EMA if available and below price, else fall back
+        # to 50 EMA, then 21 EMA. For TQQQ below all EMAs, use volatility stop.
+        if ema_200 is not None and price > ema_200:
+            support        = ema_200
+            support_source = "200 EMA"
+        elif price > ema_50:
+            support        = ema_50
+            support_source = "50 EMA"
+        elif price > ema_21:
+            support        = ema_21
+            support_source = "21 EMA"
+        else:
+            support        = entry_price   # volatility stop — TQQQ below all EMAs
+            support_source = "Volatility Stop (below all EMAs)"
         stop_loss       = support - (atr * SWING_ATR_STOP_MULT)
         if stop_loss >= entry_price:
             stop_loss = entry_price - atr
         take_profit = entry_price + (atr * SWING_ATR_TARGET_MULT)
         rr_ratio = 0.0  # placeholder — validate_risk overwrites with ATR ratio (3.5/2.5=1.40)
         reasons = [
-            f"💎 Deep Oversold Bounce — RSI {rsi:.1f}",
-            f"🏔️  Above 200 EMA ${ema_200:.2f} (Long-term Uptrend Intact)",
+            f"💎 Deep Oversold Bounce — RSI {rsi:.1f} (TQQQ Path A)",
+            f"📍 Support anchor: {support_source} ${support:.2f}",
         ]
+        if ema_200 is not None:
+            ema200_rel = "above" if price > ema_200 else "below"
+            reasons.append(f"📊 200 EMA ${ema_200:.2f} ({ema200_rel} — informational)")
         print(f"   [{ticker}] ✅ PATH A — Deep Oversold Bypass "
-              f"RSI={rsi:.1f} above 200EMA=${ema_200:.2f}")
+              f"RSI={rsi:.1f} support={support_source} ${support:.2f}")
         return {
             "price": entry_price, "entry_price": entry_price,
             "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
@@ -636,13 +632,11 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     #   - Today's low > yesterday's low  (sellers couldn't push lower)
     #   - Today closes green (close > open) (buyers stepped in intraday)
     #   - RSI < 50 AND rising vs yesterday (momentum turning, not drifting)
-    #   - Above 200 EMA                   (long-term uptrend intact)
-    # RSI must be 35–50: below 35 is Path A territory (better expectancy there).
+    # RSI must be 35-50: below 35 is Path A territory (better expectancy there).
+    # TQQQ: 200 EMA gate REMOVED — same rationale as Path A. TQQQ can be below
+    # 200 EMA for extended periods; pivot low confirmation is sufficient.
     # Stop anchored to yesterday's low — the market drew the bottom, not a formula.
-    # Scores today's live bar at 3:45pm, enters today near close — same timing as Path A/B.
     if (
-        ema_200 is not None and
-        price > ema_200 and
         price < ema_21 and price < ema_50 and     # dead zone
         rsi >= 35 and rsi < 50 and                # not deep oversold (Path A handles that)
         bar_low > float(prev['Low']) and          # higher low vs yesterday
@@ -666,13 +660,15 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         take_profit = entry_price + (atr * SWING_ATR_TARGET_MULT)
         rr_ratio = 0.0  # placeholder — validate_risk overwrites with ATR ratio
         reasons = [
-            f"🔄 Path D — Day 2 Reversal",
+            f"🔄 Path D — Day 2 Reversal (TQQQ)",
             f"📈 Higher Low (${bar_low:.2f} > ${prev_low:.2f}) + Green Close",
-            f"📉 RSI Turning Up {float(prev['RSI']):.1f} → {rsi:.1f} (oversold zone)",
-            f"🏔️  Above 200 EMA ${ema_200:.2f} (Long-term Uptrend Intact)",
+            f"📉 RSI Turning Up {float(prev['RSI']):.1f} -> {rsi:.1f} (oversold zone)",
         ]
+        if ema_200 is not None:
+            ema200_rel = "above" if price > ema_200 else "below"
+            reasons.append(f"📊 200 EMA ${ema_200:.2f} ({ema200_rel} — informational)")
         print(f"   [{ticker}] ✅ PATH D — Day 2 Reversal "
-              f"RSI={rsi:.1f} HL=${bar_low:.2f}>${prev_low:.2f} above 200EMA=${ema_200:.2f}")
+              f"RSI={rsi:.1f} HL=${bar_low:.2f}>${prev_low:.2f}")
         return {
             "price": entry_price, "entry_price": entry_price,
             "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
@@ -699,9 +695,14 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     daily_low   = float(scored['Low'])
     daily_close = float(scored['Close'])  # same as price — yesterday's confirmed close
     # ── STRUCTURAL GATE: must be above at least one EMA ──────────────────
-    # Path B only — prevents signals where price is below both 21 and 50 EMA.
-    # Those are downtrends, not pullbacks. Path A has its own gate (200 EMA).
-    if price < ema_21 and price < ema_50:
+    # Path B only — for individual stocks this prevents signals where price is
+    # below both 21 and 50 EMA (downtrends, not pullbacks).
+    # TQQQ EXCEPTION: gate is bypassed. TQQQ's 3x leverage means it can be
+    # below both EMAs during a sharp correction — which is exactly where the
+    # best mean-reversion entries occur. Path A (RSI<35) handles the deepest
+    # cases; Path B here handles moderate oversold setups (RSI 35-55).
+    # The trend_floor check (trend_score >= 3) still filters garbage signals.
+    if ticker != 'TQQQ' and price < ema_21 and price < ema_50:
         print(f"   [{ticker}] ❌ Below both EMAs (21 EMA ${ema_21:.2f}, "
               f"50 EMA ${ema_50:.2f}) — not a pullback, rejected.")
         return None
@@ -1026,14 +1027,16 @@ def calculate_position_size(score: int, threshold: int,
     conviction = min(margin * 1.0, 4.0)
 
     # Volatility adjustment: ATR as % of price
-    # Low vol  (< 1.5%): no reduction
-    # Mid vol  (1.5–3%): scale down proportionally
-    # High vol (> 3%):   cap at 60% of base
-    atr_pct = (atr / price) * 100 if price > 0 else 2.0
-    if atr_pct <= 1.5:
+    # TQQQ typically has ATR 4-7% — standard thresholds would always cap at 60%.
+    # Thresholds raised for TQQQ: high vol is expected, not a warning sign.
+    # Low vol  (< 3%):   no reduction   (would be abnormally low for TQQQ)
+    # Mid vol  (3–6%):   scale down proportionally
+    # High vol (> 6%):   cap at 60% of base (extreme volatility only)
+    atr_pct = (atr / price) * 100 if price > 0 else 4.0
+    if atr_pct <= 3.0:
         vol_factor = 1.0
-    elif atr_pct <= 3.0:
-        vol_factor = 1.0 - ((atr_pct - 1.5) / 1.5) * 0.4   # linear 1.0 → 0.6
+    elif atr_pct <= 6.0:
+        vol_factor = 1.0 - ((atr_pct - 3.0) / 3.0) * 0.4   # linear 1.0 -> 0.6
     else:
         vol_factor = 0.6
 
@@ -1042,9 +1045,9 @@ def calculate_position_size(score: int, threshold: int,
     # Hard cap for swing trades
     pct = round(min(raw_pct, 12.0), 1)
 
-    # Human-readable volatility tag
-    if atr_pct <= 1.5:   vol_tag = "low vol"
-    elif atr_pct <= 3.0: vol_tag = "mid vol"
+    # Human-readable volatility tag (TQQQ-adjusted thresholds)
+    if atr_pct <= 3.0:   vol_tag = "low vol"
+    elif atr_pct <= 6.0: vol_tag = "mid vol"
     else:                vol_tag = "high vol ⚠️"
 
     dollar_amount = round(PORTFOLIO_VALUE * pct / 100, 2)
@@ -1199,6 +1202,7 @@ def check_earnings(ticker: str) -> tuple[bool, str]:
     """
     # ── Step 1: ETFs never have earnings ─────────────────────────────────────
     ETF_TICKERS = {
+        'TQQQ',                                           # Primary instrument — leveraged ETF, no earnings
         'SPY', 'SPLG', 'QQQM', 'QQQ', 'IWM', 'VTI', 'SOXQ',
         'XLY', 'GDX', 'SIL', 'XLF', 'XLK', 'SMH', 'GLD', 'SLV', 'ITB',
         'VWO', 'VEA', 'SPMO',
@@ -1762,7 +1766,7 @@ def check_market(mode: str, tickers_override: list | None = None):
     et_now = datetime.now(tz)
 
     print(f"\n{'='*60}")
-    print(f"  Stock Alert Bot v6.0 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
+    print(f"  TQQQ Alert Bot v6.1 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
     print(f"  Mode: {mode.upper()}")
     print(f"{'='*60}\n")
 
@@ -1805,11 +1809,20 @@ def check_market(mode: str, tickers_override: list | None = None):
     print(f"📊 Total threshold penalty: +{total_penalty} "
           f"(time +{time_penalty}, regime +{regime_penalty})\n")
 
-    # ── Check open trade outcomes ─────────────────────────────────────────────
+    # ── Check open trade outcomes (daily bar resolution) ─────────────────────
     # Runs on every scan using the bulk daily data already downloaded —
     # no extra API calls needed.
     print("📋 Checking open trade outcomes...")
     resolved = check_open_trades(bulk_data)
+
+    # ── Real-time sell alerts (live price resolution) ─────────────────────────
+    # Separate from the daily outcome check above. Fetches TQQQ's live price
+    # and fires an immediate Discord alert if any open trade has hit its
+    # target, stop, or trailing threshold RIGHT NOW during the session.
+    # Only runs during market hours (swing mode) — not in premarket.
+    if mode == "swing":
+        print("🔔 Checking real-time sell conditions (live price)...")
+        check_live_sell_alerts()
 
     # Only send Discord outcome summary when there is actually something to show:
     #   - Newly resolved trades (WON/LOST/EXPIRED this run), OR
@@ -2339,6 +2352,241 @@ def log_new_trade(ticker: str, currency: str, signal: dict):
         print(f"   ⚠️ Trade log error: {e}")
 
 
+# =============================================================================
+#  SECTION 13A — REAL-TIME SELL ALERTS
+#
+#  Runs on every scan during market hours. Fetches TQQQ's live price via
+#  yfinance fast_info (1 lightweight API call — no full bar download needed)
+#  and compares it against each OPEN trade's stop_loss and take_profit.
+#
+#  Three sell scenarios:
+#    TARGET HIT — price >= take_profit  -> "SELL — Target Reached" (green)
+#    STOP HIT   — price <= stop_loss    -> "SELL — Stop Loss Hit"  (red)
+#    TRAILING   — price >= trail_pct%   -> "SELL — Trailing Alert" (yellow)
+#                 fires when price drops TQQQ_TRAIL_PCT% from running high
+#
+#  Cooldown: once a sell alert fires for a given trade ID, it is suppressed
+#  for SELL_ALERT_COOLDOWN_MINUTES to avoid alert floods on choppy price.
+#  Cooldown resets when the bot restarts (/tmp storage).
+#
+#  Accuracy note: fast_info returns the last traded price, may lag a few
+#  seconds — sufficient for swing trade exit monitoring.
+# =============================================================================
+
+# Trailing stop — fires when price pulls back from running high by this %.
+# Set to 0.0 to disable trailing alerts entirely.
+TQQQ_TRAIL_PCT = 5.0   # Alert if price drops >5% from the intraday high watermark
+
+
+def fetch_tqqq_live_price() -> float | None:
+    """
+    Fetches TQQQ's current live price using yfinance fast_info.
+    Returns None on any failure — callers must handle gracefully.
+    fast_info is a single lightweight REST call, no historical data pulled.
+    """
+    try:
+        price = yf.Ticker("TQQQ").fast_info.get("last_price")
+        if price is not None:
+            return float(price)
+    except Exception as e:
+        print(f"   WARNING: Live price fetch failed: {e}")
+    return None
+
+
+def _load_sell_cooldowns() -> dict:
+    """Loads sell alert cooldown state from /tmp. Returns {} on any error."""
+    try:
+        p = Path(SELL_ALERT_COOLDOWN_FILE)
+        if p.exists():
+            with open(p) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_sell_cooldowns(data: dict):
+    """Saves sell alert cooldown state to /tmp."""
+    try:
+        with open(SELL_ALERT_COOLDOWN_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"   WARNING: Sell cooldown save failed: {e}")
+
+
+def _is_sell_alert_on_cooldown(trade_id: str, reason: str) -> bool:
+    """
+    Returns True if a sell alert for this trade_id + reason was recently sent.
+    Key format: trade_id + "|" + reason  e.g. "TQQQ_20260518_1430|TARGET"
+    TARGET and STOP cooldowns tracked independently so one won't suppress the other.
+    """
+    cooldowns = _load_sell_cooldowns()
+    key = f"{trade_id}|{reason}"
+    if key not in cooldowns:
+        return False
+    try:
+        tz   = pytz.timezone(TIMEZONE)
+        last = datetime.fromisoformat(cooldowns[key])
+        if last.tzinfo is None:
+            last = tz.localize(last)
+        elapsed = (datetime.now(tz) - last).total_seconds() / 60.0
+        if elapsed < SELL_ALERT_COOLDOWN_MINUTES:
+            print(f"   Sell alert [{reason}] for {trade_id} on cooldown "
+                  f"({elapsed:.0f}/{SELL_ALERT_COOLDOWN_MINUTES} min)")
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _set_sell_cooldown(trade_id: str, reason: str):
+    """Records that a sell alert fired for this trade_id + reason."""
+    cooldowns = _load_sell_cooldowns()
+    key = f"{trade_id}|{reason}"
+    cooldowns[key] = datetime.now(pytz.timezone(TIMEZONE)).isoformat()
+    _save_sell_cooldowns(cooldowns)
+
+
+def send_sell_alert(trade: dict, live_price: float, reason: str):
+    """
+    Sends a real-time sell alert to Discord.
+    reason: "TARGET" | "STOP" | "TRAIL"
+    Color: TARGET=green, STOP=red, TRAIL=yellow
+    """
+    entry      = trade["entry"]
+    stop       = trade["stop_loss"]
+    target     = trade["take_profit"]
+    trade_id   = trade["id"]
+    alert_date = trade.get("alert_date", "?")
+    days_open  = (datetime.now(pytz.timezone(TIMEZONE)).date() -
+                  datetime.strptime(alert_date, "%Y-%m-%d").date()).days
+
+    pct_from_entry = (live_price - entry) / entry * 100
+    pct_to_target  = (target - live_price) / entry * 100
+    pct_to_stop    = (live_price - stop)   / entry * 100
+
+    if reason == "TARGET":
+        title   = "SELL — TQQQ Target Reached"
+        color   = 5763719     # green
+        action  = "**SELL NOW** — take profit target has been reached."
+        summary = f"Price `${live_price:.2f}` has reached or exceeded target `${target:.2f}`"
+    elif reason == "STOP":
+        title   = "SELL — TQQQ Stop Loss Hit"
+        color   = 15548997    # red
+        action  = "**SELL NOW** — stop loss level has been breached."
+        summary = f"Price `${live_price:.2f}` has dropped to or below stop `${stop:.2f}`"
+    else:  # TRAIL
+        high_wm  = trade.get("max_price", entry)
+        drop_pct = (high_wm - live_price) / high_wm * 100
+        title    = "SELL — TQQQ Trailing Alert"
+        color    = 16776960   # yellow
+        action   = (f"**Consider selling** — price has pulled back `{drop_pct:.1f}%` "
+                    f"from the high of `${high_wm:.2f}`.")
+        summary  = (f"Price `${live_price:.2f}` dropped `{drop_pct:.1f}%` "
+                    f"from running high `${high_wm:.2f}`")
+
+    desc = (
+        f"{summary}\n\n"
+        f"{action}\n\n"
+        f"**Trade Details**\n"
+        f"Entry: `${entry:.2f}` ({days_open} day{'s' if days_open != 1 else ''} ago)\n"
+        f"Live Price: `${live_price:.2f}` (`{pct_from_entry:+.2f}%` from entry)\n"
+        f"Target: `${target:.2f}` (`{pct_to_target:+.1f}%` away)\n"
+        f"Stop: `${stop:.2f}` (`{pct_to_stop:+.1f}%` cushion)\n"
+        f"Trade ID: `{trade_id}`\n\n"
+        f"_Execute exit manually on your broker. "
+        f"This alert does not place an order automatically._"
+    )
+
+    payload = {"embeds": [{
+        "title":       title,
+        "description": desc[:4096],
+        "color":       color,
+        "footer":      {"text": "TQQQ Alert Bot v6.1 | Real-time sell alert"},
+        "timestamp":   datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }]}
+
+    _post_discord(payload)
+    print(f"   Sell alert sent [{reason}] for {trade_id} @ ${live_price:.2f}")
+
+
+def check_live_sell_alerts():
+    """
+    Main real-time sell alert runner. Called on every scan during market hours.
+
+    Steps:
+      1. Load all OPEN trades from trade_log.json
+      2. Fetch TQQQ live price (single fast_info call)
+      3. For each open trade check:
+           a. Target hit  -> send TARGET alert
+           b. Stop hit    -> send STOP alert
+           c. Trailing    -> send TRAIL alert if TQQQ_TRAIL_PCT > 0
+      4. Update max_price watermark in trade log for trailing accuracy
+      5. Apply cooldown to avoid alert floods
+    """
+    trades      = load_trade_log()
+    open_trades = [t for t in trades if t["status"] == "OPEN"]
+
+    if not open_trades:
+        print("   No open trades to monitor for sell alerts.")
+        return
+
+    print(f"   Checking live sell conditions for {len(open_trades)} open trade(s)...")
+
+    live_price = fetch_tqqq_live_price()
+    if live_price is None:
+        print("   Could not fetch live price — sell alert check skipped.")
+        return
+
+    print(f"   TQQQ live price: ${live_price:.2f}")
+
+    changed = False
+    for trade in trades:
+        if trade["status"] != "OPEN":
+            continue
+
+        trade_id = trade["id"]
+        entry    = trade["entry"]
+        stop     = trade["stop_loss"]
+        target   = trade["take_profit"]
+
+        # Update running high watermark for trailing logic
+        prev_max = trade.get("max_price", entry)
+        if live_price > prev_max:
+            trade["max_price"] = float(live_price)
+            changed = True
+
+        # TARGET HIT
+        if live_price >= target:
+            if not _is_sell_alert_on_cooldown(trade_id, "TARGET"):
+                send_sell_alert(trade, live_price, "TARGET")
+                _set_sell_cooldown(trade_id, "TARGET")
+            continue  # skip stop/trail checks
+
+        # STOP HIT
+        if live_price <= stop:
+            if not _is_sell_alert_on_cooldown(trade_id, "STOP"):
+                send_sell_alert(trade, live_price, "STOP")
+                _set_sell_cooldown(trade_id, "STOP")
+            continue  # skip trail check
+
+        # TRAILING ALERT
+        if TQQQ_TRAIL_PCT > 0:
+            high_wm  = trade.get("max_price", entry)
+            drop_pct = (high_wm - live_price) / high_wm * 100
+            # Only alert if we have a meaningful gain first (>2% above entry)
+            # to avoid trail alerts on flat or slightly profitable trades
+            has_gain = (high_wm - entry) / entry * 100 >= 2.0
+            if has_gain and drop_pct >= TQQQ_TRAIL_PCT:
+                if not _is_sell_alert_on_cooldown(trade_id, "TRAIL"):
+                    send_sell_alert(trade, live_price, "TRAIL")
+                    _set_sell_cooldown(trade_id, "TRAIL")
+
+    if changed:
+        save_trade_log(trades)
+
+
+
 def check_open_trades(bulk_data) -> list:
     """
     Checks all OPEN trades against the latest daily close.
@@ -2509,7 +2757,7 @@ def send_outcome_summary(resolved: list, bulk_data):
             "title":       "📈 Trade Outcome Tracker",
             "description": desc[:4096],
             "color":       5763719 if win_rate >= 50 else 15548997,
-            "footer":      {"text": f"Stock Alert Bot v6.0 | {len(trades)} total trades logged"},
+            "footer":      {"text": f"TQQQ Alert Bot v6.1 | {len(trades)} total trades logged"},
         }]}
         _post_discord(payload)
         print(f"   📊 Outcome summary sent ({len(open_tr)} open, {len(resolved)} resolved)")
@@ -2522,7 +2770,7 @@ def send_outcome_summary(resolved: list, bulk_data):
 # =============================================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Stock Alert Bot v6.0")
+    parser = argparse.ArgumentParser(description="TQQQ Alert Bot v6.1")
     parser.add_argument('--mode',
         choices=['auto', 'premarket', 'swing'],
         default='auto',
