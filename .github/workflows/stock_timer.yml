@@ -1,4 +1,4 @@
-name: Run Stock Bot
+name: Run TQQQ Bot
 
 on:
   schedule:
@@ -9,27 +9,30 @@ on:
     #
     # EDT (Mar-Nov): UTC-4  |  EST (Nov-Mar): UTC-5
     # Running both offsets means exactly one fires correctly each season.
+    #
+    # TQQQ bot runs every 15 minutes all session (vs hourly for stock_bot).
+    # Reason: real-time sell alerts (stop/target/trail) need frequent checks
+    # to fire promptly during the session. A 1-hour gap is too coarse for
+    # a 3x leveraged ETF that can move 5%+ within a single hour.
 
-    # Intraday: every hour at :00, 10:00am-2:00pm ET
-    #   EDT -> 14:00-18:00 UTC  |  EST -> 15:00-19:00 UTC
-    - cron: '0 14-18 * * 1-5'
-    - cron: '0 15-19 * * 1-5'
-
-    # Power Hour: 3:00, 3:15, 3:30, 3:45pm ET
-    #   EDT -> 19:00-19:45 UTC  |  EST -> 20:00-20:45 UTC
-    - cron: '0 19 * * 1-5'
-    - cron: '15 19 * * 1-5'
-    - cron: '30 19 * * 1-5'
-    - cron: '45 19 * * 1-5'
-    - cron: '0 20 * * 1-5'
-    - cron: '15 20 * * 1-5'
-    - cron: '30 20 * * 1-5'
-    - cron: '45 20 * * 1-5'
+    # Every 15 min, 9:30am-3:45pm ET
+    #   EDT -> 13:30-19:45 UTC  |  EST -> 14:30-20:45 UTC
+    - cron: '30,45 13 * * 1-5'
+    - cron: '0,15,30,45 14-18 * * 1-5'
+    - cron: '0,15,30,45 19 * * 1-5'
+    - cron: '30,45 14 * * 1-5'
+    - cron: '0,15,30,45 15-19 * * 1-5'
+    - cron: '0,15,30,45 20 * * 1-5'
 
   workflow_dispatch:
     inputs:
       force:
         description: 'Force scan even if market is closed (for testing)'
+        required: false
+        default: 'false'
+        type: boolean
+      dry_run:
+        description: 'Dry run — skip order placement (safe for testing)'
         required: false
         default: 'false'
         type: boolean
@@ -55,18 +58,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run bot
+      - name: Run TQQQ bot
         env:
           DISCORD_URL: ${{ secrets.DISCORD_URL }}
-          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: python stock_bot.py ${{ github.event.inputs.force == 'true' && '--force' || '' }}
+          # ALPACA_API_KEY and ALPACA_SECRET_KEY removed — bot migrated to IBKR.
+          # Re-add these secrets here if reverting to Alpaca paper trading.
+        run: |
+          ARGS=""
+          [ "${{ github.event.inputs.force }}"   = "true" ] && ARGS="$ARGS --force"
+          [ "${{ github.event.inputs.dry_run }}" = "true" ] && ARGS="$ARGS --dry-run"
+          python tqqq_bot.py $ARGS
 
       - name: Commit trade log
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          [ -f trade_log.json ] || echo "[]" > trade_log.json
+          [ -f trade_log.json ]      || echo "[]" > trade_log.json
           [ -f earnings_cache.json ] || echo "{}" > earnings_cache.json
           git add trade_log.json earnings_cache.json
           git diff --staged --quiet || (
