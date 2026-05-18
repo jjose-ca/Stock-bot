@@ -2344,9 +2344,9 @@
     "gap_pct": 0.0,
     "near_52w_high": false,
     "regime_bullish": true,
-    "status": "OPEN",
-    "outcome_date": null,
-    "outcome_pct": null,
+    "status": "EXPIRED",
+    "outcome_date": "2026-05-18",
+    "outcome_pct": 3.87,
     "max_price": 54.20000076293945,
     "min_price": 49.349998474121094
   },
@@ -2764,7 +2764,7 @@
     "outcome_date": null,
     "outcome_pct": null,
     "max_price": 119.68000030517578,
-    "min_price": 116.30999755859375
+    "min_price": 116.16000366210938
   },
   {
     "id": "RDDT_20260514_1301",
@@ -2805,7 +2805,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 159.07000732421875,
+    "max_price": 160.97999572753906,
     "min_price": 149.02999877929688
   },
   {
@@ -2847,7 +2847,7 @@
     "status": "OPEN",
     "outcome_date": null,
     "outcome_pct": null,
-    "max_price": 328.989990234375,
+    "max_price": 330.8599853515625,
     "min_price": 320.25
   },
   {
