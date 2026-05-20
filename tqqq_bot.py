@@ -1941,13 +1941,14 @@ def send_premarket_summary(summaries: list[dict]):
 
 
 def send_no_signals_notice(mode: str, count: int):
-    """Confirmation that the bot ran and found nothing — prevents silent failures."""
+    """Logs scan completion to console only — no Discord message.
+    Sending a Discord alert every 15 min when nothing is found would produce
+    up to 26 noise messages per day. Silence is the correct behaviour here —
+    Discord alerts only fire when there is something actionable to act on."""
     et_now = datetime.now(pytz.timezone(TIMEZONE))
-    payload = {"embeds": [{"title": "✅ Scan Complete — No Setups",
-        "description": (f"**Mode:** `{mode.upper()}` | `{et_now.strftime('%I:%M %p ET')}`\n"
-                        f"**Tickers in funnel:** {count}\nNo signals met the threshold."),
-        "color": COLOR_BLUE}]}
-    _post_discord(payload)
+    print(f"   ✅ Scan complete — no setups found | "
+          f"{mode.upper()} | {et_now.strftime('%I:%M %p ET')} | "
+          f"{count} ticker(s) scanned")
 
 
 # =============================================================================
