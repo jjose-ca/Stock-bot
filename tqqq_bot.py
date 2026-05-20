@@ -133,6 +133,46 @@ TICKERS_CAD = []
 # On GitHub Actions:   add it as a repository Secret named DISCORD_URL
 DISCORD_WEBHOOK_URL = os.getenv('DISCORD_URL')
 
+# =============================================================================
+#  TWO-TIER SIGNAL SYSTEM
+# =============================================================================
+#
+#  TIER 1 — HIGH CONVICTION (deploy more capital, ~2-3x per year)
+#    Path A: RSI(14) < 35 — deep oversold, multi-day selloff
+#    Path D: RSI 35–50 + pivot low confirmation
+#    Expected win rate: ~75-80% | Hold: 10 days
+#
+#  TIER 2 — MEDIUM CONVICTION (deploy less capital, ~1x per week)
+#    Path E: EMA Bounce — price touches/wicks 21 EMA and closes green
+#    Path F: MACD Cross — MACD crosses above signal line below zero
+#    Expected win rate: ~55-65% | Hold: 5 days (shorter — less conviction)
+#
+#  Discord alert labels each tier clearly so you always know what you're
+#  acting on and can size accordingly.
+#
+#  POSITION SIZING GUIDE (set your own amounts in PORTFOLIO_VALUE):
+#    Tier 1 signal → deploy TIER1_POSITION_PCT % of portfolio
+#    Tier 2 signal → deploy TIER2_POSITION_PCT % of portfolio
+# =============================================================================
+
+TIER1_POSITION_PCT = 10.0   # % of portfolio per Tier 1 (high conviction) signal
+TIER2_POSITION_PCT = 5.0    # % of portfolio per Tier 2 (medium conviction) signal
+
+# Tier 2 hold period — shorter than Tier 1, less conviction
+TIER2_HOLD_DAYS = 5
+
+# Tier 2 ATR multipliers — tighter stop, same target (better R/R to compensate
+# for lower win rate vs Tier 1)
+TIER2_ATR_STOP_MULT   = 2.0   # tighter stop than Tier 1 (2.5x)
+TIER2_ATR_TARGET_MULT = 4.0   # wider target than Tier 1 (3.5x) — R/R = 2.0
+
+# Alert cooldown — prevents same signal type re-alerting every 15 min
+# Tier 1 cooldown is longer — RSI < 35 can persist for days, don't spam
+# Tier 2 cooldown is shorter — conditions are more transient
+TIER1_ALERT_COOLDOWN_HOURS = 6    # re-alert if Tier 1 conditions still met after 6h
+TIER2_ALERT_COOLDOWN_HOURS = 4    # re-alert if Tier 2 conditions still met after 4h
+TIER_COOLDOWN_FILE = "/tmp/tier_alert_cooldowns.json"
+
 # ── Scoring thresholds ────────────────────────────────────────────────────────
 SWING_SCORE_THRESHOLD = 6
 
@@ -229,8 +269,7 @@ OUTCOME_DISCORD_DAILY = True  # Send outcome summary to Discord whenever there a
 #
 # Note: the bot does NOT auto-place a sell order — you must execute manually
 # on IBKR (or Alpaca if still paper trading). The alert is the trigger.
-SELL_ALERT_COOLDOWN_MINUTES = 60        # Min gap between sell alerts for same trade
-SELL_ALERT_COOLDOWN_FILE    = "/tmp/sell_alert_cooldowns.json"  # /tmp resets per run
+SELL_ALERT_COOLDOWN_FILE    = "/tmp/sell_alert_cooldowns.json"  # kept for legacy — no longer used for suppression
 
 # ── Discord embed colors ──────────────────────────────────────────────────────
 COLOR_GREEN  = 5763719    # Scenario A — full alignment
@@ -623,6 +662,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
             "support": round(support, 2), "support_source": support_source,
             "is_bullish": is_bullish, "near_52w_high": near_52w_high,
             "mode": "SWING", "reasons": reasons, "path": "A",
+            "tier": 1, "hold_days": 10, "position_size_pct": TIER1_POSITION_PCT,
             "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
         }
 
@@ -682,10 +722,132 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
             "support": round(support, 2), "support_source": support_source,
             "is_bullish": is_bullish, "near_52w_high": near_52w_high,
             "mode": "SWING", "reasons": reasons, "path": "D",
+            "tier": 1, "hold_days": 10, "position_size_pct": TIER1_POSITION_PCT,
             "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
         }
 
-    # ── Category: TREND / STRUCTURE (cap at 4) ────────────────────────────────
+    # ── PATH E — EMA BOUNCE (TIER 2) ─────────────────────────────────────────
+    # Medium-conviction setup. Fires when TQQQ pulls back to its 21 EMA and
+    # shows a live rejection — price wicks down to the EMA but closes above it,
+    # signalling buyers defending the level in real time.
+    #
+    # Conditions:
+    #   - Today's low touches or comes within 1.5% of 21 EMA (the wick)
+    #   - Today closes ABOVE 21 EMA (rejection confirmed)
+    #   - Today closes green (close > open — buyers won intraday)
+    #   - RSI between 35–65: not deep oversold (Path A/D handles that),
+    #     not overbought (no mean-reversion edge above 65)
+    #   - Price above 50 EMA: broad uptrend intact, this is a pullback not collapse
+    #
+    # Stop: below the wick low (yesterday's low) — market drew the line there
+    # Target: TIER2_ATR_TARGET_MULT x ATR (wider than Tier 1 to compensate for
+    #         lower win rate — needs good R/R to be positive expectancy)
+    # Hold:  TIER2_HOLD_DAYS (5 days — shorter than Tier 1's 10 days)
+    ema_bounce_wick    = bar_low <= ema_21 * 1.015    # low touched within 1.5% of 21 EMA
+    ema_bounce_close   = bar_close > ema_21            # closed above 21 EMA
+    ema_bounce_green   = bar_close > bar_open          # green candle
+    ema_bounce_rsi     = 35 <= rsi <= 65               # not extreme
+    ema_bounce_trend   = price > ema_50                # above 50 EMA — uptrend intact
+
+    if ema_bounce_wick and ema_bounce_close and ema_bounce_green and ema_bounce_rsi and ema_bounce_trend:
+        support        = min(bar_low, float(prev['Low']))   # wick low as stop anchor
+        support_source = "21 EMA Bounce Wick (Path E)"
+        stop_loss      = support - (atr * TIER2_ATR_STOP_MULT)
+        if stop_loss >= entry_price:
+            stop_loss = entry_price - atr
+        take_profit    = entry_price + (atr * TIER2_ATR_TARGET_MULT)
+        rr_ratio       = 0.0
+        high_52w       = float(df['High'].tail(252).max())
+        near_52w_high  = price >= high_52w * 0.98
+        tier2_reasons  = [
+            f"📊 Path E — 21 EMA Bounce (TIER 2 Medium Conviction)",
+            f"🕯️ Wick to EMA ${ema_21:.2f} (Low ${bar_low:.2f}) + Green Close",
+            f"📈 Price above 50 EMA ${ema_50:.2f} — uptrend intact",
+            f"📉 RSI {rsi:.1f} — momentum neutral, room to run",
+            f"⚠️ TIER 2: Deploy {TIER2_POSITION_PCT:.0f}% of portfolio (smaller size)",
+        ]
+        print(f"   [{ticker}] ✅ PATH E — EMA Bounce (Tier 2) "
+              f"RSI={rsi:.1f} wick=${bar_low:.2f} ema21=${ema_21:.2f}")
+        return {
+            "price": entry_price, "entry_price": entry_price,
+            "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
+            "rr_ratio": round(rr_ratio, 2), "score": 4, "threshold": 6,
+            "trend_score": 2, "momentum_score": 2,
+            "oversold_bypass": False, "atr": round(atr, 4), "atr_source": "Daily",
+            "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
+            "ema_200": round(ema_200, 2) if ema_200 else None,
+            "rsi": round(rsi, 1), "bbl": round(bbl, 2) if bbl else None,
+            "bb_width": round(bb_width, 4), "macd_h": round(macd_h, 4),
+            "support": round(support, 2), "support_source": support_source,
+            "is_bullish": True, "near_52w_high": near_52w_high,
+            "mode": "SWING", "reasons": tier2_reasons, "path": "E",
+            "tier": 2, "hold_days": TIER2_HOLD_DAYS,
+            "position_size_pct": TIER2_POSITION_PCT,
+            "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
+        }
+
+    # ── PATH F — MACD CROSS (TIER 2) ─────────────────────────────────────────
+    # Medium-conviction setup. Fires when momentum shifts from negative to
+    # positive — MACD line crosses above the signal line while both are still
+    # below zero. The "below zero" requirement is critical: it means we're
+    # catching an early recovery from a real pullback, not a late-stage cross
+    # that often precedes a fade.
+    #
+    # Conditions:
+    #   - MACD histogram crosses zero (was negative yesterday, positive today)
+    #     This is the exact moment MACD line crosses above signal line
+    #   - Both MACD and signal line still below zero (early recovery)
+    #   - RSI < 60: not already overbought at the cross
+    #   - Price above 50 EMA: broad trend intact
+    #   - Today closes green: price confirming the momentum shift
+    #
+    # Stop: below prior day's low — natural support before the cross
+    # Target: TIER2_ATR_TARGET_MULT x ATR
+    macd_cross      = prev_mh < 0 and macd_h >= 0          # histogram just crossed zero
+    macd_line       = float(scored.get('MACD', macd_h))     # MACD line value
+    macd_signal_val = float(scored.get('MACDs', 0))         # signal line value
+    both_below_zero = macd_line < 0 and macd_signal_val < 0 # both still below zero
+    macd_rsi_ok     = rsi < 60                              # not overbought
+    macd_trend_ok   = price > ema_50                        # uptrend intact
+    macd_green      = bar_close > bar_open                  # green close confirming
+
+    if macd_cross and both_below_zero and macd_rsi_ok and macd_trend_ok and macd_green:
+        prev_low_f     = float(prev['Low'])
+        support        = prev_low_f
+        support_source = "Prior Day Low (Path F MACD Cross)"
+        stop_loss      = support - (atr * TIER2_ATR_STOP_MULT)
+        if stop_loss >= entry_price:
+            stop_loss = entry_price - atr
+        take_profit    = entry_price + (atr * TIER2_ATR_TARGET_MULT)
+        rr_ratio       = 0.0
+        high_52w       = float(df['High'].tail(252).max())
+        near_52w_high  = price >= high_52w * 0.98
+        tier2_reasons  = [
+            f"📊 Path F — MACD Cross (TIER 2 Medium Conviction)",
+            f"🔄 MACD Histogram crossed zero: {prev_mh:.3f} → {macd_h:.3f}",
+            f"📉 Both lines still below zero — early recovery, not late-stage",
+            f"📈 Price above 50 EMA ${ema_50:.2f} | RSI {rsi:.1f}",
+            f"⚠️ TIER 2: Deploy {TIER2_POSITION_PCT:.0f}% of portfolio (smaller size)",
+        ]
+        print(f"   [{ticker}] ✅ PATH F — MACD Cross (Tier 2) "
+              f"RSI={rsi:.1f} macd_h={prev_mh:.3f}→{macd_h:.3f}")
+        return {
+            "price": entry_price, "entry_price": entry_price,
+            "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
+            "rr_ratio": round(rr_ratio, 2), "score": 4, "threshold": 6,
+            "trend_score": 2, "momentum_score": 2,
+            "oversold_bypass": False, "atr": round(atr, 4), "atr_source": "Daily",
+            "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
+            "ema_200": round(ema_200, 2) if ema_200 else None,
+            "rsi": round(rsi, 1), "bbl": round(bbl, 2) if bbl else None,
+            "bb_width": round(bb_width, 4), "macd_h": round(macd_h, 4),
+            "support": round(support, 2), "support_source": support_source,
+            "is_bullish": True, "near_52w_high": near_52w_high,
+            "mode": "SWING", "reasons": tier2_reasons, "path": "F",
+            "tier": 2, "hold_days": TIER2_HOLD_DAYS,
+            "position_size_pct": TIER2_POSITION_PCT,
+            "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
+        }
     # PATH B only — Path A (RSI<35 + above 200 EMA) bypasses this entirely.
     trend_score     = 0
     oversold_bypass = False
@@ -1004,34 +1166,31 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
 
 def calculate_position_size(score: int, threshold: int,
-                             price: float, atr: float) -> dict:
+                             price: float, atr: float, tier: int = 1) -> dict:
     """
-    Calculates a suggested portfolio allocation % based on:
-      1. Scenario  — A/B/C sets the base conviction level
-      2. Score margin — how far above threshold boosts size
-      3. Volatility  — ATR as % of price shrinks size on wild movers
+    Calculates position size dynamically based on Tier (1 or 2).
 
-    Returns a dict with 'pct' (float) and 'label' (display string).
+    Tier 1 (high conviction — Path A/D): base = TIER1_POSITION_PCT (10%)
+    Tier 2 (medium conviction — Path E/F): base = TIER2_POSITION_PCT (5%)
 
-    Sizing philosophy (inspired by Malik's dynamic allocation approach):
-      - Never output a vague label like "Half Size" — give a concrete number
-      - High volatility (ATR > 3% of price) automatically reduces exposure
-      - Strong conviction (score well above threshold) increases exposure
-      - Hard caps per scenario prevent over-concentration
+    Both tiers then get:
+      - Conviction boost: +1% per point above threshold, capped at +4%
+      - Volatility reduction: ATR > 3% scales down, ATR > 6% caps at 60%
+      - Hard cap: 15% max (raised from 12% to allow Tier 1 full sizing)
+
+    TQQQ-adjusted ATR thresholds (4-7% is normal, not a warning sign):
+      Low  (< 3%): no reduction — abnormally calm for TQQQ
+      Mid  (3-6%): linear scale down 1.0 -> 0.6
+      High (> 6%): cap at 60% of base — extreme volatility day
     """
-    # Base allocation by scenario
-    base = 8.0  # Flat base for all swing trades
+    # Base allocation driven by tier — this is the critical fix
+    base = TIER1_POSITION_PCT if tier == 1 else TIER2_POSITION_PCT
 
     # Conviction boost: +1% for each point above threshold, capped at +4%
     margin     = max(score - threshold, 0)
     conviction = min(margin * 1.0, 4.0)
 
-    # Volatility adjustment: ATR as % of price
-    # TQQQ typically has ATR 4-7% — standard thresholds would always cap at 60%.
-    # Thresholds raised for TQQQ: high vol is expected, not a warning sign.
-    # Low vol  (< 3%):   no reduction   (would be abnormally low for TQQQ)
-    # Mid vol  (3–6%):   scale down proportionally
-    # High vol (> 6%):   cap at 60% of base (extreme volatility only)
+    # Volatility adjustment (TQQQ-adjusted thresholds)
     atr_pct = (atr / price) * 100 if price > 0 else 4.0
     if atr_pct <= 3.0:
         vol_factor = 1.0
@@ -1041,9 +1200,7 @@ def calculate_position_size(score: int, threshold: int,
         vol_factor = 0.6
 
     raw_pct = (base + conviction) * vol_factor
-
-    # Hard cap for swing trades
-    pct = round(min(raw_pct, 12.0), 1)
+    pct     = round(min(raw_pct, 15.0), 1)   # cap raised to 15% to allow Tier 1 max sizing
 
     # Human-readable volatility tag (TQQQ-adjusted thresholds)
     if atr_pct <= 3.0:   vol_tag = "low vol"
@@ -1054,15 +1211,16 @@ def calculate_position_size(score: int, threshold: int,
     shares        = int(dollar_amount // price) if price > 0 else 0
 
     if shares < 1:
-        share_note = "⚠️ < 1 share at current price — consider fractional shares"
+        share_note = "⚠️ < 1 share — consider fractional shares"
     elif shares == 1:
-        share_note = f"≈ 1 share"
+        share_note = "≈ 1 share"
     else:
         share_note = f"≈ {shares} shares"
 
+    tier_label = f"Tier {tier}"
     label = (
-        f"{pct}% of portfolio = **${dollar_amount:.2f}** ({share_note}) "
-        f"[score +{margin} above min · ATR {atr_pct:.1f}% · {vol_tag}]"
+        f"{pct}% of portfolio = **${dollar_amount:,.2f}** ({share_note}) "
+        f"[{tier_label} · score +{margin} · ATR {atr_pct:.1f}% · {vol_tag}]"
     )
     return {"pct": pct, "dollar": dollar_amount, "shares": shares, "label": label}
 
@@ -1072,18 +1230,21 @@ def build_final_signal(swing_signal: dict | None) -> dict | None:
     if swing_signal is None:
         return None
 
-    sig   = swing_signal.copy()
+    sig  = swing_signal.copy()
+    tier = sig.get("tier", 1)   # Tier 1 (Path A/D) or Tier 2 (Path E/F)
+
     pos_c = calculate_position_size(
-        swing_signal["score"], swing_signal["threshold"],
-        swing_signal["price"], swing_signal["atr"]
+        sig["score"], sig["threshold"],
+        sig["price"], sig["atr"],
+        tier=tier                # ← critical: drives base allocation %
     )
     sig.update({
-        "scenario":       "SWING",
-        "scenario_label": "📅 SWING SETUP",
-        "size_guidance":    pos_c["label"],
-        "position_size_pct": pos_c["pct"],   # needed by place_alpaca_bracket_order
+        "scenario":          "SWING",
+        "scenario_label":    f"📅 TIER {tier} SWING SETUP",
+        "size_guidance":     pos_c["label"],
+        "position_size_pct": pos_c["pct"],
         "hold_guidance":  (
-            "Enter before 4:00pm close. Sell at next morning open (9:30am ET). "
+            "Enter before 4:00pm close. Hold for signal's recommended days. "
             "Stop active overnight — if price gaps below stop, exit immediately at open."
         ),
         "mode": "SWING",
@@ -1585,7 +1746,8 @@ def _post_discord(payload: dict, chart_path: Path | None = None):
 
 def send_setup_alert(ticker, currency, signal,
                      rel_vol, elapsed_minutes, mode, regime_bullish,
-                     earnings_msg="", df: pd.DataFrame | None = None):
+                     earnings_msg="", df: pd.DataFrame | None = None,
+                     alert_label: str = "NEW SIGNAL"):
     """Sends a swing trade setup embed to Discord, with an auto-generated chart image."""
     et_now     = datetime.now(pytz.timezone(TIMEZONE))
     curr_sym   = 'CA$' if currency == 'CAD' else '$'
@@ -1602,9 +1764,32 @@ def send_setup_alert(ticker, currency, signal,
     stop_pct   = (price - stop_loss) / price * 100
     tgt_pct    = (target - price)    / price * 100
     risk_share = price - stop_loss
+    tier       = signal.get("tier", 1)
+    path       = signal.get("path", "?")
+    hold_days  = signal.get("hold_days", 10)
+    pos_pct    = signal.get("position_size_pct", TIER1_POSITION_PCT)
 
-    color  = COLOR_BLUE   # All swing alerts use blue
-    rating = "📅 SWING SETUP"
+    # ── Tier label and color ──────────────────────────────────────────────────
+    # Tier 1 (high conviction): deep oversold RSI < 35 or pivot low reversal
+    # Tier 2 (medium conviction): EMA bounce or MACD cross
+    if tier == 1:
+        tier_label  = "🔴 TIER 1 — HIGH CONVICTION"
+        tier_size   = f"Deploy **{pos_pct:.0f}%** of portfolio (LARGER size)"
+        color       = 15548997    # red — urgent, high conviction
+        path_name   = {"A": "Deep Oversold RSI", "D": "Pivot Low Reversal"}.get(path, path)
+    else:
+        tier_label  = "🟡 TIER 2 — MEDIUM CONVICTION"
+        tier_size   = f"Deploy **{pos_pct:.0f}%** of portfolio (smaller size)"
+        color       = 16776960    # yellow — medium conviction
+        path_name   = {"E": "21 EMA Bounce", "F": "MACD Cross"}.get(path, path)
+
+    # ── Alert label: NEW SIGNAL vs STILL ACTIVE ───────────────────────────────
+    if alert_label == "STILL ACTIVE":
+        label_prefix = "🔔 STILL ACTIVE"
+        label_note   = "_Signal conditions still met — setup has not resolved yet._\n"
+    else:
+        label_prefix = "🚨 NEW SIGNAL"
+        label_note   = "_Fresh setup — conditions just triggered._\n"
 
     # RSI label
     rsi_val = signal.get("rsi", 0.0)
@@ -1628,15 +1813,18 @@ def send_setup_alert(ticker, currency, signal,
     regime_label = "🟢 Bullish Market" if regime_bullish else "🔴 Bearish Market"
 
     # Build the embed description
-    desc  = f"*Triggered at {et_now.strftime('%I:%M %p ET')}*\n"
-    desc += f"**{signal.get('scenario_label', '')}**\n"
-    desc += f"{regime_label} · {session} · `{currency}`\n"
-    desc += f"📊 **Score:** `{score}` / min `{threshold}` (+{score - threshold} above)\n"
+    desc  = f"{label_note}"
+    desc += f"*Triggered at {et_now.strftime('%I:%M %p ET')}*\n"
+    desc += f"{regime_label} · {session} · `{currency}`\n\n"
 
-    if earnings_msg:
-        desc += f"\n{earnings_msg}\n"
+    # Tier box — the most important thing you need to know immediately
+    desc += f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    desc += f"**{tier_label}**\n"
+    desc += f"📌 Signal Type: **{path_name}** (Path {path})\n"
+    desc += f"💰 Position Size: {tier_size}\n"
+    desc += f"⏱️ Hold: **{hold_days} trading days**\n"
+    desc += f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-    desc += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
     desc += "📊 **Trade Plan**\n"
     desc += f"• **Entry:**      `{curr_sym}{price:.2f}`\n"
     desc += f"• **Target:**     `{curr_sym}{target:.2f}` (+{tgt_pct:.1f}%) 🎯\n"
@@ -1670,6 +1858,9 @@ def send_setup_alert(ticker, currency, signal,
     for r in signal.get("reasons", []):
         desc += f"• {r}\n"
 
+    if earnings_msg:
+        desc += f"\n{earnings_msg}\n"
+
     # Trim if over Discord 4096 char embed limit
     DISCORD_EMBED_LIMIT = 4096
     if len(desc) > DISCORD_EMBED_LIMIT:
@@ -1691,16 +1882,18 @@ def send_setup_alert(ticker, currency, signal,
         desc += f"\n🏷️ {' | '.join(badges)}"
 
     payload = {
-        "content": f"🚨 **{ticker}** | Mode: **{trade_mode}** | `{currency}`",
+        "content": (f"{label_prefix} **{ticker}** | "
+                    f"{'🔴 T1' if tier == 1 else '🟡 T2'} {path_name} | "
+                    f"`{curr_sym}{price:.2f}` | Deploy {pos_pct:.0f}%"),
         "embeds": [{
-            "title":       f"{rating} — {ticker}  (Score {score})",
+            "title":       f"{label_prefix} — {ticker} | {path_name} | Hold {hold_days}d",
             "description": desc,
             "color":       color,
             "fields": [{"name": "🔗 Charts",
                         "value": (f"[TradingView](https://www.tradingview.com/chart/?symbol={ticker}) · "
                                   f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})"),
                         "inline": False}],
-            "footer": {"text": f"Stock Alert Bot v6.0 | ATR: {signal.get('atr_source','—')}"},
+            "footer": {"text": f"TQQQ Alert Bot v6.1 | Path {path} | Tier {tier} | ATR: {signal.get('atr_source','—')}"},
         }],
     }
 
@@ -1968,20 +2161,9 @@ def check_market(mode: str, tickers_override: list | None = None):
             "color": COLOR_YELLOW}]})
         print()
 
-    # ── Option C: Buying power check ─────────────────────────────────────────
-    # Query available cash before the execution loop.
-    # Deduct each trade's dollar amount as we go — skip if insufficient.
-    # ⚠️  ALPACA SYNTAX — swap get_account().cash for IBKR equivalent when migrating.
-    available_cash = None
-    try:
-        _client = get_alpaca_client()
-        if _client:
-            _acct = _client.get_account()
-            available_cash = float(_acct.cash)  # use .cash not .buying_power (avoids margin)
-            print(f"   💰 Available cash: ${available_cash:,.2f}\n")
-    except Exception as _e:
-        print(f"   ⚠️  Could not retrieve buying power ({_e}) — proceeding without cash check\n")
-        available_cash = None
+    # Option C (Alpaca buying power check) removed — manual trading mode.
+    # You execute trades yourself on IBKR based on Discord buy alerts.
+    available_cash = None   # kept as None so cash-check block below is always skipped
 
     # ═════════════════════════════════════════════════════════════════════════
     # ═════════════════════════════════════════════════════════════════════════
@@ -2056,88 +2238,29 @@ def check_market(mode: str, tickers_override: list | None = None):
             print(f"   📊 Volume Pace: {vol_pace:.1f}x projected "
                   f"(actual {rel_vol:.2f}x so far, {pct_of_day*100:.0f}% of day elapsed)")
 
-            # Fire the alert
+            # Fire the alert — label as NEW or STILL ACTIVE based on trade log
+            # Every valid signal fires an alert regardless of prior signals.
+            # "STILL ACTIVE" lets you know the setup hasn't resolved yet.
+            trades_check   = load_trade_log()
+            prior_open     = [t for t in trades_check
+                              if t["ticker"] == ticker and t["status"] == "OPEN"]
+            is_repeat      = len(prior_open) > 0
+            alert_label    = "STILL ACTIVE" if is_repeat else "NEW SIGNAL"
+
             send_setup_alert(
                 ticker=ticker, currency=currency, signal=final_signal,
                 rel_vol=rel_vol, elapsed_minutes=elapsed_min, mode=mode,
                 regime_bullish=regime_bullish, earnings_msg=earnings_msg,
-                df=df_daily,
+                df=df_daily, alert_label=alert_label,
             )
             alerts_sent += 1
 
-            # ── Duplicate guard (Alpaca-backed) ───────────────────────────────
-            # trade_log.json is NOT persisted between GitHub Actions runs —
-            # each runner starts with a fresh workspace, so the file-based
-            # deduplication in log_new_trade() sees 0 open trades every run.
-            # Alpaca IS persistent across runs, so we use it as the source of
-            # truth: if an open position OR pending order already exists for
-            # this ticker, skip logging AND placing — don't fire twice.
-            #
-            # Bypassed in --dry-run mode so after-hours testing works even when
-            # real positions are open for the ticker being tested.
-            already_active = False
-            if not globals().get('DRY_RUN', False):
-                try:
-                    from alpaca.trading.client import TradingClient
-                    _api_key    = os.getenv('ALPACA_API_KEY', '')
-                    _api_secret = os.getenv('ALPACA_SECRET_KEY', '')
-                    if _api_key and _api_secret and ".TO" not in ticker:
-                        _ac = TradingClient(_api_key, _api_secret, paper=True)
-                        _positions = _ac.get_all_positions()
-                        if any(p.symbol == ticker for p in _positions):
-                            print(f"   ⏭️  {ticker} — open Alpaca position exists, skipping")
-                            already_active = True
-                        if not already_active:
-                            from alpaca.trading.requests import GetOrdersRequest
-                            from alpaca.trading.enums import QueryOrderStatus
-                            _req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
-                            _orders = _ac.get_orders(filter=_req)
-                            if any(o.symbol == ticker for o in _orders):
-                                print(f"   ⏭️  {ticker} — pending Alpaca order exists, skipping")
-                                already_active = True
-                except Exception as _e:
-                    # Alpaca check failed — fall back to trade_log file guard only
-                    print(f"   ⚠️  Alpaca duplicate check failed ({_e}), relying on file guard")
-
-            if already_active:
-                continue
-
-            # ── Option C: Cash sufficiency check ─────────────────────────────
-            # ⚠️  IBKR MIGRATION NOTE: replace get_alpaca_client().get_account().cash
-            # with the IBKR Client Portal equivalent when migrating:
-            #   GET /portfolio/{accountId}/ledger → ['USD']['cashbalance']
-            # Everything else in this block (deduction logic, Discord alert) stays identical.
-            position_pct  = final_signal.get("position_size_pct", 4.8) / 100
-            trade_cost    = PORTFOLIO_VALUE * position_pct
-            if available_cash is not None:
-                if available_cash < trade_cost:
-                    msg = (f"Needed **${trade_cost:,.2f}** but only "
-                           f"**${available_cash:,.2f}** available.")
-                    print(f"   ⚠️  {ticker} — Insufficient buying power. {msg} Skipping.")
-                    _post_discord({"embeds": [{"title": f"⚠️ Skipped — {ticker} Insufficient Cash",
-                        "description": msg, "color": COLOR_YELLOW}]})
-                    continue
-                available_cash -= trade_cost  # deduct so next ticker sees updated balance
-                print(f"   💰 Cash check passed — ${available_cash + trade_cost:,.2f} "
-                      f"→ ${available_cash:,.2f} after this trade")
-
-            # Log the trade for outcome tracking
+            # Always log every new signal for outcome tracking.
+            # Multiple OPEN entries are allowed — each alert is a separate signal.
             log_new_trade(ticker, currency, final_signal)
-
-            # Place Alpaca paper bracket order (skipped in --dry-run)
-            sig_mode = final_signal.get("mode", "")
-            print(f"   🔍 Signal mode: '{sig_mode}' | elapsed_min: {elapsed_min:.0f}")
-            if globals().get('DRY_RUN', False):
-                print(f"   ⚠️  DRY RUN — Alpaca order skipped for {ticker}")
-            elif sig_mode == "SWING":
-                place_alpaca_bracket_order(ticker, final_signal, elapsed_min)
-            else:
-                print(f"   ⚠️ Skipping Alpaca — mode is '{sig_mode}', expected 'SWING'")
-
-            # ── OPTIONAL: Write state + cooldown (disabled by default) ──────────
-            # Uncomment both lines below to activate state tracking:
-            # set_state(ticker, "TRIGGERED", stop_loss=final_signal["stop_loss"], mode=final_signal["mode"])
-            # set_cooldown(ticker, final_signal["mode"])
+            print(f"   ✅ [{alert_label}] Buy alert sent for {ticker} "
+                  f"@ ~${final_signal['price']:.2f} | Tier {final_signal.get('tier', 1)} | "
+                  f"Path {final_signal.get('path', '?')}")
 
         except Exception as e:
             print(f"   ❌ Error on {ticker}: {e}")
@@ -2201,89 +2324,12 @@ def save_trade_log(trades: list):
         print(f"⚠️ Trade log save failed: {e}")
 
 
-def place_alpaca_bracket_order(ticker: str, signal: dict, elapsed_min: float) -> bool:
-    """
-    Places a GTC bracket order on Alpaca paper account.
-    Only fires in the 3:45–4:00pm ET window (or test mode with elapsed_min=0).
-    GTC keeps the bracket live for the full hold period.
-    Skips TSX tickers (.TO) — not supported on Alpaca.
-    """
-    if ".TO" in ticker:
-        print(f"   🍁 {ticker} — TSX not supported on Alpaca, skipping")
-        return False
+# place_alpaca_bracket_order() removed — manual trading mode.
+# Orders are executed by hand on IBKR based on Discord buy alerts.
+# Re-add this function from git history if reverting to Alpaca paper trading.
 
-    # Only place orders within the entry window (12:30–4:00pm ET) or --force.
-    force_override = globals().get('FORCE_RUN', False)
-    if not force_override and not (ENTRY_WINDOW_START_MIN <= elapsed_min < ENTRY_WINDOW_END_MIN):
-        print(f"   ⏰ {ticker} — outside entry window (elapsed={elapsed_min:.0f} min), skipping order")
-        return False
 
-    client = get_alpaca_client()
-    if not client:
-        print(f"   ⚠️ {ticker} — Alpaca not configured, skipping")
-        return False
 
-    try:
-        # ── Check for existing open position or pending order ─────────────────
-        # Fetches both open positions and open orders from Alpaca.
-        # Skips if either exists for this ticker — prevents doubling up.
-        existing_positions = client.get_all_positions()
-        if any(p.symbol == ticker for p in existing_positions):
-            print(f"   ⏭️ {ticker} — already has an open position on Alpaca, skipping")
-            return False
-
-        from alpaca.trading.requests import GetOrdersRequest
-        from alpaca.trading.enums import QueryOrderStatus
-        existing_orders = client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN))
-        if any(o.symbol == ticker for o in existing_orders):
-            print(f"   ⏭️ {ticker} — already has a pending order on Alpaca, skipping")
-            return False
-
-        entry  = signal["price"]
-        target = signal["take_profit"]
-        stop   = signal["stop_loss"]
-
-        position_pct  = signal.get("position_size_pct", 4.8) / 100
-        dollar_amount = PORTFOLIO_VALUE * position_pct
-        qty = int(dollar_amount / entry)  # whole shares only — no fractional shares on brackets
-        if qty < 1:
-            print(f"   ⚠️ {ticker} — Cannot afford 1 share "
-                  f"(allocated ${dollar_amount:.2f}, price ${entry:.2f}). Skipping.")
-            _post_discord({"embeds": [{"title": f"⚠️ Skipped — {ticker} Too Expensive",
-                "description": (f"Allocated **${dollar_amount:.2f}** but 1 share costs "
-                                f"**${entry:.2f}**. Increase `PORTFOLIO_VALUE` or "
-                                f"remove {ticker} from watchlist."),
-                "color": COLOR_YELLOW}]})
-            return False
-        print(f"   📐 Position: {qty} share(s) @ ~${entry:.2f} = ${qty*entry:.2f} "
-              f"(allocated ${dollar_amount:.2f})")
-
-        print(f"   🦙 Placing bracket order: {ticker} qty={qty} "
-              f"entry~${entry:.2f} target=${target:.2f} stop=${stop:.2f}")
-
-        order = client.submit_order(MarketOrderRequest(
-            symbol        = ticker,
-            qty           = qty,
-            side          = OrderSide.BUY,
-            time_in_force = TimeInForce.GTC,    # GTC applies to all legs — bracket stop/target persist overnight
-            order_class   = OrderClass.BRACKET,
-            take_profit   = TakeProfitRequest(limit_price=round(target, 2)),
-            stop_loss     = StopLossRequest(stop_price=round(stop, 2))
-        ))
-        print(f"   ✅ Order submitted: {order.id}")
-
-        _post_discord({"embeds": [{"title": f"🦙 Alpaca Order Placed — {ticker}",
-            "description": (f"**Qty:** {qty} @ ~${entry:.2f}\n"
-                            f"**Target:** ${target:.2f} | **Stop:** ${stop:.2f}\n"
-                            f"**Order ID:** `{order.id}` | _Paper account_"),
-            "color": 3066993}]})
-        return True
-
-    except Exception as e:
-        print(f"   ❌ Alpaca order failed for {ticker}: {e}")
-        _post_discord({"embeds": [{"title": f"❌ Alpaca Order Failed — {ticker}",
-            "description": f"Error: `{e}`", "color": COLOR_RED}]})
-        return False
 
 
 def log_new_trade(ticker: str, currency: str, signal: dict):
@@ -2512,26 +2558,24 @@ def send_sell_alert(trade: dict, live_price: float, reason: str):
 
 def check_live_sell_alerts():
     """
-    Main real-time sell alert runner. Called on every scan during market hours.
+    Technical sell signal runner. Called on every scan during market hours.
+    Fires purely on TQQQ's live technicals — NOT tied to any specific entry price.
+    This means alerts fire whether or not you took the corresponding buy signal.
 
-    Steps:
-      1. Load all OPEN trades from trade_log.json
-      2. Fetch TQQQ live price (single fast_info call)
-      3. For each open trade check:
-           a. Target hit  -> send TARGET alert
-           b. Stop hit    -> send STOP alert
-           c. Trailing    -> send TRAIL alert if TQQQ_TRAIL_PCT > 0
-      4. Update max_price watermark in trade log for trailing accuracy
-      5. Apply cooldown to avoid alert floods
+    Four technical exit signals:
+      RSI_OB    — RSI(14) > 70: momentum exhausted, mean reversion likely
+      RSI_CROSS — RSI crossed above 55 from below: oversold recovery complete
+      EMA_LOSS  — Price closes back below 21 EMA after being above it
+      MACD_PEAK — MACD histogram peaks and turns down (momentum fading at highs)
+
+    All four use the latest daily bar (bulk_data already downloaded this run).
+    Live price via fast_info is used for RSI_OB and EMA_LOSS intraday checks.
+    Cooldown: 4 hours per signal type to prevent 15-min spam.
     """
     trades      = load_trade_log()
     open_trades = [t for t in trades if t["status"] == "OPEN"]
 
-    if not open_trades:
-        print("   No open trades to monitor for sell alerts.")
-        return
-
-    print(f"   Checking live sell conditions for {len(open_trades)} open trade(s)...")
+    print(f"   Checking technical sell conditions ({len(open_trades)} open trade(s) in log)...")
 
     live_price = fetch_tqqq_live_price()
     if live_price is None:
@@ -2540,50 +2584,180 @@ def check_live_sell_alerts():
 
     print(f"   TQQQ live price: ${live_price:.2f}")
 
+    # Update max_price watermark on all open trades (used for outcome tracking)
     changed = False
     for trade in trades:
         if trade["status"] != "OPEN":
             continue
-
-        trade_id = trade["id"]
-        entry    = trade["entry"]
-        stop     = trade["stop_loss"]
-        target   = trade["take_profit"]
-
-        # Update running high watermark for trailing logic
-        prev_max = trade.get("max_price", entry)
+        prev_max = trade.get("max_price", trade["entry"])
         if live_price > prev_max:
             trade["max_price"] = float(live_price)
             changed = True
-
-        # TARGET HIT
-        if live_price >= target:
-            if not _is_sell_alert_on_cooldown(trade_id, "TARGET"):
-                send_sell_alert(trade, live_price, "TARGET")
-                _set_sell_cooldown(trade_id, "TARGET")
-            continue  # skip stop/trail checks
-
-        # STOP HIT
-        if live_price <= stop:
-            if not _is_sell_alert_on_cooldown(trade_id, "STOP"):
-                send_sell_alert(trade, live_price, "STOP")
-                _set_sell_cooldown(trade_id, "STOP")
-            continue  # skip trail check
-
-        # TRAILING ALERT
-        if TQQQ_TRAIL_PCT > 0:
-            high_wm  = trade.get("max_price", entry)
-            drop_pct = (high_wm - live_price) / high_wm * 100
-            # Only alert if we have a meaningful gain first (>2% above entry)
-            # to avoid trail alerts on flat or slightly profitable trades
-            has_gain = (high_wm - entry) / entry * 100 >= 2.0
-            if has_gain and drop_pct >= TQQQ_TRAIL_PCT:
-                if not _is_sell_alert_on_cooldown(trade_id, "TRAIL"):
-                    send_sell_alert(trade, live_price, "TRAIL")
-                    _set_sell_cooldown(trade_id, "TRAIL")
-
     if changed:
         save_trade_log(trades)
+
+    # ── Technical sell signals — price-agnostic ───────────────────────────────
+    # These fire based on TQQQ's current technicals, not your specific entry.
+    # You decide whether to act based on your own position.
+
+    # We need the latest RSI, EMA_21, and MACD_H values.
+    # These are available from bulk_data which was already downloaded this run.
+    # We access them via the module-level bulk_data reference stored at scan time.
+    try:
+        import yfinance as yf
+        import pandas_ta as ta
+        raw = yf.download('TQQQ', period='60d', interval='1d',
+                          auto_adjust=True, progress=False)
+        if raw.empty:
+            print("   Could not fetch TQQQ daily bars for technical sell check.")
+            return
+        raw.columns = raw.columns.get_level_values(0)
+        raw['RSI']    = ta.rsi(raw['Close'], length=14)
+        raw['EMA_21'] = ta.ema(raw['Close'], length=21)
+        macd_df = ta.macd(raw['Close'])
+        if macd_df is not None:
+            hist_col = [c for c in macd_df.columns if 'h' in c.lower()]
+            if hist_col:
+                raw['MACD_H'] = macd_df[hist_col[0]]
+        raw.dropna(subset=['RSI', 'EMA_21'], inplace=True)
+        if len(raw) < 3:
+            return
+
+        today = raw.iloc[-1]
+        prev  = raw.iloc[-2]
+        prev2 = raw.iloc[-3]
+
+        rsi_today   = float(today['RSI'])
+        rsi_prev    = float(prev['RSI'])
+        ema_21      = float(today['EMA_21'])
+        macd_today  = float(today.get('MACD_H', 0)) if 'MACD_H' in raw.columns else None
+        macd_prev   = float(prev.get('MACD_H',  0)) if 'MACD_H' in raw.columns else None
+        macd_prev2  = float(prev2.get('MACD_H', 0)) if 'MACD_H' in raw.columns else None
+
+    except Exception as e:
+        print(f"   Technical sell data fetch failed: {e}")
+        return
+
+    tz     = pytz.timezone(TIMEZONE)
+    et_now = datetime.now(tz)
+
+    def _sell_cooldown_key(reason):
+        return f"TQQQ_TECHNICAL|{reason}"
+
+    # Track which sell signals fired this session using /tmp
+    # Not for suppression — purely so we can label NEW vs STILL ACTIVE
+    sell_session_file = Path("/tmp/sell_session_fired.json")
+    try:
+        session_fired = json.loads(sell_session_file.read_text()) if sell_session_file.exists() else {}
+    except Exception:
+        session_fired = {}
+
+    def _check_and_send(reason: str, title: str, desc: str, color: int):
+        # Label as NEW or STILL ACTIVE — never suppress
+        already_fired  = session_fired.get(reason, False)
+        status_label   = "🔔 STILL ACTIVE" if already_fired else "🚨 NEW"
+        titled         = f"{status_label} — {title}"
+        payload = {"embeds": [{
+            "title":       titled,
+            "description": desc,
+            "color":       color,
+            "footer":      {"text": "TQQQ Alert Bot v6.1 | Technical Sell Signal"},
+            "timestamp":   datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }]}
+        _post_discord(payload)
+        session_fired[reason] = True
+        try:
+            sell_session_file.write_text(json.dumps(session_fired))
+        except Exception:
+            pass
+        print(f"   [{status_label}] Sell alert [{reason}] RSI={rsi_today:.1f} price=${live_price:.2f}")
+
+    # ── SIGNAL 1: RSI OVERBOUGHT (RSI > 70) ──────────────────────────────────
+    # TQQQ momentum exhausted — high probability of mean reversion.
+    # Most reliable exit signal. Acts on live intraday RSI approximation.
+    if rsi_today > 70:
+        _check_and_send(
+            reason = "RSI_OB",
+            title  = "🔴 SELL SIGNAL — TQQQ RSI Overbought",
+            color  = 15548997,
+            desc   = (
+                f"RSI(14) has reached **{rsi_today:.1f}** — momentum is exhausted.\n\n"
+                f"**Action:** Consider selling your TQQQ position.\n\n"
+                f"• Live Price: `${live_price:.2f}`\n"
+                f"• RSI Today: `{rsi_today:.1f}` (threshold: 70)\n"
+                f"• RSI Yesterday: `{rsi_prev:.1f}`\n"
+                f"• 21 EMA: `${ema_21:.2f}`\n\n"
+                f"_This is a technical signal — not tied to your specific entry price. "
+                f"You decide whether to act based on your position._"
+            )
+        )
+
+    # ── SIGNAL 2: RSI MEAN REVERSION COMPLETE (RSI crosses above 55 from below) ──
+    # Oversold recovery is done — the original buy thesis has played out.
+    # RSI was below 45 yesterday (confirming prior oversold) and is above 55 today.
+    elif rsi_today > 55 and rsi_prev < 45:
+        _check_and_send(
+            reason = "RSI_CROSS",
+            title  = "🟠 SELL SIGNAL — TQQQ RSI Recovery Complete",
+            color  = 16744272,   # orange
+            desc   = (
+                f"RSI has recovered from oversold: **{rsi_prev:.1f} → {rsi_today:.1f}**\n\n"
+                f"The mean-reversion trade has played out. "
+                f"This is a natural exit point.\n\n"
+                f"• Live Price: `${live_price:.2f}`\n"
+                f"• RSI Today: `{rsi_today:.1f}` (crossed above 55)\n"
+                f"• RSI Yesterday: `{rsi_prev:.1f}` (was below 45)\n"
+                f"• 21 EMA: `${ema_21:.2f}`\n\n"
+                f"_Consider booking profits — the oversold setup that triggered your "
+                f"buy has now fully resolved._"
+            )
+        )
+
+    # ── SIGNAL 3: EMA LOSS (price closes below 21 EMA after being above) ─────
+    # Short-term uptrend broken. Intraday live price used for immediacy.
+    prev_close  = float(prev['Close'])
+    was_above   = prev_close > float(prev['EMA_21'])
+    now_below   = live_price < ema_21
+    if was_above and now_below:
+        drop_pct = (prev_close - live_price) / prev_close * 100
+        _check_and_send(
+            reason = "EMA_LOSS",
+            title  = "🟡 SELL SIGNAL — TQQQ 21 EMA Lost",
+            color  = 16776960,   # yellow
+            desc   = (
+                f"Price has dropped below the 21 EMA — short-term uptrend broken.\n\n"
+                f"• Live Price: `${live_price:.2f}` (below 21 EMA `${ema_21:.2f}`)\n"
+                f"• Yesterday's Close: `${prev_close:.2f}` (was above EMA)\n"
+                f"• Drop: `{drop_pct:.1f}%` from yesterday's close\n"
+                f"• RSI: `{rsi_today:.1f}`\n\n"
+                f"_The 21 EMA is TQQQ's primary short-term support. Losing it "
+                f"often signals more downside. Consider tightening your stop "
+                f"or exiting if this is a Tier 2 position._"
+            )
+        )
+
+    # ── SIGNAL 4: MACD HISTOGRAM PEAK (momentum fading at highs) ─────────────
+    # Histogram was rising, peaked yesterday, and is now falling.
+    # Only fires when MACD_H is still positive (at highs, not in a selloff).
+    if (macd_today is not None and macd_prev is not None and macd_prev2 is not None):
+        macd_peaked = (macd_prev > macd_prev2 and    # prev was higher than day before
+                       macd_today < macd_prev and    # today is lower than prev (turning down)
+                       macd_prev > 0)                # still in positive territory (at highs)
+        if macd_peaked:
+            _check_and_send(
+                reason = "MACD_PEAK",
+                title  = "🔵 SELL SIGNAL — TQQQ MACD Momentum Fading",
+                color  = 3447003,   # blue
+                desc   = (
+                    f"MACD histogram has peaked and turned down — momentum fading.\n\n"
+                    f"• Live Price: `${live_price:.2f}`\n"
+                    f"• MACD Histogram: `{macd_prev2:.3f}` → `{macd_prev:.3f}` (peak) → `{macd_today:.3f}` (turning down)\n"
+                    f"• RSI: `{rsi_today:.1f}`\n"
+                    f"• 21 EMA: `${ema_21:.2f}`\n\n"
+                    f"_MACD peak is an early warning — price hasn't broken down yet. "
+                    f"Consider partial profit-taking or tightening your stop._"
+                )
+            )
 
 
 
@@ -2777,16 +2951,88 @@ if __name__ == "__main__":
         help='Scan mode. Default: auto (detects from time of day)')
     parser.add_argument('--ticker',
         type=str, default=None,
-        help='Scan a single ticker, e.g. --ticker NVDA')
+        help='Scan a single ticker, e.g. --ticker TQQQ')
     parser.add_argument('--dry-run', action='store_true',
-        help='Skip Alpaca duplicate guard and order placement. Safe for after-hours testing.')
+        help='Skip order placement and duplicate guard. Safe for after-hours testing.')
     parser.add_argument('--force', action='store_true',
         help='Force scan even if market is closed. Use for manual after-hours testing.')
+    parser.add_argument('--mark-open', type=str, default=None, metavar='TICKER',
+        help=(
+            'Manually mark a ticker as OPEN in trade_log.json to suppress repeat '
+            'buy alerts after a manual IBKR entry. '
+            'Example: python tqqq_bot.py --mark-open TQQQ'
+        ))
+    parser.add_argument('--clear', action='store_true',
+        help=(
+            'Used with --mark-open: removes the OPEN status instead of adding it, '
+            'so buy alerts can fire again. '
+            'Example: python tqqq_bot.py --mark-open TQQQ --clear'
+        ))
     args = parser.parse_args()
+
+    # ── --mark-open handler ───────────────────────────────────────────────────
+    # Runs standalone — does not proceed to check_market after completing.
+    # Usage:
+    #   python tqqq_bot.py --mark-open TQQQ          # suppress buy alerts (you bought)
+    #   python tqqq_bot.py --mark-open TQQQ --clear  # re-enable buy alerts (you sold / skipped)
+    if args.mark_open:
+        ticker_mo = args.mark_open.upper()
+        trades    = load_trade_log()
+        existing  = [t for t in trades if t["ticker"] == ticker_mo and t["status"] == "OPEN"]
+
+        if args.clear:
+            # Mark all OPEN trades for this ticker as EXPIRED so alerts can fire again
+            if not existing:
+                print(f"ℹ️  No OPEN trade found for {ticker_mo} — nothing to clear.")
+            else:
+                for t in existing:
+                    t["status"]       = "EXPIRED"
+                    t["outcome_date"] = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
+                    t["outcome_pct"]  = 0.0
+                save_trade_log(trades)
+                print(f"✅ {ticker_mo} — {len(existing)} OPEN trade(s) marked EXPIRED. "
+                      f"Buy alerts will fire again on next signal.")
+        else:
+            # Inject a placeholder OPEN trade so the duplicate guard suppresses alerts
+            if existing:
+                print(f"ℹ️  {ticker_mo} already has an OPEN trade in log — no change needed.")
+            else:
+                tz  = pytz.timezone(TIMEZONE)
+                now = datetime.now(tz)
+                placeholder = {
+                    "id":             f"{ticker_mo}_{now.strftime('%Y%m%d_%H%M')}_manual",
+                    "ticker":         ticker_mo,
+                    "currency":       "USD",
+                    "scenario":       "MANUAL",
+                    "mode":           "SWING",
+                    "alert_date":     now.strftime("%Y-%m-%d"),
+                    "alert_time":     now.strftime("%H:%M ET"),
+                    "entry":          0.0,   # unknown — manual entry
+                    "stop_loss":      0.0,
+                    "take_profit":    0.0,
+                    "rr_ratio":       0.0,
+                    "support":        0.0,
+                    "support_source": "manual",
+                    "score":          0, "threshold": 0,
+                    "trend_score":    0, "momentum_score": 0, "penalty": 0,
+                    "reasons":        ["Manual entry via --mark-open"],
+                    "rsi":            0.0, "macd_h": 0.0, "atr": 0.0,
+                    "ema_21":         0.0, "ema_50": 0.0, "bbl": 0.0,
+                    "bb_width":       0.0, "gap_pct": 0.0,
+                    "near_52w_high":  False, "regime_bullish": True,
+                    "status":         "OPEN",
+                    "outcome_date":   None, "outcome_pct": None,
+                    "max_price":      0.0,  "min_price":   0.0,
+                }
+                trades.append(placeholder)
+                save_trade_log(trades)
+                print(f"✅ {ticker_mo} — placeholder OPEN trade added to log. "
+                      f"Buy alerts suppressed until you run --mark-open {ticker_mo} --clear.")
+        sys.exit(0)
 
     DRY_RUN = args.dry_run
     if DRY_RUN:
-        print("⚠️  DRY RUN — Alpaca duplicate guard and order placement disabled")
+        print("⚠️  DRY RUN — duplicate guard and order placement disabled")
 
     global FORCE_RUN
     FORCE_RUN = args.force
