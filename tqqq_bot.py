@@ -746,17 +746,19 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     # ── PATH F — MACD CROSS (TIER 2) ─────────────────────────────────────────
     # Medium-conviction setup. Fires when momentum shifts from negative to
-    # positive — MACD line crosses above the signal line while both are still
-    # below zero. The "below zero" requirement is critical: it means we're
-    # catching an early recovery from a real pullback, not a late-stage cross
-    # that often precedes a fade.
+    # positive — MACD histogram crosses zero while both lines still below zero.
+    # The "below zero" requirement catches early recovery from a real pullback,
+    # not a late-stage cross that often precedes a fade.
     #
     # Conditions:
     #   - MACD histogram crosses zero (was negative yesterday, positive today)
-    #     This is the exact moment MACD line crosses above signal line
     #   - Both MACD and signal line still below zero (early recovery)
     #   - RSI < 60: not already overbought at the cross
-    #   - Price above 50 EMA: broad trend intact
+    #   - Price above 21 EMA (not 50 EMA): when MACD lines are below zero on
+    #     TQQQ, price has typically sold off below the 50 EMA — requiring
+    #     price > 50 EMA creates a near-impossible conflict. The 21 EMA reclaim
+    #     is the correct confirmation: it shows short-term momentum has turned
+    #     before the 50 EMA has even been reached.
     #   - Today closes green: price confirming the momentum shift
     #
     # Stop: below prior day's low — natural support before the cross
@@ -764,9 +766,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     macd_cross      = prev_mh < 0 and macd_h >= 0          # histogram just crossed zero
     macd_line       = float(scored.get('MACD', macd_h))     # MACD line value
     macd_signal_val = float(scored.get('MACDs', 0))         # signal line value
-    both_below_zero = macd_line < 0 and macd_signal_val < 0 # both still below zero
+    both_below_zero = macd_line < 0 and macd_signal_val < 0 # both still below zero (early recovery)
     macd_rsi_ok     = rsi < 60                              # not overbought
-    macd_trend_ok   = price > ema_50                        # uptrend intact
+    macd_trend_ok   = price > ema_21                        # 21 EMA reclaimed (relaxed from 50 EMA)
     macd_green      = bar_close > bar_open                  # green close confirming
 
     if macd_cross and both_below_zero and macd_rsi_ok and macd_trend_ok and macd_green:
@@ -784,7 +786,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
             f"📊 Path F — MACD Cross (TIER 2 Medium Conviction)",
             f"🔄 MACD Histogram crossed zero: {prev_mh:.3f} → {macd_h:.3f}",
             f"📉 Both lines still below zero — early recovery, not late-stage",
-            f"📈 Price above 50 EMA ${ema_50:.2f} | RSI {rsi:.1f}",
+            f"📈 Price above 21 EMA ${ema_21:.2f} (momentum turning) | RSI {rsi:.1f}",
             f"⚠️ TIER 2: Deploy {TIER2_POSITION_PCT:.0f}% of portfolio (smaller size)",
         ]
         print(f"   [{ticker}] ✅ PATH F — MACD Cross (Tier 2) "
