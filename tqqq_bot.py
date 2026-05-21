@@ -1,45 +1,50 @@
 """
 =============================================================================
-  TQQQ ALERT BOT v6.1 — TQQQ Swing-Only Edition
+  TQQQ ALERT BOT v6.2 — Manual Trading Edition
 =============================================================================
 
 WHAT THIS BOT DOES:
-  Swing trade scanner — scans TQQQ once per hour during market hours.
-  Sends rich Discord alerts with entry, stop, target, R/R ratio, and chart.
-  Places GTC bracket orders on Alpaca (paper trading).
+  Scans TQQQ every 15 minutes during market hours (9:30am–4:00pm ET).
+  Sends Discord buy alerts when signal conditions are met.
+  Sends Discord sell alerts based on live technicals (RSI, EMA, MACD).
+  You execute all trades manually on IBKR — no orders are placed automatically.
   Runs automatically via GitHub Actions — no server needed.
 
-SIGNAL LOGIC:
-  - Scores on today's daily candle at 3:45pm ET (iloc[-1])
-  - Entry window enforced: signals only fire 12:30–4:00pm ET
-  - Market order fills immediately at 3:45pm price
-  - Hold period: 10 days (GTC bracket with stop + limit target)
-  - TQQQ only — leveraged ETF, no earnings, high-volatility adjustments applied
+BUY SIGNAL LOGIC:
+  Tier 1 — High Conviction (deploy TIER1_POSITION_PCT = 10%)
+    Path A: RSI(14) < 35 — deep oversold bypass
+    Path D: Pivot low reversal (higher low + green close + RSI turning up)
 
-SCORING SYSTEM:
-  Path A: RSI < 32 — deep oversold bypass (200 EMA gate REMOVED for TQQQ,
-          which routinely drops below 200 EMA during valid entry windows)
-  Path B: Additive scoring across Trend (cap 4) + Momentum (cap 4), need ≥ 6
-          Structural gate (below both EMAs) BYPASSED for TQQQ
-  Gates:  gap filter, cooldown, open position (no earnings gate — TQQQ is ETF)
+  Tier 2 — Medium Conviction (deploy TIER2_POSITION_PCT = 5%)
+    Path E: 21 EMA Bounce — price wicks 21 EMA and closes green, RSI 40–65
+    Path F: MACD Cross — MACD line crosses above signal line below zero
+
+  All paths: RSI and ATR calculated on daily bars.
+  Alerts fire every 15 min while conditions hold.
+  First alert labelled "NEW SIGNAL", subsequent ones "STILL ACTIVE".
+
+SELL SIGNAL LOGIC (price-agnostic — no entry price needed):
+  RSI_OB    — RSI > 70: momentum exhausted
+  RSI_CROSS — RSI crosses above 55 from below: recovery complete
+  EMA_LOSS  — Price drops below 21 EMA after being above it
+  MACD_PEAK — MACD histogram peaks and turns down at highs
 
 HOW TO RUN MANUALLY:
-  python stock_bot.py                  # Auto-detects mode from time of day
-  python stock_bot.py --mode premarket # Morning gap summary
-  python stock_bot.py --mode swing     # Force swing scan
-  python stock_bot.py --ticker NVDA    # Scan one ticker only
-  python stock_bot.py --force          # Override market-closed gate (testing)
-  python stock_bot.py --dry-run        # Skip Alpaca orders (safe for testing)
+  python tqqq_bot.py                 # Auto-detects mode from time of day
+  python tqqq_bot.py --mode swing    # Force swing scan
+  python tqqq_bot.py --force         # Override market-closed gate (testing)
+  python tqqq_bot.py --dry-run       # Skip duplicate guard (safe for testing)
+  python tqqq_bot.py --ticker TQQQ   # Scan single ticker
 
 ARCHITECTURE:
-  Stage 1: Bulk daily data download for all tickers (1 API call)
-  Stage 2: Swing scoring on daily bars — no intraday data needed
-  Note: Day trade engine and intraday fetch removed in v6.0 (swing-only)
+  Stage 1: Bulk daily data download — VTI (regime) + TQQQ (1 API call)
+  Stage 2: Sell alert check — live price via yfinance fast_info
+  Stage 3: Buy signal scoring on daily bars
+  Stage 4: Outcome tracking — open trades checked against daily closes
 
-LIMITATIONS:
-  - GitHub Actions deduplication: cooldown uses /tmp — resets each run
-  - Alpaca paper only, US tickers only (.TO tickers send Discord alert only)
-  - Signal fires on in-progress daily candle — most reliable after 3:30pm ET
+HOLD PERIODS:
+  Tier 1: 10 trading days
+  Tier 2: 5 trading days
 =============================================================================
 """
 
@@ -69,45 +74,8 @@ except ImportError:
     CHART_AVAILABLE = False
     print("⚠️  mplfinance not installed — chart images disabled. Run: pip install mplfinance")
 
-# ── Alpaca paper trading ──────────────────────────────────────────────────────
-try:
-    from alpaca.trading.client import TradingClient
-    from alpaca.trading.requests import (MarketOrderRequest,
-                                          TakeProfitRequest,
-                                          StopLossRequest)
-    from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
-    ALPACA_AVAILABLE = True
-except ImportError:
-    ALPACA_AVAILABLE = False
-    print("⚠️  alpaca-py not installed — order placement disabled")
-
-ALPACA_KEY = os.environ.get("ALPACA_API_KEY")
-ALPACA_SEC = os.environ.get("ALPACA_SECRET_KEY")
-
-# ── Alpaca startup diagnostic (prints on every run) ───────────────────────────
-print(f"🔑 Alpaca lib available: {ALPACA_AVAILABLE}")
-print(f"🔑 ALPACA_API_KEY set:   {'YES (' + ALPACA_KEY[:4] + '...)' if ALPACA_KEY else 'NO ← missing secret'}")
-print(f"🔑 ALPACA_SECRET_KEY set: {'YES' if ALPACA_SEC else 'NO ← missing secret'}")
-
-
-def get_alpaca_client():
-    """Returns an Alpaca paper trading client, or None if not configured."""
-    if not ALPACA_AVAILABLE:
-        print("   ⚠️ get_alpaca_client: alpaca-py not installed")
-        return None
-    if not ALPACA_KEY:
-        print("   ⚠️ get_alpaca_client: ALPACA_API_KEY not set")
-        return None
-    if not ALPACA_SEC:
-        print("   ⚠️ get_alpaca_client: ALPACA_SECRET_KEY not set")
-        return None
-    try:
-        client = TradingClient(ALPACA_KEY, ALPACA_SEC, paper=True)
-        print(f"   ✅ Alpaca client connected (paper=True)")
-        return client
-    except Exception as e:
-        print(f"   ❌ Alpaca client init failed: {e}")
-        return None
+# Alpaca removed — bot uses manual IBKR execution based on Discord alerts.
+# Re-add alpaca-py imports and get_alpaca_client() from git history if reverting.
 
 
 # =============================================================================
@@ -253,23 +221,13 @@ COOLDOWN_MINUTES = {"SWING": 240}
 # Each alert is logged on fire; outcomes are auto-checked on every subsequent run.
 TRADE_LOG_FILE        = "trade_log.json"
 EARNINGS_CACHE_FILE   = "earnings_cache.json"
-OUTCOME_CHECK_DAYS    = 21    # Extended from 10 — swing trades need room to develop
+OUTCOME_CHECK_DAYS    = 12    # Days before marking a trade EXPIRED if not resolved.
+                              # Set to 2 days beyond Tier 1 hold (10 days) to give
+                              # the trade room to resolve naturally before expiring.
+                              # Tier 2 (5-day hold) will always resolve well before this.
 OUTCOME_DISCORD_DAILY = True  # Send outcome summary to Discord whenever there are
                               # open positions or newly resolved trades.
                               # Set False to suppress all outcome messages.
-
-# ── Real-time sell alert configuration ───────────────────────────────────────
-# On every scan during market hours, the bot fetches TQQQ's live price via
-# yfinance fast_info and checks each OPEN trade against its stop and target.
-# If either level is crossed, a real-time Discord sell alert fires immediately.
-#
-# Cooldown prevents re-alerting on the same trade within one session:
-# once a sell alert fires for a trade ID, that ID is stored in a /tmp file
-# and suppressed for SELL_ALERT_COOLDOWN_MINUTES minutes.
-#
-# Note: the bot does NOT auto-place a sell order — you must execute manually
-# on IBKR (or Alpaca if still paper trading). The alert is the trigger.
-SELL_ALERT_COOLDOWN_FILE    = "/tmp/sell_alert_cooldowns.json"  # kept for legacy — no longer used for suppression
 
 # ── Discord embed colors ──────────────────────────────────────────────────────
 COLOR_GREEN  = 5763719    # Scenario A — full alignment
@@ -1146,6 +1104,9 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         "mode": "SWING", "near_52w_high": near_52w_high,
         "support": round(support, 2), "support_source": support_source,
         "path": "B",
+        "tier": 2,           # Tier 2 — standard additive scoring, conservative 5% allocation
+        "hold_days": TIER2_HOLD_DAYS,
+        "position_size_pct": TIER2_POSITION_PCT,
     }
 
 
@@ -1893,7 +1854,7 @@ def send_setup_alert(ticker, currency, signal,
                         "value": (f"[TradingView](https://www.tradingview.com/chart/?symbol={ticker}) · "
                                   f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})"),
                         "inline": False}],
-            "footer": {"text": f"TQQQ Alert Bot v6.1 | Path {path} | Tier {tier} | ATR: {signal.get('atr_source','—')}"},
+            "footer": {"text": f"TQQQ Alert Bot v6.2 | Path {path} | Tier {tier} | ATR: {signal.get('atr_source','—')}"},
         }],
     }
 
@@ -1960,7 +1921,7 @@ def check_market(mode: str, tickers_override: list | None = None):
     et_now = datetime.now(tz)
 
     print(f"\n{'='*60}")
-    print(f"  TQQQ Alert Bot v6.1 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
+    print(f"  TQQQ Alert Bot v6.2 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
     print(f"  Mode: {mode.upper()}")
     print(f"{'='*60}\n")
 
@@ -2440,123 +2401,6 @@ def fetch_tqqq_live_price() -> float | None:
     return None
 
 
-def _load_sell_cooldowns() -> dict:
-    """Loads sell alert cooldown state from /tmp. Returns {} on any error."""
-    try:
-        p = Path(SELL_ALERT_COOLDOWN_FILE)
-        if p.exists():
-            with open(p) as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return {}
-
-
-def _save_sell_cooldowns(data: dict):
-    """Saves sell alert cooldown state to /tmp."""
-    try:
-        with open(SELL_ALERT_COOLDOWN_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"   WARNING: Sell cooldown save failed: {e}")
-
-
-def _is_sell_alert_on_cooldown(trade_id: str, reason: str) -> bool:
-    """
-    Returns True if a sell alert for this trade_id + reason was recently sent.
-    Key format: trade_id + "|" + reason  e.g. "TQQQ_20260518_1430|TARGET"
-    TARGET and STOP cooldowns tracked independently so one won't suppress the other.
-    """
-    cooldowns = _load_sell_cooldowns()
-    key = f"{trade_id}|{reason}"
-    if key not in cooldowns:
-        return False
-    try:
-        tz   = pytz.timezone(TIMEZONE)
-        last = datetime.fromisoformat(cooldowns[key])
-        if last.tzinfo is None:
-            last = tz.localize(last)
-        elapsed = (datetime.now(tz) - last).total_seconds() / 60.0
-        if elapsed < SELL_ALERT_COOLDOWN_MINUTES:
-            print(f"   Sell alert [{reason}] for {trade_id} on cooldown "
-                  f"({elapsed:.0f}/{SELL_ALERT_COOLDOWN_MINUTES} min)")
-            return True
-    except Exception:
-        pass
-    return False
-
-
-def _set_sell_cooldown(trade_id: str, reason: str):
-    """Records that a sell alert fired for this trade_id + reason."""
-    cooldowns = _load_sell_cooldowns()
-    key = f"{trade_id}|{reason}"
-    cooldowns[key] = datetime.now(pytz.timezone(TIMEZONE)).isoformat()
-    _save_sell_cooldowns(cooldowns)
-
-
-def send_sell_alert(trade: dict, live_price: float, reason: str):
-    """
-    Sends a real-time sell alert to Discord.
-    reason: "TARGET" | "STOP" | "TRAIL"
-    Color: TARGET=green, STOP=red, TRAIL=yellow
-    """
-    entry      = trade["entry"]
-    stop       = trade["stop_loss"]
-    target     = trade["take_profit"]
-    trade_id   = trade["id"]
-    alert_date = trade.get("alert_date", "?")
-    days_open  = (datetime.now(pytz.timezone(TIMEZONE)).date() -
-                  datetime.strptime(alert_date, "%Y-%m-%d").date()).days
-
-    pct_from_entry = (live_price - entry) / entry * 100
-    pct_to_target  = (target - live_price) / entry * 100
-    pct_to_stop    = (live_price - stop)   / entry * 100
-
-    if reason == "TARGET":
-        title   = "SELL — TQQQ Target Reached"
-        color   = 5763719     # green
-        action  = "**SELL NOW** — take profit target has been reached."
-        summary = f"Price `${live_price:.2f}` has reached or exceeded target `${target:.2f}`"
-    elif reason == "STOP":
-        title   = "SELL — TQQQ Stop Loss Hit"
-        color   = 15548997    # red
-        action  = "**SELL NOW** — stop loss level has been breached."
-        summary = f"Price `${live_price:.2f}` has dropped to or below stop `${stop:.2f}`"
-    else:  # TRAIL
-        high_wm  = trade.get("max_price", entry)
-        drop_pct = (high_wm - live_price) / high_wm * 100
-        title    = "SELL — TQQQ Trailing Alert"
-        color    = 16776960   # yellow
-        action   = (f"**Consider selling** — price has pulled back `{drop_pct:.1f}%` "
-                    f"from the high of `${high_wm:.2f}`.")
-        summary  = (f"Price `${live_price:.2f}` dropped `{drop_pct:.1f}%` "
-                    f"from running high `${high_wm:.2f}`")
-
-    desc = (
-        f"{summary}\n\n"
-        f"{action}\n\n"
-        f"**Trade Details**\n"
-        f"Entry: `${entry:.2f}` ({days_open} day{'s' if days_open != 1 else ''} ago)\n"
-        f"Live Price: `${live_price:.2f}` (`{pct_from_entry:+.2f}%` from entry)\n"
-        f"Target: `${target:.2f}` (`{pct_to_target:+.1f}%` away)\n"
-        f"Stop: `${stop:.2f}` (`{pct_to_stop:+.1f}%` cushion)\n"
-        f"Trade ID: `{trade_id}`\n\n"
-        f"_Execute exit manually on your broker. "
-        f"This alert does not place an order automatically._"
-    )
-
-    payload = {"embeds": [{
-        "title":       title,
-        "description": desc[:4096],
-        "color":       color,
-        "footer":      {"text": "TQQQ Alert Bot v6.1 | Real-time sell alert"},
-        "timestamp":   datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }]}
-
-    _post_discord(payload)
-    print(f"   Sell alert sent [{reason}] for {trade_id} @ ${live_price:.2f}")
-
-
 def check_live_sell_alerts():
     """
     Technical sell signal runner. Called on every scan during market hours.
@@ -2662,7 +2506,7 @@ def check_live_sell_alerts():
             "title":       titled,
             "description": desc,
             "color":       color,
-            "footer":      {"text": "TQQQ Alert Bot v6.1 | Technical Sell Signal"},
+            "footer":      {"text": "TQQQ Alert Bot v6.2 | Technical Sell Signal"},
             "timestamp":   datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }]}
         _post_discord(payload)
@@ -2932,7 +2776,7 @@ def send_outcome_summary(resolved: list, bulk_data):
             "title":       "📈 Trade Outcome Tracker",
             "description": desc[:4096],
             "color":       5763719 if win_rate >= 50 else 15548997,
-            "footer":      {"text": f"TQQQ Alert Bot v6.1 | {len(trades)} total trades logged"},
+            "footer":      {"text": f"TQQQ Alert Bot v6.2 | {len(trades)} total trades logged"},
         }]}
         _post_discord(payload)
         print(f"   📊 Outcome summary sent ({len(open_tr)} open, {len(resolved)} resolved)")
@@ -2945,7 +2789,7 @@ def send_outcome_summary(resolved: list, bulk_data):
 # =============================================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="TQQQ Alert Bot v6.1")
+    parser = argparse.ArgumentParser(description="TQQQ Alert Bot v6.2")
     parser.add_argument('--mode',
         choices=['auto', 'premarket', 'swing'],
         default='auto',
@@ -2954,91 +2798,19 @@ if __name__ == "__main__":
         type=str, default=None,
         help='Scan a single ticker, e.g. --ticker TQQQ')
     parser.add_argument('--dry-run', action='store_true',
-        help='Skip order placement and duplicate guard. Safe for after-hours testing.')
+        help='Disable duplicate guard. Safe for after-hours testing.')
     parser.add_argument('--force', action='store_true',
         help='Force scan even if market is closed. Use for manual after-hours testing.')
-    parser.add_argument('--mark-open', type=str, default=None, metavar='TICKER',
-        help=(
-            'Manually mark a ticker as OPEN in trade_log.json to suppress repeat '
-            'buy alerts after a manual IBKR entry. '
-            'Example: python tqqq_bot.py --mark-open TQQQ'
-        ))
-    parser.add_argument('--clear', action='store_true',
-        help=(
-            'Used with --mark-open: removes the OPEN status instead of adding it, '
-            'so buy alerts can fire again. '
-            'Example: python tqqq_bot.py --mark-open TQQQ --clear'
-        ))
     args = parser.parse_args()
-
-    # ── --mark-open handler ───────────────────────────────────────────────────
-    # Runs standalone — does not proceed to check_market after completing.
-    # Usage:
-    #   python tqqq_bot.py --mark-open TQQQ          # suppress buy alerts (you bought)
-    #   python tqqq_bot.py --mark-open TQQQ --clear  # re-enable buy alerts (you sold / skipped)
-    if args.mark_open:
-        ticker_mo = args.mark_open.upper()
-        trades    = load_trade_log()
-        existing  = [t for t in trades if t["ticker"] == ticker_mo and t["status"] == "OPEN"]
-
-        if args.clear:
-            # Mark all OPEN trades for this ticker as EXPIRED so alerts can fire again
-            if not existing:
-                print(f"ℹ️  No OPEN trade found for {ticker_mo} — nothing to clear.")
-            else:
-                for t in existing:
-                    t["status"]       = "EXPIRED"
-                    t["outcome_date"] = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
-                    t["outcome_pct"]  = 0.0
-                save_trade_log(trades)
-                print(f"✅ {ticker_mo} — {len(existing)} OPEN trade(s) marked EXPIRED. "
-                      f"Buy alerts will fire again on next signal.")
-        else:
-            # Inject a placeholder OPEN trade so the duplicate guard suppresses alerts
-            if existing:
-                print(f"ℹ️  {ticker_mo} already has an OPEN trade in log — no change needed.")
-            else:
-                tz  = pytz.timezone(TIMEZONE)
-                now = datetime.now(tz)
-                placeholder = {
-                    "id":             f"{ticker_mo}_{now.strftime('%Y%m%d_%H%M')}_manual",
-                    "ticker":         ticker_mo,
-                    "currency":       "USD",
-                    "scenario":       "MANUAL",
-                    "mode":           "SWING",
-                    "alert_date":     now.strftime("%Y-%m-%d"),
-                    "alert_time":     now.strftime("%H:%M ET"),
-                    "entry":          0.0,   # unknown — manual entry
-                    "stop_loss":      0.0,
-                    "take_profit":    0.0,
-                    "rr_ratio":       0.0,
-                    "support":        0.0,
-                    "support_source": "manual",
-                    "score":          0, "threshold": 0,
-                    "trend_score":    0, "momentum_score": 0, "penalty": 0,
-                    "reasons":        ["Manual entry via --mark-open"],
-                    "rsi":            0.0, "macd_h": 0.0, "atr": 0.0,
-                    "ema_21":         0.0, "ema_50": 0.0, "bbl": 0.0,
-                    "bb_width":       0.0, "gap_pct": 0.0,
-                    "near_52w_high":  False, "regime_bullish": True,
-                    "status":         "OPEN",
-                    "outcome_date":   None, "outcome_pct": None,
-                    "max_price":      0.0,  "min_price":   0.0,
-                }
-                trades.append(placeholder)
-                save_trade_log(trades)
-                print(f"✅ {ticker_mo} — placeholder OPEN trade added to log. "
-                      f"Buy alerts suppressed until you run --mark-open {ticker_mo} --clear.")
-        sys.exit(0)
 
     DRY_RUN = args.dry_run
     if DRY_RUN:
-        print("⚠️  DRY RUN — duplicate guard and order placement disabled")
+        print("⚠️  DRY RUN — duplicate guard disabled")
 
     global FORCE_RUN
     FORCE_RUN = args.force
     if FORCE_RUN:
-        print("⚡ --force active — entry window gate bypassed")
+        print("⚡ --force active — market-closed gate bypassed")
 
     et_now = datetime.now(pytz.timezone(TIMEZONE))
 
