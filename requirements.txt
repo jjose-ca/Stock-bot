@@ -1,6 +1,6 @@
 yfinance
-pandas
-pandas-ta==0.3.14b
+pandas>=2.2.0,<3.0.0
+pandas-ta>=0.4.67b0
 requests
 numpy>=1.26.0,<2.0.0
 alpaca-py
