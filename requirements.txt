@@ -5,3 +5,4 @@ requests
 numpy
 alpaca-py
 mplfinance
+pytz
