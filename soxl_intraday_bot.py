@@ -1067,7 +1067,7 @@ def _post_discord(payload):
         print(f"   Discord error: {e}")
 
 
-def send_buy_alert(signal, live_price, slippage_pct, live_rr):
+def send_buy_alert(signal, live_price, slippage_pct, live_rr, gap_pct=None):
     """Sends intraday buy signal embed to Discord."""
     if not DISCORD_WEBHOOK_URL:
         return
@@ -1105,6 +1105,22 @@ def send_buy_alert(signal, live_price, slippage_pct, live_rr):
     desc += f"Position: **${dollar_amount:.0f}** ({POSITION_PCT}% of baseline)\n"
     desc += f"Exit: **+{TARGET_PCT*100:.0f}% target** or **3:35pm time stop**\n"
     desc += f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+    # Gap context — informational only, not a filter
+    # Shows opening gap so you can check news before acting
+    if gap_pct is not None:
+        if gap_pct <= -3.0:
+            desc += (f"\n⚠️ **Gap down {gap_pct:.1f}%** from yesterday's close\n"
+                     f"Check semiconductor news before entering.\n\n")
+        elif gap_pct <= -1.5:
+            desc += (f"\n📉 Gap down {gap_pct:.1f}% — normal SOXL volatility\n"
+                     f"Verify no major sector news.\n\n")
+        elif gap_pct >= 3.0:
+            desc += (f"\n📈 **Gap up {gap_pct:.1f}%** — strong overnight momentum\n\n")
+        elif gap_pct >= 1.5:
+            desc += f"\n📈 Gap up {gap_pct:.1f}% — bullish overnight\n\n"
+        else:
+            desc += f"\n↔️ Flat open ({gap_pct:+.1f}% from yesterday)\n\n"
 
     desc += "**Trade Plan (at current price)**\n"
     desc += f"- Entry now: `${live_price:.2f}`\n"
@@ -1254,8 +1270,23 @@ def check_market():
         print(f"   Signal valid but entry price degraded — no alert sent.")
         return
 
+    # ── GAP CONTEXT ──────────────────────────────────────────────────────────
+    # Calculate today's opening gap from yesterday's close (daily bars).
+    # Passed into the alert as informational context — not a filter.
+    # You decide whether to act based on the gap and any news you're aware of.
+    gap_pct = None
+    try:
+        et_tz_g    = pytz.timezone(TIMEZONE)
+        today_g    = datetime.now(et_tz_g).date()
+        today_bars = df[df.index.date == today_g]
+        if not today_bars.empty and daily_close is not None:
+            today_open = float(today_bars["Open"].iloc[0])
+            gap_pct    = (today_open - daily_close) / daily_close * 100
+    except Exception:
+        pass
+
     # ── SEND ALERT AND LOG ────────────────────────────────────────────────────
-    send_buy_alert(signal, live_price, slippage_pct, live_rr)
+    send_buy_alert(signal, live_price, slippage_pct, live_rr, gap_pct)
     log_intraday_trade(signal, live_price, slippage_pct, live_rr)
 
     print(f"\nScan complete | {et_now.strftime('%I:%M %p ET')}\n")
