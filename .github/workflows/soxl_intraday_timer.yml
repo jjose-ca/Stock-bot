@@ -2,48 +2,77 @@ name: Run SOXL Intraday Bot
 
 on:
   schedule:
-    # SOXL intraday bot runs 4 times during the session targeting:
-    #   10:45am — catches Opening Range Breakout after first hour closes
-    #   1:00pm  — catches midday VWAP reclaims
-    #   3:00pm  — catches afternoon momentum setups
-    #   3:20pm  — final scan + exit alert if position still open
+    # SOXL intraday bot runs every 30 minutes from 10:15am to 3:00pm ET,
+    # then a tighter 3:20pm run before the 3:35pm time stop.
+    # Total: 12 runs per day.
     #
-    # Why these times:
-    #   10:45am: ORB requires the 9:30-10:00am opening range to be complete,
-    #            plus at least one confirmed bar after the break. 10:45am
-    #            gives the 10:30am bar time to close and confirm the move.
-    #   1:00pm:  Midday is when institutional rebalancing creates VWAP
-    #            reclaim opportunities after the morning dip.
-    #   3:00pm:  Afternoon momentum often builds as US market leaders
-    #            make directional moves heading into close.
-    #   3:20pm:  Final check before time stop. Bot fires exit alert if
-    #            an intraday position is still open (time stop = 3:35pm).
+    # WHY EVERY 30 MINUTES:
+    #   Each run scores the last completed 15-minute bar. Running every 30 min
+    #   means every second 15-min bar gets scored. This is the best balance
+    #   between coverage and GitHub Actions free-tier usage (~528 min/month).
     #
-    # Bot's internal time gates handle the rest:
+    # WHY START AT 10:15am:
+    #   The Opening Range is established at 10:00am (first 30 min of trading).
+    #   The 10:15am run scores the very first bar after the opening range closes
+    #   (10:00-10:15am) — often where the strongest ORB breakouts happen.
+    #   The 10:30am run catches the second bar if the breakout needed confirmation.
+    #
+    # WHY 3:20pm INSTEAD OF 3:30pm:
+    #   Time stop fires at 3:35pm ET. The 3:20pm run gives the bot time to
+    #   detect an open position and send the exit alert before 3:35pm.
+    #
+    # Bot's internal time gates handle edge cases:
     #   - Before 10:00am: no signals (opening range incomplete)
-    #   - After 3:35pm:  no new buy signals (time stop gate)
-    #   - Market closed:  bot exits immediately
+    #   - After 3:35pm:  no new buy signals (time stop gate active)
+    #   - Market closed:  bot exits immediately with no action
     #
-    # DST handled with dual UTC offsets:
+    # DST handled with dual UTC offsets (same pattern as tqqq_timer.yml):
     #   EDT (Mar-Nov): UTC-4  |  EST (Nov-Mar): UTC-5
+    #   Running both offsets means exactly one fires correctly each season.
+    #   The bot's internal market hours gate rejects any run outside 9:30am-3:45pm ET.
     #
-    # Target ET -> UTC conversions:
-    #   10:45am ET -> 14:45 UTC (EDT) | 15:45 UTC (EST)
-    #   1:00pm  ET -> 17:00 UTC (EDT) | 18:00 UTC (EST)
-    #   3:00pm  ET -> 19:00 UTC (EDT) | 20:00 UTC (EST)
-    #   3:20pm  ET -> 19:20 UTC (EDT) | 20:20 UTC (EST)
+    # Run schedule with UTC conversions:
+    #   ET Time  | EDT (UTC-4) | EST (UTC-5)
+    #   10:15am  | 14:15 UTC   | 15:15 UTC
+    #   10:30am  | 14:30 UTC   | 15:30 UTC
+    #   11:00am  | 15:00 UTC   | 16:00 UTC
+    #   11:30am  | 15:30 UTC   | 16:30 UTC
+    #   12:00pm  | 16:00 UTC   | 17:00 UTC
+    #   12:30pm  | 16:30 UTC   | 17:30 UTC
+    #   1:00pm   | 17:00 UTC   | 18:00 UTC
+    #   1:30pm   | 17:30 UTC   | 18:30 UTC
+    #   2:00pm   | 18:00 UTC   | 19:00 UTC
+    #   2:30pm   | 18:30 UTC   | 19:30 UTC
+    #   3:00pm   | 19:00 UTC   | 20:00 UTC
+    #   3:20pm   | 19:20 UTC   | 20:20 UTC
 
-    # EDT offsets (March - November)
-    - cron: '45 14 * * 1-5'   # 10:45am ET (EDT)
-    - cron: '0  17 * * 1-5'   # 1:00pm  ET (EDT)
-    - cron: '0  19 * * 1-5'   # 3:00pm  ET (EDT)
-    - cron: '20 19 * * 1-5'   # 3:20pm  ET (EDT)
+    # ── EDT offsets (March - November) ──────────────────────────────────────
+    - cron: '15 14 * * 1-5'   # 10:15am ET (EDT)
+    - cron: '30 14 * * 1-5'   # 10:30am ET (EDT)
+    - cron: '0  15 * * 1-5'   # 11:00am ET (EDT)
+    - cron: '30 15 * * 1-5'   # 11:30am ET (EDT)
+    - cron: '0  16 * * 1-5'   # 12:00pm ET (EDT)
+    - cron: '30 16 * * 1-5'   # 12:30pm ET (EDT)
+    - cron: '0  17 * * 1-5'   #  1:00pm ET (EDT)
+    - cron: '30 17 * * 1-5'   #  1:30pm ET (EDT)
+    - cron: '0  18 * * 1-5'   #  2:00pm ET (EDT)
+    - cron: '30 18 * * 1-5'   #  2:30pm ET (EDT)
+    - cron: '0  19 * * 1-5'   #  3:00pm ET (EDT)
+    - cron: '20 19 * * 1-5'   #  3:20pm ET (EDT)
 
-    # EST offsets (November - March)
-    - cron: '45 15 * * 1-5'   # 10:45am ET (EST)
-    - cron: '0  18 * * 1-5'   # 1:00pm  ET (EST)
-    - cron: '0  20 * * 1-5'   # 3:00pm  ET (EST)
-    - cron: '20 20 * * 1-5'   # 3:20pm  ET (EST)
+    # ── EST offsets (November - March) ──────────────────────────────────────
+    - cron: '15 15 * * 1-5'   # 10:15am ET (EST)
+    - cron: '30 15 * * 1-5'   # 10:30am ET (EST)
+    - cron: '0  16 * * 1-5'   # 11:00am ET (EST)
+    - cron: '30 16 * * 1-5'   # 11:30am ET (EST)
+    - cron: '0  17 * * 1-5'   # 12:00pm ET (EST)
+    - cron: '30 17 * * 1-5'   # 12:30pm ET (EST)
+    - cron: '0  18 * * 1-5'   #  1:00pm ET (EST)
+    - cron: '30 18 * * 1-5'   #  1:30pm ET (EST)
+    - cron: '0  19 * * 1-5'   #  2:00pm ET (EST)
+    - cron: '30 19 * * 1-5'   #  2:30pm ET (EST)
+    - cron: '0  20 * * 1-5'   #  3:00pm ET (EST)
+    - cron: '20 20 * * 1-5'   #  3:20pm ET (EST)
 
   workflow_dispatch:
     inputs:
