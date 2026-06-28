@@ -2,77 +2,40 @@ name: Run SOXL Intraday Bot
 
 on:
   schedule:
-    # SOXL intraday bot runs every 30 minutes from 10:15am to 3:00pm ET,
-    # then a tighter 3:20pm run before the 3:35pm time stop.
-    # Total: 12 runs per day.
+    # SOXL intraday bot runs every 15 minutes from 10:00am to 3:20pm ET.
+    # Compact multi-value cron syntax covers both EDT and EST seasons.
     #
-    # WHY EVERY 30 MINUTES:
-    #   Each run scores the last completed 15-minute bar. Running every 30 min
-    #   means every second 15-min bar gets scored. This is the best balance
-    #   between coverage and GitHub Actions free-tier usage (~528 min/month).
+    # WHY EVERY 15 MINUTES:
+    #   GitHub Actions drops ~50% of scheduled runs under load (confirmed
+    #   from TQQQ bot run history). Scheduling every 15 min delivers
+    #   effective ~30 min coverage — the right balance for 15-min bar signals.
     #
-    # WHY START AT 10:15am:
-    #   The Opening Range is established at 10:00am (first 30 min of trading).
-    #   The 10:15am run scores the very first bar after the opening range closes
-    #   (10:00-10:15am) — often where the strongest ORB breakouts happen.
-    #   The 10:30am run catches the second bar if the breakout needed confirmation.
+    # WHY 10:00am START:
+    #   Opening Range closes at 10:00am. The 10:00-10:15am bar is the
+    #   first ORB bar and often the strongest. Starting at 10:00am UTC
+    #   (14:00 EDT) catches it immediately.
     #
-    # WHY 3:20pm INSTEAD OF 3:30pm:
-    #   Time stop fires at 3:35pm ET. The 3:20pm run gives the bot time to
-    #   detect an open position and send the exit alert before 3:35pm.
+    # WHY 3:20pm END:
+    #   Time stop fires at 3:35pm ET. The 3:20pm run detects open
+    #   positions and sends exit alerts with time to act.
     #
-    # Bot's internal time gates handle edge cases:
-    #   - Before 10:00am: no signals (opening range incomplete)
-    #   - After 3:35pm:  no new buy signals (time stop gate active)
-    #   - Market closed:  bot exits immediately with no action
-    #
-    # DST handled with dual UTC offsets (same pattern as tqqq_timer.yml):
+    # DST handled with dual UTC offsets:
     #   EDT (Mar-Nov): UTC-4  |  EST (Nov-Mar): UTC-5
-    #   Running both offsets means exactly one fires correctly each season.
-    #   The bot's internal market hours gate rejects any run outside 9:30am-3:45pm ET.
+    #   17 of 27 entries are shared (serve both seasons correctly).
+    #   Bot's internal market hours gate rejects any off-hours fires.
     #
-    # Run schedule with UTC conversions:
-    #   ET Time  | EDT (UTC-4) | EST (UTC-5)
-    #   10:15am  | 14:15 UTC   | 15:15 UTC
-    #   10:30am  | 14:30 UTC   | 15:30 UTC
-    #   11:00am  | 15:00 UTC   | 16:00 UTC
-    #   11:30am  | 15:30 UTC   | 16:30 UTC
-    #   12:00pm  | 16:00 UTC   | 17:00 UTC
-    #   12:30pm  | 16:30 UTC   | 17:30 UTC
-    #   1:00pm   | 17:00 UTC   | 18:00 UTC
-    #   1:30pm   | 17:30 UTC   | 18:30 UTC
-    #   2:00pm   | 18:00 UTC   | 19:00 UTC
-    #   2:30pm   | 18:30 UTC   | 19:30 UTC
-    #   3:00pm   | 19:00 UTC   | 20:00 UTC
-    #   3:20pm   | 19:20 UTC   | 20:20 UTC
+    # Run schedule:
+    #   ET Time          | EDT (UTC-4) | EST (UTC-5)
+    #   10:00am-2:45pm   | 14:00-18:45 | 15:00-19:45
+    #   3:00pm + 3:20pm  | 19:00+19:20 | 20:00+20:20
 
-    # ── EDT offsets (March - November) ──────────────────────────────────────
-    - cron: '15 14 * * 1-5'   # 10:15am ET (EDT)
-    - cron: '30 14 * * 1-5'   # 10:30am ET (EDT)
-    - cron: '0  15 * * 1-5'   # 11:00am ET (EDT)
-    - cron: '30 15 * * 1-5'   # 11:30am ET (EDT)
-    - cron: '0  16 * * 1-5'   # 12:00pm ET (EDT)
-    - cron: '30 16 * * 1-5'   # 12:30pm ET (EDT)
-    - cron: '0  17 * * 1-5'   #  1:00pm ET (EDT)
-    - cron: '30 17 * * 1-5'   #  1:30pm ET (EDT)
-    - cron: '0  18 * * 1-5'   #  2:00pm ET (EDT)
-    - cron: '30 18 * * 1-5'   #  2:30pm ET (EDT)
-    - cron: '0  19 * * 1-5'   #  3:00pm ET (EDT)
-    - cron: '20 19 * * 1-5'   #  3:20pm ET (EDT)
+    # EDT (March - November) — every 15 min, 10:00am to 3:20pm
+    - cron: '0,15,30,45 14-18 * * 1-5'   # 10:00am-2:45pm ET (EDT)
+    - cron: '0,20 19 * * 1-5'             # 3:00pm + 3:20pm ET (EDT)
 
-    # ── EST offsets (November - March) ──────────────────────────────────────
-    - cron: '15 15 * * 1-5'   # 10:15am ET (EST)
-    - cron: '30 15 * * 1-5'   # 10:30am ET (EST)
-    - cron: '0  16 * * 1-5'   # 11:00am ET (EST)
-    - cron: '30 16 * * 1-5'   # 11:30am ET (EST)
-    - cron: '0  17 * * 1-5'   # 12:00pm ET (EST)
-    - cron: '30 17 * * 1-5'   # 12:30pm ET (EST)
-    - cron: '0  18 * * 1-5'   #  1:00pm ET (EST)
-    - cron: '30 18 * * 1-5'   #  1:30pm ET (EST)
-    - cron: '0  19 * * 1-5'   #  2:00pm ET (EST)
-    - cron: '30 19 * * 1-5'   #  2:30pm ET (EST)
-    - cron: '0  20 * * 1-5'   #  3:00pm ET (EST)
-    - cron: '20 20 * * 1-5'   #  3:20pm ET (EST)
+    # EST (November - March) — every 15 min, 10:00am to 3:20pm
+    - cron: '0,15,30,45 15-19 * * 1-5'   # 10:00am-2:45pm ET (EST)
+    - cron: '0,20 20 * * 1-5'             # 3:00pm + 3:20pm ET (EST)
 
   workflow_dispatch:
     inputs:
@@ -96,12 +59,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: '3.12'
 
@@ -122,7 +85,6 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Initialise log files if they don't exist yet
           [ -f soxl_intraday_trade_log.json ] || echo "[]" > soxl_intraday_trade_log.json
           [ -f soxl_gate_blocks.json ]         || echo "[]" > soxl_gate_blocks.json
 
