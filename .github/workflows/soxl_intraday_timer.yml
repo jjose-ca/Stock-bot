@@ -1,0 +1,106 @@
+name: Run SOXL Intraday Bot
+
+on:
+  schedule:
+    # SOXL intraday bot runs 4 times during the session targeting:
+    #   10:45am — catches Opening Range Breakout after first hour closes
+    #   1:00pm  — catches midday VWAP reclaims
+    #   3:00pm  — catches afternoon momentum setups
+    #   3:20pm  — final scan + exit alert if position still open
+    #
+    # Why these times:
+    #   10:45am: ORB requires the 9:30-10:00am opening range to be complete,
+    #            plus at least one confirmed bar after the break. 10:45am
+    #            gives the 10:30am bar time to close and confirm the move.
+    #   1:00pm:  Midday is when institutional rebalancing creates VWAP
+    #            reclaim opportunities after the morning dip.
+    #   3:00pm:  Afternoon momentum often builds as US market leaders
+    #            make directional moves heading into close.
+    #   3:20pm:  Final check before time stop. Bot fires exit alert if
+    #            an intraday position is still open (time stop = 3:35pm).
+    #
+    # Bot's internal time gates handle the rest:
+    #   - Before 10:00am: no signals (opening range incomplete)
+    #   - After 3:35pm:  no new buy signals (time stop gate)
+    #   - Market closed:  bot exits immediately
+    #
+    # DST handled with dual UTC offsets:
+    #   EDT (Mar-Nov): UTC-4  |  EST (Nov-Mar): UTC-5
+    #
+    # Target ET -> UTC conversions:
+    #   10:45am ET -> 14:45 UTC (EDT) | 15:45 UTC (EST)
+    #   1:00pm  ET -> 17:00 UTC (EDT) | 18:00 UTC (EST)
+    #   3:00pm  ET -> 19:00 UTC (EDT) | 20:00 UTC (EST)
+    #   3:20pm  ET -> 19:20 UTC (EDT) | 20:20 UTC (EST)
+
+    # EDT offsets (March - November)
+    - cron: '45 14 * * 1-5'   # 10:45am ET (EDT)
+    - cron: '0  17 * * 1-5'   # 1:00pm  ET (EDT)
+    - cron: '0  19 * * 1-5'   # 3:00pm  ET (EDT)
+    - cron: '20 19 * * 1-5'   # 3:20pm  ET (EDT)
+
+    # EST offsets (November - March)
+    - cron: '45 15 * * 1-5'   # 10:45am ET (EST)
+    - cron: '0  18 * * 1-5'   # 1:00pm  ET (EST)
+    - cron: '0  20 * * 1-5'   # 3:00pm  ET (EST)
+    - cron: '20 20 * * 1-5'   # 3:20pm  ET (EST)
+
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force scan even if market is closed (testing)'
+        required: false
+        default: 'false'
+        type: boolean
+      dry_run:
+        description: 'Dry run — skip trade log writes (testing)'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  soxl_intraday:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.2.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run SOXL intraday bot
+        env:
+          DISCORD_URL: ${{ secrets.DISCORD_URL }}
+        run: |
+          ARGS=""
+          [ "${{ github.event.inputs.force }}"   = "true" ] && ARGS="$ARGS --force"
+          [ "${{ github.event.inputs.dry_run }}" = "true" ] && ARGS="$ARGS --dry-run"
+          python soxl_intraday_bot.py $ARGS
+
+      - name: Commit trade logs
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Initialise log files if they don't exist yet
+          [ -f soxl_intraday_trade_log.json ] || echo "[]" > soxl_intraday_trade_log.json
+          [ -f soxl_gate_blocks.json ]         || echo "[]" > soxl_gate_blocks.json
+
+          git add soxl_intraday_trade_log.json soxl_gate_blocks.json
+
+          git diff --staged --quiet || (
+            git commit -m "chore: update soxl intraday trade log [skip ci]" &&
+            git pull --rebase origin master &&
+            git push
+          )
