@@ -1,8 +1,8 @@
 yfinance
 pandas
-pandas-ta
+pandas-ta==0.3.14b
 requests
-numpy
+numpy>=1.26.0,<2.0.0
 alpaca-py
 mplfinance
 pytz
