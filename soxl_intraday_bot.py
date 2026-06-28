@@ -25,6 +25,14 @@ SIGNALS:
     daily 50 EMA trend filter.
     Fires: any time during the day when conditions are met.
 
+  Signal 3 — Previous Day High Breakout (PDH)
+    Yesterday's high is the level sellers defended last session.
+    When SOXL breaks and closes above that level with volume today,
+    prior resistance becomes support and momentum continues higher.
+    Fires: once per day, after 10:00am, when price breaks PDH.
+    Confluence: if ORB also fires on the same bar, labelled as
+    PDH+ORB Confluence — strongest possible intraday momentum signal.
+
 SLIPPAGE GATE:
   Each alert shows current live price vs signal bar close price.
   If price has moved more than MAX_SLIPPAGE_PCT from signal close,
@@ -95,6 +103,9 @@ STOP_PCT            = 0.02     # -2% stop loss from entry (2:1 R/R)
 EXIT_HOUR           = 15       # 3pm ET
 EXIT_MINUTE         = 35       # 3:35pm ET time stop
 
+# Previous Day High config
+PDH_BODY_MIN_PCT    = 0.003    # PDH breakout bar body >= 0.3% (same as ORB)
+
 # Gap-fill filter parameters (v1.1)
 MIN_VWAP_DIP_PCT    = 0.005    # VWAP reclaim: price must have been >= 0.5% below VWAP
 ORB_RSI_MIN         = 45       # ORB: RSI must be in momentum zone (not just "not overbought")
@@ -116,7 +127,7 @@ COLOR_ORANGE = 16744272
 #  SECTION 2 - DATA FETCHING
 # =============================================================================
 
-def fetch_intraday(ticker=TICKER, days=3):
+def fetch_intraday(ticker=TICKER, days=7):  # 7 calendar days ensures Monday safety
     """
     Downloads 15-min bars for the last N days.
     Returns DataFrame with completed bars only — the currently-forming
@@ -179,23 +190,24 @@ def fetch_live_price(ticker=TICKER):
 #  SECTION 2b - DAILY TREND FILTER
 # =============================================================================
 
-def fetch_daily_trend(ticker=TICKER):
+def fetch_daily_data(ticker=TICKER):
     """
-    Fetches SOXL's daily 50 EMA to filter out intraday momentum signals
-    that fire against the daily downtrend.
+    Single daily API call returning everything needed from daily bars:
+      - Daily 50 EMA trend filter (above/below = bullish/bearish)
+      - Previous day High and Low (for PDH signal)
 
-    Returns (price_above_ema50, daily_ema50, daily_close) or (True, None, None)
-    if data unavailable (fail open — don't block on data issues).
+    One yfinance call covers both needs — avoids API call bloat.
+    Using 1-year of daily data ensures EMA-50 is fully warmed up
+    and matches TradingView exactly.
 
-    Why daily 50 EMA:
-      The 50 EMA on daily bars represents ~10 weeks of trend.
-      Intraday momentum breakouts during a daily downtrend are far less
-      reliable — they're bounces within a bearish structure, not real trends.
-      The 2022 SOXL bear market had many intraday ORB/VWAP setups that
-      looked valid intraday but failed because the daily trend was hostile.
+    Returns (above_ema50, ema50, daily_close, prev_high, prev_low)
+    Fails open on data issues — returns (True, None, None, None, None)
+    so a data problem never silently blocks all signals.
     """
+    fail_open = (True, None, None, None, None)
     if not DAILY_TREND_FILTER:
-        return True, None, None
+        return fail_open
+
     try:
         df = yf.download(
             ticker, period="1y", interval="1d",
@@ -204,20 +216,33 @@ def fetch_daily_trend(ticker=TICKER):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df.dropna(subset=["Close"], inplace=True)
-        if len(df) < 50:
-            return True, None, None   # not enough data — fail open
+        if len(df) < 52:   # 50 EMA + 2 days buffer
+            return fail_open
 
-        ema50         = float(ta.ema(df["Close"], length=50).iloc[-1])
-        daily_close   = float(df["Close"].iloc[-1])
-        above_ema50   = daily_close > ema50
+        # ── Daily 50 EMA trend filter ─────────────────────────────────────
+        ema50       = float(ta.ema(df["Close"], length=50).iloc[-1])
+        daily_close = float(df["Close"].iloc[-1])
+        above_ema50 = daily_close > ema50
 
-        trend_label   = "BULLISH" if above_ema50 else "BEARISH"
+        trend_label = "BULLISH" if above_ema50 else "BEARISH"
         print(f"   Daily trend: {trend_label} "
               f"(close ${daily_close:.2f} vs 50 EMA ${ema50:.2f})")
-        return above_ema50, ema50, daily_close
+
+        # ── Previous day High / Low ───────────────────────────────────────
+        # iloc[-2] is always the previous completed trading day
+        # Correct on Monday (gives Friday), after holidays, any day
+        prev_day  = df.iloc[-2]
+        prev_high = float(prev_day["High"])
+        prev_low  = float(prev_day["Low"])
+        prev_date = df.index[-2].date()
+        print(f"   Previous Day: {prev_date} | "
+              f"High ${prev_high:.2f} | Low ${prev_low:.2f}")
+
+        return above_ema50, ema50, daily_close, prev_high, prev_low
+
     except Exception as e:
-        print(f"   Daily trend fetch failed: {e} — failing open")
-        return True, None, None
+        print(f"   Daily data fetch failed: {e} — failing open")
+        return fail_open
 
 
 # =============================================================================
@@ -294,6 +319,178 @@ def get_opening_range(df):
 # =============================================================================
 #  SECTION 4 - SIGNAL ENGINE
 # =============================================================================
+
+def fetch_prev_day_high(df):
+    """
+    Returns previous trading day's high and low from the intraday DataFrame.
+    Uses the day before today's date — handles weekends and holidays by
+    taking the most recent prior trading day available in the data.
+
+    Returns (prev_high, prev_low) or (None, None) if unavailable.
+
+    Why previous day's high matters:
+      Yesterday's high is where sellers defended the price last session.
+      When today's price breaks above it with conviction, those sellers
+      have been overpowered — prior resistance becomes new support.
+      Institutions watch this level closely and often add to positions
+      on a confirmed PDH breakout.
+    """
+    try:
+        et_tz = pytz.timezone(TIMEZONE)
+        today = datetime.now(et_tz).date()
+
+        # Get all bars from before today
+        prev_bars = df[df.index.date < today]
+        if prev_bars.empty:
+            return None, None
+
+        # Group by date and get the most recent prior trading day
+        prev_day = prev_bars.index.date.max()
+        prev_day_bars = prev_bars[prev_bars.index.date == prev_day]
+
+        if prev_day_bars.empty:
+            return None, None
+
+        prev_high = float(prev_day_bars["High"].max())
+        prev_low  = float(prev_day_bars["Low"].min())
+
+        print(f"   Previous Day: {prev_day} | "
+              f"High ${prev_high:.2f} | Low ${prev_low:.2f}")
+        return prev_high, prev_low
+
+    except Exception as e:
+        print(f"   PDH fetch failed: {e}")
+        return None, None
+
+
+def pdh_already_fired_today():
+    """Returns True if a PDH signal already fired today."""
+    trades = load_trade_log()
+    et_tz  = pytz.timezone(TIMEZONE)
+    today  = datetime.now(et_tz).strftime("%Y-%m-%d")
+    return any(
+        t.get("signal_type") in ("PDH", "PDH_ORB")
+        and t.get("alert_date") == today
+        for t in trades
+    )
+
+
+def check_pdh_signal(df, or_high, prev_high):
+    """
+    Previous Day High Breakout signal.
+
+    Fires when a bar closes ABOVE yesterday's high with volume and
+    momentum confirmation. Only fires once per day.
+
+    If the same bar also satisfies ORB conditions (close > or_high),
+    the signal is labelled PDH+ORB Confluence — the strongest
+    possible intraday momentum setup.
+
+    Stop anchored BELOW the previous day high (now support).
+    Target: +4% from entry (same as ORB).
+
+    Returns signal dict or None.
+    """
+    if prev_high is None:
+        return None
+
+    et_tz   = pytz.timezone(TIMEZONE)
+    et_now  = datetime.now(et_tz)
+
+    # Only valid after 10:00am — opening chaos must settle first
+    if et_now.hour < 10:
+        print("   PDH: Before 10:00am — skipping")
+        return None
+
+    if pdh_already_fired_today():
+        print("   PDH: Already fired today — skipping")
+        return None
+
+    scored   = df.iloc[-1]
+    bar_time = df.index[-1]
+
+    bar_close  = float(scored["Close"])
+    bar_open   = float(scored["Open"])
+    bar_high   = float(scored["High"])
+    vol_ratio  = float(scored.get("VOL_RATIO", 0))
+    rsi        = float(scored.get("RSI", 50))
+    vwap       = float(scored.get("VWAP", bar_close))
+    ema_9      = float(scored.get("EMA_9", bar_close))
+    ema_21     = float(scored.get("EMA_21", bar_close))
+    atr        = float(scored.get("ATR", 0))
+
+    # Core PDH conditions
+    broke_pdh       = bar_close > prev_high      # closed above prev day high
+    green_bar       = bar_close > bar_open        # green close
+    volume_ok       = vol_ratio >= VOLUME_MULT    # elevated volume
+    above_vwap      = bar_close > vwap            # above institutional anchor
+    rsi_ok          = ORB_RSI_MIN <= rsi <= ORB_RSI_MAX  # momentum zone 45-65
+    strong_body     = (bar_close - bar_open) / bar_open >= PDH_BODY_MIN_PCT
+
+    print(f"   PDH check: close=${bar_close:.2f} PDH=${prev_high:.2f} "
+          f"broke={broke_pdh} vol={vol_ratio:.1f}x RSI={rsi:.1f} "
+          f"body={(bar_close-bar_open)/bar_open*100:.2f}%")
+
+    if not (broke_pdh and green_bar and volume_ok and
+            above_vwap and rsi_ok and strong_body):
+        if broke_pdh and green_bar and volume_ok:
+            if not rsi_ok:
+                print(f"   PDH filtered: RSI {rsi:.1f} outside {ORB_RSI_MIN}-{ORB_RSI_MAX}")
+            if not strong_body:
+                print(f"   PDH filtered: body too small")
+            if not above_vwap:
+                print(f"   PDH filtered: below VWAP ${vwap:.2f}")
+        return None
+
+    # Check for PDH + ORB confluence
+    # Both conditions met on same bar = strongest possible signal
+    also_orb     = (or_high is not None and bar_close > or_high
+                    and not orb_already_fired_today())
+    signal_type  = "PDH_ORB" if also_orb else "PDH"
+    signal_label = ("PDH + ORB Confluence" if also_orb
+                    else "Previous Day High Breakout")
+
+    # Stop anchored just below previous day high (now support)
+    # PDH becomes support once broken — tight stop below it
+    stop_loss    = prev_high * (1 - STOP_PCT)     # 2% below PDH
+    take_profit  = bar_close * (1 + TARGET_PCT)   # 4% above entry
+    rr           = TARGET_PCT / STOP_PCT           # 2:1
+
+    reasons = [
+        f"PDH Breakout — closed ${bar_close:.2f} above prev high ${prev_high:.2f}",
+        f"Volume: {vol_ratio:.1f}x average — institutional participation",
+        f"Above VWAP ${vwap:.2f} — trend confirmed",
+        f"RSI: {rsi:.1f} — momentum zone",
+    ]
+    if also_orb:
+        reasons.append(
+            f"ORB Confluence — also above OR High ${or_high:.2f} (dual breakout)"
+        )
+
+    print(f"   {signal_type} SIGNAL FIRED — "
+          f"bar {bar_time.strftime('%I:%M %p ET')} "
+          f"({'CONFLUENCE' if also_orb else 'PDH only'})")
+
+    return {
+        "signal_type":   signal_type,
+        "signal_label":  signal_label,
+        "bar_time":      bar_time.strftime("%I:%M %p ET"),
+        "bar_timestamp": str(bar_time),
+        "price":         round(bar_close, 2),
+        "prev_high":     round(prev_high, 2),
+        "or_high":       round(or_high, 2) if or_high else None,
+        "stop_loss":     round(stop_loss, 2),
+        "take_profit":   round(take_profit, 2),
+        "rsi":           round(rsi, 1),
+        "ema_9":         round(ema_9, 2),
+        "ema_21":        round(ema_21, 2),
+        "vwap":          round(vwap, 2),
+        "atr":           round(atr, 4),
+        "vol_ratio":     round(vol_ratio, 2),
+        "rr_ratio":      round(rr, 2),
+        "reasons":       reasons,
+    }
+
 
 def check_orb_signal(df, or_high, or_low):
     """
@@ -921,6 +1118,10 @@ def send_buy_alert(signal, live_price, slippage_pct, live_rr):
 
     if sig_type == "ORB":
         desc += f"\n- OR High: `${signal.get('or_high', 0):.2f}` | OR Low: `${signal.get('or_low', 0):.2f}`\n"
+    elif sig_type in ("PDH", "PDH_ORB"):
+        desc += f"\n- Prev Day High: `${signal.get('prev_high', 0):.2f}` (now support)\n"
+        if sig_type == "PDH_ORB":
+            desc += f"- OR High: `${signal.get('or_high', 0):.2f}` (dual breakout — high conviction)\n"
 
     desc += f"\n- VWAP: `${signal.get('vwap', 0):.2f}`\n"
     desc += f"- 9 EMA: `${signal.get('ema_9', 0):.2f}` | 21 EMA: `${signal.get('ema_21', 0):.2f}`\n"
@@ -953,7 +1154,7 @@ def check_market():
     et_now  = datetime.now(et_tz)
 
     print(f"\n{'='*60}")
-    print(f"  SOXL Intraday Bot v1.1 — "
+    print(f"  SOXL Intraday Bot v1.2 — "
           f"{et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
     print(f"  Account: Non-Registered")
     print(f"{'='*60}\n")
@@ -971,7 +1172,7 @@ def check_market():
 
     # Fetch intraday data
     print("Downloading SOXL 15-min bars...")
-    df_raw = fetch_intraday(TICKER, days=3)
+    df_raw = fetch_intraday(TICKER, days=7)
     if df_raw is None or df_raw.empty:
         print("No intraday data available.")
         return
@@ -986,6 +1187,7 @@ def check_market():
     or_high, or_low = get_opening_range(df)
     if or_high:
         print(f"   Opening Range: ${or_low:.2f} - ${or_high:.2f}")
+
 
     # Fetch live price
     live_price = fetch_live_price()
@@ -1007,9 +1209,11 @@ def check_market():
         send_outcome_summary()
         return
 
-    # ── DAILY TREND FILTER ───────────────────────────────────────────────────
-    print("\nChecking daily trend filter...")
-    daily_trend_ok, daily_ema50, daily_close = fetch_daily_trend()
+    # ── DAILY DATA (trend filter + previous day high) ───────────────────────
+    # Single API call returns both the 50 EMA trend filter and PDH/PDL.
+    # No separate fetch needed — one call covers everything from daily bars.
+    print("\nFetching daily data (trend + PDH)...")
+    daily_trend_ok, daily_ema50, daily_close, prev_high, prev_low = fetch_daily_data()
     if not daily_trend_ok:
         print(f"   DAILY TREND BEARISH — no intraday momentum signals today.")
         print(f"   (SOXL ${daily_close:.2f} below daily 50 EMA ${daily_ema50:.2f})")
@@ -1021,10 +1225,19 @@ def check_market():
 
     signal = None
 
-    # Try ORB first (higher priority — cleaner directional signal)
-    signal = check_orb_signal(df, or_high, or_low)
+    # Priority order:
+    # 1. PDH check first — if PDH fires and ORB also fires, labelled as confluence
+    #    PDH is checked first so confluence detection works correctly
+    # 2. ORB — if PDH didn't fire, check pure ORB breakout
+    # 3. VWAP Reclaim — catches intraday dip recoveries ORB/PDH miss
 
-    # Try VWAP if no ORB signal
+    if prev_high is not None:
+        signal = check_pdh_signal(df, or_high, prev_high)
+
+    if signal is None:
+        # Pure ORB (no PDH confluence detected)
+        signal = check_orb_signal(df, or_high, or_low)
+
     if signal is None:
         signal = check_vwap_signal(df)
 
