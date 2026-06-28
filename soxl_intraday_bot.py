@@ -12,12 +12,17 @@ SIGNALS:
     The first 30 minutes (9:30-10:00am) define the day's Opening Range.
     When a subsequent bar closes ABOVE the OR high with elevated volume,
     momentum is confirmed in the bull direction.
+    Extra filters (v1.1): RSI 45-65, strong candle body (>0.3% range),
+    daily 50 EMA trend filter (no ORB against daily downtrend).
     Fires: once per day, after 10:00am bar closes.
 
   Signal 2 — VWAP Reclaim
     VWAP (Volume Weighted Average Price) is the institutional anchor.
     When SOXL dips below VWAP and then reclaims it on a green bar
     with elevated volume, institutional buying is resuming.
+    Extra filters (v1.1): minimum 0.5% dip below VWAP before reclaim,
+    RSI was below 50 on prior bar, MACD histogram turning positive,
+    daily 50 EMA trend filter.
     Fires: any time during the day when conditions are met.
 
 SLIPPAGE GATE:
@@ -78,13 +83,24 @@ POSITION_PCT        = 5.0      # 5% per intraday trade = $50 at $1,000 baseline
 ORB_WINDOW_MINUTES  = 30       # Opening range = first 30 min (9:30-10:00am)
 VOLUME_MULT         = 1.5      # Signal bar volume must be 1.5x the 10-bar avg
 RSI_OVERBOUGHT      = 68       # Sell alert threshold
-MAX_SLIPPAGE_PCT    = 0.02     # 2% max slippage from signal close — gate blocks above this
+MAX_SLIPPAGE_PCT    = 0.005    # 0.5% max slippage — calculated for SOXL at ~$200+
+                               # At 2% slippage on a $212 entry with -2% stop:
+                               # live risk doubles, live reward halves → R/R inverted
+                               # At 0.5%: live R/R stays ~1.8:1 (acceptable)
+                               # Tighter gate = fewer alerts but valid R/R on all that fire
 
 # Exit parameters
 TARGET_PCT          = 0.04     # +4% fixed profit target from entry
 STOP_PCT            = 0.02     # -2% stop loss from entry (2:1 R/R)
 EXIT_HOUR           = 15       # 3pm ET
 EXIT_MINUTE         = 35       # 3:35pm ET time stop
+
+# Gap-fill filter parameters (v1.1)
+MIN_VWAP_DIP_PCT    = 0.005    # VWAP reclaim: price must have been >= 0.5% below VWAP
+ORB_RSI_MIN         = 45       # ORB: RSI must be in momentum zone (not just "not overbought")
+ORB_RSI_MAX         = 65       # ORB: RSI ceiling — above 65 is too extended
+ORB_BODY_MIN_PCT    = 0.003    # ORB: breakout bar body must be >= 0.3% (no wick-only breaks)
+DAILY_TREND_FILTER  = True     # Require daily 50 EMA uptrend for both signals
 
 # Trade log - separate from swing bot
 TRADE_LOG_FILE      = "soxl_intraday_trade_log.json"
@@ -160,6 +176,51 @@ def fetch_live_price(ticker=TICKER):
 
 
 # =============================================================================
+#  SECTION 2b - DAILY TREND FILTER
+# =============================================================================
+
+def fetch_daily_trend(ticker=TICKER):
+    """
+    Fetches SOXL's daily 50 EMA to filter out intraday momentum signals
+    that fire against the daily downtrend.
+
+    Returns (price_above_ema50, daily_ema50, daily_close) or (True, None, None)
+    if data unavailable (fail open — don't block on data issues).
+
+    Why daily 50 EMA:
+      The 50 EMA on daily bars represents ~10 weeks of trend.
+      Intraday momentum breakouts during a daily downtrend are far less
+      reliable — they're bounces within a bearish structure, not real trends.
+      The 2022 SOXL bear market had many intraday ORB/VWAP setups that
+      looked valid intraday but failed because the daily trend was hostile.
+    """
+    if not DAILY_TREND_FILTER:
+        return True, None, None
+    try:
+        df = yf.download(
+            ticker, period="1y", interval="1d",
+            auto_adjust=True, progress=False,
+        )
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.dropna(subset=["Close"], inplace=True)
+        if len(df) < 50:
+            return True, None, None   # not enough data — fail open
+
+        ema50         = float(ta.ema(df["Close"], length=50).iloc[-1])
+        daily_close   = float(df["Close"].iloc[-1])
+        above_ema50   = daily_close > ema50
+
+        trend_label   = "BULLISH" if above_ema50 else "BEARISH"
+        print(f"   Daily trend: {trend_label} "
+              f"(close ${daily_close:.2f} vs 50 EMA ${ema50:.2f})")
+        return above_ema50, ema50, daily_close
+    except Exception as e:
+        print(f"   Daily trend fetch failed: {e} — failing open")
+        return True, None, None
+
+
+# =============================================================================
 #  SECTION 3 - INDICATOR CALCULATION
 # =============================================================================
 
@@ -190,6 +251,14 @@ def calculate_indicators(df):
         df["VWAP"]         = df["CUMTPVOL"] / df["CUMVOL"]
         df.drop(columns=["TP", "TP_VOL", "CUMVOL", "CUMTPVOL"],
                 inplace=True, errors="ignore")
+
+    # MACD on 15-min bars — momentum confirmation for VWAP reclaim
+    # Histogram turning positive while crossing from negative = momentum shift
+    macd = ta.macd(df["Close"])
+    if macd is not None:
+        hist_cols   = [c for c in macd.columns if c.startswith("MACDh")]
+        if hist_cols:
+            df["MACD_H"] = macd[hist_cols[0]]
 
     # Volume ratio — current bar vs 10-bar rolling average
     df["VOL_AVG"]   = df["Volume"].rolling(10).mean()
@@ -261,18 +330,34 @@ def check_orb_signal(df, or_high, or_low):
     vwap       = float(scored.get("VWAP", bar_close))
     atr        = float(scored.get("ATR", 0))
 
-    # ORB conditions
+    # ORB conditions — original
     broke_or_high  = bar_close > or_high         # closed above OR high
     green_bar      = bar_close > bar_open         # green close
     volume_ok      = vol_ratio >= VOLUME_MULT     # elevated volume
-    not_overbought = rsi < RSI_OVERBOUGHT         # not already exhausted
     above_vwap     = bar_close > vwap             # above institutional anchor
 
+    # Gap-fill filters (v1.1)
+    # RSI in momentum zone — not too cold (below 45 = not enough momentum)
+    # and not too hot (above 65 = already extended, late entry)
+    rsi_in_momentum_zone = ORB_RSI_MIN <= rsi <= ORB_RSI_MAX
+
+    # Strong candle body — close must be meaningfully above open
+    # Filters out wick-through breakouts where close barely cleared OR high
+    candle_body_pct = (bar_close - bar_open) / bar_open
+    strong_body     = candle_body_pct >= ORB_BODY_MIN_PCT
+
     print(f"   ORB check: close=${bar_close:.2f} OR_high=${or_high:.2f} "
-          f"broke={broke_or_high} vol={vol_ratio:.1f}x green={green_bar}")
+          f"broke={broke_or_high} vol={vol_ratio:.1f}x RSI={rsi:.1f} "
+          f"body={candle_body_pct*100:.2f}% green={green_bar}")
 
     if not (broke_or_high and green_bar and volume_ok and
-            not_overbought and above_vwap):
+            above_vwap and rsi_in_momentum_zone and strong_body):
+        if broke_or_high and green_bar and volume_ok and above_vwap:
+            # Main conditions met but new filters blocked — log why
+            if not rsi_in_momentum_zone:
+                print(f"   ORB filtered: RSI {rsi:.1f} outside {ORB_RSI_MIN}-{ORB_RSI_MAX} zone")
+            if not strong_body:
+                print(f"   ORB filtered: candle body {candle_body_pct*100:.2f}% < {ORB_BODY_MIN_PCT*100:.1f}% min")
         return None
 
     # Check ORB hasn't already fired today
@@ -347,7 +432,7 @@ def check_vwap_signal(df):
     ema_21     = float(scored.get("EMA_21", bar_close))
     atr        = float(scored.get("ATR", 0))
 
-    # VWAP Reclaim conditions
+    # VWAP Reclaim conditions — original
     was_below_vwap  = prev_close < prev_vwap      # prior bar below VWAP
     now_above_vwap  = bar_close > vwap             # current bar reclaimed VWAP
     green_bar       = bar_close > bar_open         # green close
@@ -355,12 +440,36 @@ def check_vwap_signal(df):
     rsi_ok          = 35 <= rsi <= 60              # healthy RSI range
     ema9_turning_up = ema_9 > prev_ema9            # 9 EMA moving up
 
+    # Gap-fill filters (v1.1)
+    # Minimum dip depth: price must have been meaningfully below VWAP
+    # Filters out noise where price barely grazed below VWAP
+    vwap_dip_pct   = (prev_vwap - prev_close) / prev_vwap if prev_vwap > 0 else 0
+    meaningful_dip = vwap_dip_pct >= MIN_VWAP_DIP_PCT
+
+    # RSI was oversold on prior bar — confirms genuine pullback, not drift
+    prior_rsi_oversold = prev_rsi < 50
+
+    # MACD histogram turning positive — momentum shift confirmation
+    macd_h      = float(scored.get("MACD_H", 0)) if "MACD_H" in scored.index else 0.0
+    prev_macd_h = float(prev.get("MACD_H", 0))   if "MACD_H" in prev.index  else 0.0
+    macd_turning_up = macd_h > prev_macd_h        # histogram improving
+
     print(f"   VWAP check: close=${bar_close:.2f} vwap=${vwap:.2f} "
-          f"was_below={was_below_vwap} now_above={now_above_vwap} "
-          f"vol={vol_ratio:.1f}x RSI={rsi:.1f}")
+          f"was_below={was_below_vwap} dip={vwap_dip_pct*100:.2f}% "
+          f"now_above={now_above_vwap} vol={vol_ratio:.1f}x RSI={rsi:.1f} "
+          f"macd_up={macd_turning_up}")
 
     if not (was_below_vwap and now_above_vwap and green_bar and
-            volume_ok and rsi_ok and ema9_turning_up):
+            volume_ok and rsi_ok and ema9_turning_up and
+            meaningful_dip and prior_rsi_oversold and macd_turning_up):
+        if was_below_vwap and now_above_vwap and green_bar and volume_ok:
+            # Main conditions met but new filters blocked — log why
+            if not meaningful_dip:
+                print(f"   VWAP filtered: dip {vwap_dip_pct*100:.2f}% < {MIN_VWAP_DIP_PCT*100:.1f}% min")
+            if not prior_rsi_oversold:
+                print(f"   VWAP filtered: prior RSI {prev_rsi:.1f} not below 50")
+            if not macd_turning_up:
+                print(f"   VWAP filtered: MACD not turning up ({prev_macd_h:.3f} → {macd_h:.3f})")
         return None
 
     stop_loss   = bar_close * (1 - STOP_PCT)
@@ -844,7 +953,7 @@ def check_market():
     et_now  = datetime.now(et_tz)
 
     print(f"\n{'='*60}")
-    print(f"  SOXL Intraday Bot v1.0 — "
+    print(f"  SOXL Intraday Bot v1.1 — "
           f"{et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
     print(f"  Account: Non-Registered")
     print(f"{'='*60}\n")
@@ -896,6 +1005,15 @@ def check_market():
     if et_now >= time_stop:
         print(f"\nPast 3:35pm — no new buy signals. Sell alerts only.")
         send_outcome_summary()
+        return
+
+    # ── DAILY TREND FILTER ───────────────────────────────────────────────────
+    print("\nChecking daily trend filter...")
+    daily_trend_ok, daily_ema50, daily_close = fetch_daily_trend()
+    if not daily_trend_ok:
+        print(f"   DAILY TREND BEARISH — no intraday momentum signals today.")
+        print(f"   (SOXL ${daily_close:.2f} below daily 50 EMA ${daily_ema50:.2f})")
+        print(f"   Intraday momentum against daily downtrend has poor win rate.")
         return
 
     # ── BUY SIGNAL SCAN ───────────────────────────────────────────────────────
