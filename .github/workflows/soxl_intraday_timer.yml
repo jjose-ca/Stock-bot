@@ -62,6 +62,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0        # full history — prevents git rebase failures
 
       - name: Set up Python
         uses: actions/setup-python@v5.6.0
@@ -85,6 +86,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Initialise log files if they don't exist yet
           [ -f soxl_intraday_trade_log.json ] || echo "[]" > soxl_intraday_trade_log.json
           [ -f soxl_gate_blocks.json ]         || echo "[]" > soxl_gate_blocks.json
 
@@ -93,5 +95,8 @@ jobs:
           git diff --staged --quiet || (
             git commit -m "chore: update soxl intraday trade log [skip ci]" &&
             git pull --rebase origin master &&
-            git push
+            git push || true
           )
+          # Note: 'git push || true' silently ignores concurrent push failures.
+          # If two runs finish simultaneously and both try to push, one will fail.
+          # This is harmless — the next run will commit both sets of changes.
