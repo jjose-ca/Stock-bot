@@ -223,11 +223,11 @@ def fetch_daily_data(ticker=TICKER):
     Using 1-year of daily data ensures EMA-50 is fully warmed up
     and matches TradingView exactly.
 
-    Returns (above_ema50, ema50, daily_close, prev_high, prev_low)
+    Returns (above_ema50, ema50, daily_close, prev_high, prev_low, prev_close)
     Fails open on data issues — returns (True, None, None, None, None)
     so a data problem never silently blocks all signals.
     """
-    fail_open = (True, None, None, None, None)
+    fail_open = (True, None, None, None, None, None)  # 6 values: +prev_close
     if not DAILY_TREND_FILTER:
         return fail_open
 
@@ -254,14 +254,15 @@ def fetch_daily_data(ticker=TICKER):
         # ── Previous day High / Low ───────────────────────────────────────
         # iloc[-2] is always the previous completed trading day
         # Correct on Monday (gives Friday), after holidays, any day
-        prev_day  = df.iloc[-2]
-        prev_high = float(prev_day["High"])
-        prev_low  = float(prev_day["Low"])
-        prev_date = df.index[-2].date()
+        prev_day   = df.iloc[-2]
+        prev_high  = float(prev_day["High"])
+        prev_low   = float(prev_day["Low"])
+        prev_close = float(prev_day["Close"])   # yesterday's close — used for gap calc
+        prev_date  = df.index[-2].date()
         print(f"   Previous Day: {prev_date} | "
-              f"High ${prev_high:.2f} | Low ${prev_low:.2f}")
+              f"High ${prev_high:.2f} | Low ${prev_low:.2f} | Close ${prev_close:.2f}")
 
-        return above_ema50, ema50, daily_close, prev_high, prev_low
+        return above_ema50, ema50, daily_close, prev_high, prev_low, prev_close
 
     except Exception as e:
         print(f"   Daily data fetch failed: {e} — failing open")
@@ -1268,7 +1269,7 @@ def check_market():
     # Single API call returns both the 50 EMA trend filter and PDH/PDL.
     # No separate fetch needed — one call covers everything from daily bars.
     print("\nFetching daily data (trend + PDH)...")
-    daily_trend_ok, daily_ema50, daily_close, prev_high, prev_low = fetch_daily_data()
+    daily_trend_ok, daily_ema50, daily_close, prev_high, prev_low, prev_close = fetch_daily_data()
     if not daily_trend_ok:
         print(f"   DAILY TREND BEARISH — no intraday momentum signals today.")
         print(f"   (SOXL ${daily_close:.2f} below daily 50 EMA ${daily_ema50:.2f})")
@@ -1318,9 +1319,12 @@ def check_market():
         et_tz_g    = pytz.timezone(TIMEZONE)
         today_g    = datetime.now(et_tz_g).date()
         today_bars = df[df.index.date == today_g]
-        if not today_bars.empty and daily_close is not None:
+        if not today_bars.empty and prev_close is not None:
             today_open = float(today_bars["Open"].iloc[0])
-            gap_pct    = (today_open - daily_close) / daily_close * 100
+            gap_pct    = (today_open - prev_close) / prev_close * 100
+            # prev_close = yesterday's daily close (df.iloc[-2]["Close"])
+            # today_open = first bar's open price today
+            # This correctly measures the overnight gap
     except Exception:
         pass
 
