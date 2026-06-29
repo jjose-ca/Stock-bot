@@ -66,7 +66,7 @@ import json
 import time
 import argparse
 import pandas as pd
-import pandas_ta as ta
+import ta as ta_lib   # replaces pandas_ta — no numpy/pandas version conflicts
 import pytz
 import requests
 import yfinance as yf
@@ -220,7 +220,7 @@ def fetch_daily_data(ticker=TICKER):
             return fail_open
 
         # ── Daily 50 EMA trend filter ─────────────────────────────────────
-        ema50       = float(ta.ema(df["Close"], length=50).iloc[-1])
+        ema50       = float(ta_lib.trend.EMAIndicator(df["Close"], window=50).ema_indicator().iloc[-1])
         daily_close = float(df["Close"].iloc[-1])
         above_ema50 = daily_close > ema50
 
@@ -258,32 +258,29 @@ def calculate_indicators(df):
     df = df.copy()
 
     # RSI and EMAs
-    df["RSI"]    = ta.rsi(df["Close"], length=14)
-    df["EMA_9"]  = ta.ema(df["Close"], length=9)
-    df["EMA_21"] = ta.ema(df["Close"], length=21)
-    df["ATR"]    = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    df["RSI"]    = ta_lib.momentum.RSIIndicator(df["Close"], window=14).rsi()
+    df["EMA_9"]  = ta_lib.trend.EMAIndicator(df["Close"], window=9).ema_indicator()
+    df["EMA_21"] = ta_lib.trend.EMAIndicator(df["Close"], window=21).ema_indicator()
+    df["ATR"]    = ta_lib.volatility.AverageTrueRange(df["High"], df["Low"], df["Close"], window=14).average_true_range()
 
-    # VWAP — calculated fresh each day
-    # pandas_ta vwap uses date grouping automatically
+    # VWAP — manual calculation (ta package doesn't include VWAP)
+    # Resets each trading day using DatetimeIndex date grouping
     try:
-        df["VWAP"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
+        df["_TP"]       = (df["High"] + df["Low"] + df["Close"]) / 3
+        df["_TPVOL"]    = df["_TP"] * df["Volume"]
+        df["_CUMTPVOL"] = df.groupby(df.index.date)["_TPVOL"].cumsum()
+        df["_CUMVOL"]   = df.groupby(df.index.date)["Volume"].cumsum()
+        df["VWAP"]      = df["_CUMTPVOL"] / df["_CUMVOL"]
+        df.drop(columns=["_TP", "_TPVOL", "_CUMTPVOL", "_CUMVOL"], inplace=True)
     except Exception:
-        # Manual VWAP fallback if pandas_ta version doesn't support it
-        df["TP"]           = (df["High"] + df["Low"] + df["Close"]) / 3
-        df["TP_VOL"]       = df["TP"] * df["Volume"]
-        df["CUMVOL"]       = df.groupby(df.index.date)["Volume"].cumsum()
-        df["CUMTPVOL"]     = df.groupby(df.index.date)["TP_VOL"].cumsum()
-        df["VWAP"]         = df["CUMTPVOL"] / df["CUMVOL"]
-        df.drop(columns=["TP", "TP_VOL", "CUMVOL", "CUMTPVOL"],
-                inplace=True, errors="ignore")
+        pass
 
     # MACD on 15-min bars — momentum confirmation for VWAP reclaim
-    # Histogram turning positive while crossing from negative = momentum shift
-    macd = ta.macd(df["Close"])
-    if macd is not None:
-        hist_cols   = [c for c in macd.columns if c.startswith("MACDh")]
-        if hist_cols:
-            df["MACD_H"] = macd[hist_cols[0]]
+    try:
+        _macd_intra = ta_lib.trend.MACD(df["Close"])
+        df["MACD_H"] = _macd_intra.macd_diff()
+    except Exception:
+        pass
 
     # Volume ratio — current bar vs 10-bar rolling average
     df["VOL_AVG"]   = df["Volume"].rolling(10).mean()
@@ -954,18 +951,37 @@ def log_intraday_trade(signal, live_price, slippage_pct, live_rr):
         et_tz  = pytz.timezone(TIMEZONE)
         now    = datetime.now(et_tz)
 
+        # Calculate GitHub execution delay vs scheduled bar close
+        # bar_time = when the signal bar closed (e.g. 10:30am)
+        # now       = when GitHub actually ran the bot
+        # delay_min = how late GitHub was — key for monthly review
+        try:
+            bar_close_str = signal.get("bar_time", "")
+            if bar_close_str and bar_close_str != "live (forming bar)":
+                bar_close_dt = datetime.strptime(
+                    f"{now.strftime('%Y-%m-%d')} {bar_close_str}",
+                    "%Y-%m-%d %I:%M %p ET"
+                ).replace(tzinfo=now.tzinfo)
+                github_delay_min = round((now - bar_close_dt).total_seconds() / 60, 1)
+            else:
+                github_delay_min = None
+        except Exception:
+            github_delay_min = None
+
         trade = {
-            "id":            f"SOXL_INT_{now.strftime('%Y%m%d_%H%M')}",
-            "ticker":        TICKER,
-            "account":       "Non-Registered",
-            "alert_date":    now.strftime("%Y-%m-%d"),
-            "alert_time":    now.strftime("%H:%M ET"),
-            "signal_type":   signal.get("signal_type", "?"),
-            "signal_label":  signal.get("signal_label", "?"),
-            "bar_time":      signal.get("bar_time", "?"),
-            "signal_price":  float(signal["price"]),      # bar close price
-            "entry":         round(live_price, 2),         # actual entry price
-            "slippage_pct":  round(slippage_pct * 100, 2),
+            "id":                f"SOXL_INT_{now.strftime('%Y%m%d_%H%M')}",
+            "ticker":            TICKER,
+            "account":           "Non-Registered",
+            "alert_date":        now.strftime("%Y-%m-%d"),
+            "alert_time":        now.strftime("%H:%M ET"),
+            "github_run_time":   now.strftime("%H:%M:%S ET"),    # exact execution time
+            "github_delay_min":  github_delay_min,                # mins after bar close
+            "signal_type":       signal.get("signal_type", "?"),
+            "signal_label":      signal.get("signal_label", "?"),
+            "bar_time":          signal.get("bar_time", "?"),
+            "signal_price":      float(signal["price"]),          # bar close price
+            "entry":             round(live_price, 2),             # actual entry price
+            "slippage_pct":      round(slippage_pct * 100, 2),
             "stop_loss":     float(signal["stop_loss"]),
             "take_profit":   float(signal["take_profit"]),
             "rsi":           float(signal.get("rsi", 0)),
