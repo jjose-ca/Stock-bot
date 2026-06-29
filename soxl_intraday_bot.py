@@ -114,7 +114,8 @@ ORB_BODY_MIN_PCT    = 0.003    # ORB: breakout bar body must be >= 0.3% (no wick
 DAILY_TREND_FILTER  = True     # Require daily 50 EMA uptrend for both signals
 
 # Trade log - separate from swing bot
-TRADE_LOG_FILE      = "soxl_intraday_trade_log.json"
+TRADE_LOG_FILE      = "soxl_intraday_trade_log.json"  # confirmed trades only
+GATE_LOG_FILE       = "soxl_gate_blocks.json"          # all rejections for monthly review
 
 # Discord colors
 COLOR_GREEN  = 5763719
@@ -454,13 +455,29 @@ def check_pdh_signal(df, or_high, prev_high):
 
     if not (broke_pdh and green_bar and volume_ok and
             above_vwap and rsi_ok and strong_body):
-        if broke_pdh and green_bar and volume_ok:
-            if not rsi_ok:
-                print(f"   PDH filtered: RSI {rsi:.1f} outside {ORB_RSI_MIN}-{ORB_RSI_MAX}")
-            if not strong_body:
-                print(f"   PDH filtered: body too small")
-            if not above_vwap:
-                print(f"   PDH filtered: below VWAP ${vwap:.2f}")
+        failed = []
+        if not broke_pdh:   failed.append(f"price ${bar_close:.2f} < PDH ${prev_high:.2f}")
+        if not green_bar:   failed.append("red bar")
+        if not volume_ok:   failed.append(f"vol {vol_ratio:.2f}x < {VOLUME_MULT}x required")
+        if not above_vwap:  failed.append(f"below VWAP ${vwap:.2f}")
+        if not rsi_ok:      failed.append(f"RSI {rsi:.1f} outside {ORB_RSI_MIN}-{ORB_RSI_MAX}")
+        if not strong_body: failed.append("body too small")
+        if broke_pdh and green_bar:
+            log_signal_rejection(
+                signal_type      = "PDH",
+                bar_time         = bar_time.strftime("%I:%M %p ET"),
+                bar_close        = bar_close,
+                live_price       = None,
+                failed_conditions= failed,
+                indicator_values = {
+                    "prev_high":  round(prev_high, 2),
+                    "vwap":       round(vwap, 2),
+                    "rsi":        round(rsi, 1),
+                    "vol_ratio":  round(vol_ratio, 2),
+                    "ema_9":      round(ema_9, 2),
+                    "ema_21":     round(ema_21, 2),
+                }
+            )
         return None
 
     # Check for PDH + ORB confluence
@@ -570,12 +587,35 @@ def check_orb_signal(df, or_high, or_low):
 
     if not (broke_or_high and green_bar and volume_ok and
             above_vwap and rsi_in_momentum_zone and strong_body):
-        if broke_or_high and green_bar and volume_ok and above_vwap:
-            # Main conditions met but new filters blocked — log why
-            if not rsi_in_momentum_zone:
-                print(f"   ORB filtered: RSI {rsi:.1f} outside {ORB_RSI_MIN}-{ORB_RSI_MAX} zone")
-            if not strong_body:
-                print(f"   ORB filtered: candle body {candle_body_pct*100:.2f}% < {ORB_BODY_MIN_PCT*100:.1f}% min")
+        # Determine which conditions failed
+        failed = []
+        if not broke_or_high:  failed.append(f"price ${bar_close:.2f} < OR_high ${or_high:.2f}")
+        if not green_bar:      failed.append("red bar")
+        if not volume_ok:      failed.append(f"vol {vol_ratio:.2f}x < {VOLUME_MULT}x required")
+        if not above_vwap:     failed.append(f"below VWAP ${vwap:.2f}")
+        if not rsi_in_momentum_zone: failed.append(f"RSI {rsi:.1f} outside {ORB_RSI_MIN}-{ORB_RSI_MAX}")
+        if not strong_body:    failed.append(f"body {candle_body_pct*100:.2f}% < {ORB_BODY_MIN_PCT*100:.1f}%")
+
+        # Only log near-misses where the main breakout conditions were met
+        # (broke above OR High on a green bar) — these are actionable rejections
+        if broke_or_high and green_bar:
+            log_signal_rejection(
+                signal_type      = "ORB",
+                bar_time         = bar_time.strftime("%I:%M %p ET"),
+                bar_close        = bar_close,
+                live_price       = None,   # no live price yet at this stage
+                failed_conditions= failed,
+                indicator_values = {
+                    "or_high":     round(or_high, 2),
+                    "or_low":      round(or_low, 2),
+                    "vwap":        round(vwap, 2),
+                    "rsi":         round(rsi, 1),
+                    "vol_ratio":   round(vol_ratio, 2),
+                    "body_pct":    round(candle_body_pct * 100, 2),
+                    "ema_9":       round(ema_9, 2),
+                    "ema_21":      round(ema_21, 2),
+                }
+            )
         return None
 
     # Check ORB hasn't already fired today
@@ -680,14 +720,39 @@ def check_vwap_signal(df):
     if not (was_below_vwap and now_above_vwap and green_bar and
             volume_ok and rsi_ok and ema9_turning_up and
             meaningful_dip and prior_rsi_oversold and macd_turning_up):
-        if was_below_vwap and now_above_vwap and green_bar and volume_ok:
-            # Main conditions met but new filters blocked — log why
-            if not meaningful_dip:
-                print(f"   VWAP filtered: dip {vwap_dip_pct*100:.2f}% < {MIN_VWAP_DIP_PCT*100:.1f}% min")
-            if not prior_rsi_oversold:
-                print(f"   VWAP filtered: prior RSI {prev_rsi:.1f} not below 50")
-            if not macd_turning_up:
-                print(f"   VWAP filtered: MACD not turning up ({prev_macd_h:.3f} → {macd_h:.3f})")
+        # Determine which conditions failed
+        failed = []
+        if not was_below_vwap:     failed.append(f"prior bar above VWAP (was_below=False)")
+        if not now_above_vwap:     failed.append(f"still below VWAP ${vwap:.2f}")
+        if not green_bar:          failed.append("red bar")
+        if not volume_ok:          failed.append(f"vol {vol_ratio:.2f}x < {VOLUME_MULT}x required")
+        if not rsi_ok:             failed.append(f"RSI {rsi:.1f} outside 35-60")
+        if not ema9_turning_up:    failed.append(f"9 EMA not turning up")
+        if not meaningful_dip:     failed.append(f"dip {vwap_dip_pct*100:.2f}% < {MIN_VWAP_DIP_PCT*100:.1f}% min")
+        if not prior_rsi_oversold: failed.append(f"prior RSI {prev_rsi:.1f} not below 50")
+        if not macd_turning_up:    failed.append(f"MACD not turning up ({prev_macd_h:.3f}→{macd_h:.3f})")
+
+        # Log near-misses where VWAP was reclaimed on a green bar
+        # These are the most actionable rejections for monthly review
+        if was_below_vwap and now_above_vwap and green_bar:
+            log_signal_rejection(
+                signal_type      = "VWAP",
+                bar_time         = bar_time.strftime("%I:%M %p ET"),
+                bar_close        = bar_close,
+                live_price       = None,
+                failed_conditions= failed,
+                indicator_values = {
+                    "vwap":          round(vwap, 2),
+                    "prev_close":    round(prev_close, 2),
+                    "rsi":           round(rsi, 1),
+                    "prev_rsi":      round(prev_rsi, 1),
+                    "vol_ratio":     round(vol_ratio, 2),
+                    "vwap_dip_pct":  round(vwap_dip_pct * 100, 2),
+                    "macd_h":        round(macd_h, 4),
+                    "prev_macd_h":   round(prev_macd_h, 4),
+                    "ema_9":         round(ema_9, 2),
+                }
+            )
         return None
 
     stop_loss   = bar_close * (1 - STOP_PCT)
@@ -741,14 +806,42 @@ def slippage_gate(signal, live_price):
 
     # Price fell too far — momentum reversed
     if slippage_pct < -MAX_SLIPPAGE_PCT:
-        print(f"   GATE BLOCKED: price fell {slippage_pct*100:.1f}% from signal — "
-              f"momentum reversed")
+        reason = f"DOWNSIDE: price fell {slippage_pct*100:.1f}% — momentum reversed"
+        print(f"   GATE BLOCKED: {reason}")
+        log_signal_rejection(
+            signal_type       = signal.get("signal_type", "?") + "_GATE",
+            bar_time          = signal.get("bar_time", "?"),
+            bar_close         = signal.get("price"),
+            live_price        = live_price,
+            failed_conditions = [reason],
+            indicator_values  = {
+                "signal_price": signal.get("price"),
+                "live_price":   round(live_price, 2),
+                "slippage_pct": round(slippage_pct * 100, 2),
+                "rsi":          signal.get("rsi"),
+                "vol_ratio":    signal.get("vol_ratio"),
+            }
+        )
         return False, slippage_pct, 0
 
     # Price ran too far — R/R destroyed
     if slippage_pct > MAX_SLIPPAGE_PCT:
-        print(f"   GATE BLOCKED: price ran {slippage_pct*100:.1f}% from signal — "
-              f"R/R destroyed")
+        reason = f"UPSIDE: price ran {slippage_pct*100:.1f}% — R/R destroyed"
+        print(f"   GATE BLOCKED: {reason}")
+        log_signal_rejection(
+            signal_type       = signal.get("signal_type", "?") + "_GATE",
+            bar_time          = signal.get("bar_time", "?"),
+            bar_close         = signal.get("price"),
+            live_price        = live_price,
+            failed_conditions = [reason],
+            indicator_values  = {
+                "signal_price": signal.get("price"),
+                "live_price":   round(live_price, 2),
+                "slippage_pct": round(slippage_pct * 100, 2),
+                "rsi":          signal.get("rsi"),
+                "vol_ratio":    signal.get("vol_ratio"),
+            }
+        )
         return False, slippage_pct, 0
 
     # Calculate live R/R at current price
@@ -961,6 +1054,77 @@ def save_trade_log(trades):
             json.dump(trades, f, indent=2)
     except Exception as e:
         print(f"   Trade log save failed: {e}")
+
+
+def log_signal_rejection(signal_type, bar_time, bar_close, live_price,
+                         failed_conditions, indicator_values):
+    """
+    Logs every signal rejection to soxl_gate_blocks.json for monthly review.
+    Captures what happened on the bar, why it was rejected, and what price
+    did afterward (filled in manually during monthly review).
+
+    This covers ALL rejection points:
+      - Signal condition failures (volume, RSI, VWAP, body size)
+      - Slippage gate blocks (price moved too far from signal)
+
+    Monthly review workflow:
+      Open soxl_gate_blocks.json
+      For each entry, check SOXL chart at that bar_time
+      Fill in price_30min_later and price_eod
+      Calculate would_have_won = price_30min_later >= take_profit
+      Use this to evaluate whether filters are too strict
+    """
+    dry_run = globals().get("DRY_RUN", False)
+    if dry_run:
+        return
+    try:
+        et_tz = pytz.timezone(TIMEZONE)
+        now   = datetime.now(et_tz)
+
+        records = []
+        p = Path(GATE_LOG_FILE)
+        if p.exists():
+            try:
+                records = json.loads(p.read_text())
+            except Exception:
+                records = []
+
+        # Estimate take_profit and stop_loss from signal bar close
+        take_profit_est = round(bar_close * (1 + TARGET_PCT), 2) if bar_close else None
+        stop_loss_est   = round(bar_close * (1 - STOP_PCT), 2)   if bar_close else None
+
+        record = {
+            # When and what
+            "id":               f"REJ_{now.strftime('%Y%m%d_%H%M%S')}",
+            "date":             now.strftime("%Y-%m-%d"),
+            "run_time":         now.strftime("%H:%M:%S ET"),
+            "signal_type":      signal_type,
+            "bar_time":         bar_time,
+            "bar_close":        round(bar_close, 2) if bar_close else None,
+            "live_price":       round(live_price, 2) if live_price else None,
+
+            # Why it was rejected
+            "failed_conditions": failed_conditions,   # list of strings
+
+            # Technical values at rejection time
+            "indicators":       indicator_values,      # dict of key values
+
+            # Estimated trade parameters if signal HAD fired
+            "take_profit_est":  take_profit_est,
+            "stop_loss_est":    stop_loss_est,
+
+            # Monthly review fields — fill in manually
+            "price_30min_later": None,
+            "price_eod":         None,
+            "would_have_won":    None,
+            "notes":             None,
+        }
+        records.append(record)
+        p.write_text(json.dumps(records, indent=2))
+        print(f"   Rejection logged: {signal_type} @ ${bar_close:.2f} "
+              f"— {', '.join(failed_conditions)}")
+    except Exception as e:
+        print(f"   Rejection log error: {e}")
 
 
 def log_intraday_trade(signal, live_price, slippage_pct, live_rr):
