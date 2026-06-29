@@ -1,8 +1,8 @@
-yfinance
-pandas
-pandas-ta
-requests
-numpy
-alpaca-py
-mplfinance
-pytz
+yfinance>=1.4.1
+pandas>=2.2.0
+numpy>=1.26.0
+ta>=0.11.0
+requests>=2.31.0
+pytz>=2024.1
+mplfinance>=0.12.10b0
+alpaca-py>=0.29.0
