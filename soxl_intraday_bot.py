@@ -178,12 +178,35 @@ def fetch_intraday(ticker=TICKER, days=7):  # 7 calendar days ensures Monday saf
 
 
 def fetch_live_price(ticker=TICKER):
-    """Fetches current live price via yfinance fast_info."""
+    """
+    Fetches current live price via yfinance.
+    Primary:  fast_info.last_price — fast, single API call
+    Fallback: last 1-min bar close — works in first few minutes of session
+              when fast_info hasn't populated yet (e.g. 9:31-9:45am)
+    Returns None if both methods fail.
+    """
     try:
         p = yf.Ticker(ticker).fast_info.get("last_price")
-        return float(p) if p else None
+        if p is not None:
+            print(f"   Live price (fast_info): ${float(p):.2f}")
+            return float(p)
     except Exception:
-        return None
+        pass
+
+    try:
+        df = yf.download(ticker, period="1d", interval="1m",
+                         auto_adjust=True, progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        if not df.empty:
+            p = float(df["Close"].iloc[-1])
+            print(f"   Live price (1-min fallback): ${p:.2f}")
+            return p
+    except Exception:
+        pass
+
+    print("   Could not fetch live price (both methods failed).")
+    return None
 
 
 # =============================================================================
