@@ -1,1 +1,31 @@
-[]
+[
+  {
+    "id": "REJ_20260629_123520",
+    "date": "2026-06-29",
+    "run_time": "12:35:20 ET",
+    "signal_type": "ORB",
+    "bar_time": "12:30 PM ET",
+    "bar_close": 229.9,
+    "live_price": null,
+    "failed_conditions": [
+      "vol 0.24x < 1.5x required",
+      "body 0.00% < 0.3%"
+    ],
+    "indicators": {
+      "or_high": 222.0,
+      "or_low": 208.0,
+      "vwap": 213.7,
+      "rsi": 58.5,
+      "vol_ratio": 0.24,
+      "body_pct": 0.0,
+      "ema_9": 224.27,
+      "ema_21": 221.41
+    },
+    "take_profit_est": 239.1,
+    "stop_loss_est": 225.31,
+    "price_30min_later": null,
+    "price_eod": null,
+    "would_have_won": null,
+    "notes": null
+  }
+]
