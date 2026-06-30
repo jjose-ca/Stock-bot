@@ -55,7 +55,7 @@ import time
 import argparse
 import traceback
 import pandas as pd
-import pandas_ta as ta
+import ta as ta_lib   # replaces pandas_ta — no numpy/pandas version conflicts
 import pytz
 import requests
 import yfinance as yf
@@ -203,7 +203,7 @@ def check_market_regime(bulk_data):
         vti = extract_ticker_daily(bulk_data, "VTI")
         if vti is None or len(vti) < 200:
             return 0, True
-        sma200    = ta.sma(vti["Close"], length=200).iloc[-1]
+        sma200    = ta_lib.trend.SMAIndicator(vti["Close"], window=200).sma_indicator().iloc[-1]
         vti_price = float(vti["Close"].iloc[-1])
         if vti_price < sma200:
             print(f"   Regime: BEARISH (VTI ${vti_price:.2f} < 200SMA ${sma200:.2f}) +1")
@@ -255,22 +255,19 @@ def run_swing_engine(df_daily, total_penalty, ticker="SOXL"):
         return None
 
     df = df_daily.copy()
-    df["EMA_21"]  = ta.ema(df["Close"], length=21)
-    df["EMA_50"]  = ta.ema(df["Close"], length=50)
-    df["EMA_200"] = ta.ema(df["Close"], length=200)
-    df["RSI"]     = ta.rsi(df["Close"], length=14)
-    df["ATR"]     = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    df["EMA_21"]  = ta_lib.trend.EMAIndicator(df["Close"], window=21).ema_indicator()
+    df["EMA_50"]  = ta_lib.trend.EMAIndicator(df["Close"], window=50).ema_indicator()
+    df["EMA_200"] = ta_lib.trend.EMAIndicator(df["Close"], window=200).ema_indicator()
+    df["RSI"]     = ta_lib.momentum.RSIIndicator(df["Close"], window=14).rsi()
+    df["ATR"]     = ta_lib.volatility.AverageTrueRange(df["High"], df["Low"], df["Close"], window=14).average_true_range()
 
-    macd = ta.macd(df["Close"])
-    if macd is not None:
-        hist_cols   = [c for c in macd.columns if c.startswith("MACDh")]
-        line_cols   = [c for c in macd.columns if c.startswith("MACD_") or
-                       (c.startswith("MACD") and not c.startswith("MACDh")
-                        and not c.startswith("MACDs"))]
-        signal_cols = [c for c in macd.columns if c.startswith("MACDs")]
-        if hist_cols:   df["MACD_H"] = macd[hist_cols[0]]
-        if line_cols:   df["MACD"]   = macd[line_cols[0]]
-        if signal_cols: df["MACDs"]  = macd[signal_cols[0]]
+    try:
+        _macd = ta_lib.trend.MACD(df["Close"])
+        df["MACD_H"] = _macd.macd_diff()
+        df["MACD"]   = _macd.macd()
+        df["MACDs"]  = _macd.macd_signal()
+    except Exception:
+        pass
 
     # Write indicators back for charting
     for col in ["EMA_21", "EMA_50", "EMA_200", "RSI", "ATR", "MACD_H"]:
@@ -815,13 +812,13 @@ def check_live_sell_alerts(bulk_data):
         if df is None or df.empty:
             return
         df = df.copy()
-        df["RSI"]    = ta.rsi(df["Close"], length=14)
-        df["EMA_21"] = ta.ema(df["Close"], length=21)
-        macd_df = ta.macd(df["Close"])
-        if macd_df is not None:
-            hist_col = [c for c in macd_df.columns if c.startswith("MACDh")]
-            if hist_col:
-                df["MACD_H"] = macd_df[hist_col[0]]
+        df["RSI"]    = ta_lib.momentum.RSIIndicator(df["Close"], window=14).rsi()
+        df["EMA_21"] = ta_lib.trend.EMAIndicator(df["Close"], window=21).ema_indicator()
+        try:
+            _macd_sell = ta_lib.trend.MACD(df["Close"])
+            df["MACD_H"] = _macd_sell.macd_diff()
+        except Exception:
+            pass
         df.dropna(subset=["RSI", "EMA_21"], inplace=True)
         if len(df) < 3:
             return
