@@ -1125,6 +1125,14 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     if abs(gap_pct) > dynamic_max_gap:
         print(f"   [{ticker}] ❌ Gap too large ({gap_pct:+.1f}% vs {dynamic_max_gap:.1f}% dynamic max "
               f"[ATR {atr_pct_gap:.1f}% × 1.5, gap rule]). Overnight gap breaks scored structure. Rejected.")
+        if ticker == "TQQQ":
+            log_tqqq_rejection(
+                ticker=ticker, rsi=rsi, score=score, threshold=threshold,
+                trend_score=trend_score, momentum_score=momentum_score,
+                failed_reason="gap_filter_failed", price=price, atr=atr,
+                extra={"gap_pct": round(gap_pct, 2),
+                       "dynamic_max_gap": round(dynamic_max_gap, 2)}
+            )
         return None
 
     return {
@@ -1291,6 +1299,15 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
         print(f"   [{ticker}] ❌ Stop too wide "
               f"({actual_pct*100:.1f}% > {dynamic_max_stop*100:.1f}% dynamic max "
               f"[ATR {atr_pct*100:.1f}% × 3.5]). Rejected.")
+        if ticker == "TQQQ":
+            log_tqqq_rejection(
+                ticker=ticker, rsi=signal.get("rsi"), score=signal.get("score"),
+                threshold=signal.get("threshold"), trend_score=signal.get("trend_score"),
+                momentum_score=signal.get("momentum_score"),
+                failed_reason="risk_stop_too_wide", price=price, atr=atr,
+                extra={"actual_stop_pct": round(actual_pct * 100, 2),
+                       "dynamic_max_stop_pct": round(dynamic_max_stop * 100, 2)}
+            )
         return None
 
     # ATR model R/R — fixed ratio from multipliers (always 3.5/2.5 = 1.40)
@@ -1299,6 +1316,14 @@ def validate_risk(signal: dict, ticker: str = "?") -> dict | None:
 
     if atr_rr < MIN_RR_RATIO:
         print(f"   [{ticker}] ❌ ATR R/R {atr_rr:.2f} below minimum {MIN_RR_RATIO}. Rejected.")
+        if ticker == "TQQQ":
+            log_tqqq_rejection(
+                ticker=ticker, rsi=signal.get("rsi"), score=signal.get("score"),
+                threshold=signal.get("threshold"), trend_score=signal.get("trend_score"),
+                momentum_score=signal.get("momentum_score"),
+                failed_reason="risk_rr_too_low", price=price, atr=atr,
+                extra={"atr_rr": atr_rr, "min_rr_required": MIN_RR_RATIO}
+            )
         return None
 
     risk = price - stop_loss
