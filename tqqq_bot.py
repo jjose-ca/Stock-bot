@@ -221,6 +221,7 @@ COOLDOWN_MINUTES = {"SWING": 240}
 # Each alert is logged on fire; outcomes are auto-checked on every subsequent run.
 TRADE_LOG_FILE        = "trade_log.json"
 EARNINGS_CACHE_FILE   = "earnings_cache.json"
+TQQQ_GATE_LOG_FILE    = "tqqq_gate_blocks.json"   # rejections for monthly review
 OUTCOME_CHECK_DAYS    = 12    # Days before marking a trade EXPIRED if not resolved.
                               # Set to 2 days beyond Tier 1 hold (10 days) to give
                               # the trade room to resolve naturally before expiring.
@@ -961,6 +962,13 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     if score < threshold:
         print(f"   [{ticker}] ❌ Score {score}/{threshold} — "
               f"trend={trend_score} momentum={momentum_score} penalty=-{penalty}")
+        if ticker == "TQQQ":
+            log_tqqq_rejection(
+                ticker=ticker, rsi=rsi, score=score, threshold=threshold,
+                trend_score=trend_score, momentum_score=momentum_score,
+                failed_reason="score_below_threshold", price=price, atr=atr,
+                extra={"penalty": penalty}
+            )
         return None
 
     # ── Per-category floor check ──────────────────────────────────────────────
@@ -973,10 +981,24 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     if trend_score < trend_floor:
         print(f"   [{ticker}] ❌ Trend score {trend_score} below floor {trend_floor} "
               f"— stock below both EMAs, possible downtrend. Rejected.")
+        if ticker == "TQQQ":
+            log_tqqq_rejection(
+                ticker=ticker, rsi=rsi, score=score, threshold=threshold,
+                trend_score=trend_score, momentum_score=momentum_score,
+                failed_reason="trend_floor_failed", price=price, atr=atr,
+                extra={"trend_floor": trend_floor}
+            )
         return None
     if momentum_score < momentum_floor:
         print(f"   [{ticker}] ❌ Momentum score {momentum_score} below floor {momentum_floor} "
               f"— insufficient oversold signal. Rejected.")
+        if ticker == "TQQQ":
+            log_tqqq_rejection(
+                ticker=ticker, rsi=rsi, score=score, threshold=threshold,
+                trend_score=trend_score, momentum_score=momentum_score,
+                failed_reason="momentum_floor_failed", price=price, atr=atr,
+                extra={"momentum_floor": momentum_floor}
+            )
         return None
 
     # High score + neutral RSI = consolidation not pullback
@@ -986,6 +1008,13 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     if score >= 7 and rsi >= 50:
         print(f"   [{ticker}] ❌ Score {score} but RSI {rsi:.1f} ≥ 50 — "
               f"consolidation not pullback. Rejected.")
+        if ticker == "TQQQ":
+            log_tqqq_rejection(
+                ticker=ticker, rsi=rsi, score=score, threshold=threshold,
+                trend_score=trend_score, momentum_score=momentum_score,
+                failed_reason="consolidation_not_pullback_rsi_ge_50",
+                price=price, atr=atr
+            )
         return None
 
     # Score 8 + RSI > 45: every indicator maxed but no real pullback.
@@ -994,6 +1023,13 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
     if score >= 8 and rsi > 45:
         print(f"   [{ticker}] ❌ Score {score} but RSI {rsi:.1f} > 45 — "
               f"all boxes ticked but no genuine pullback. Rejected.")
+        if ticker == "TQQQ":
+            log_tqqq_rejection(
+                ticker=ticker, rsi=rsi, score=score, threshold=threshold,
+                trend_score=trend_score, momentum_score=momentum_score,
+                failed_reason="no_genuine_pullback_rsi_gt_45",
+                price=price, atr=atr
+            )
         return None
 
     print(f"   [{ticker}] ✅ Score {score}/{threshold} — "
@@ -2266,6 +2302,65 @@ def check_market(mode: str, tickers_override: list | None = None):
 #    max_price   — highest price seen while open (for tracking near-misses)
 #    min_price   — lowest price seen while open (for stop tracking)
 # =============================================================================
+
+def log_tqqq_rejection(ticker, rsi, score, threshold, trend_score,
+                       momentum_score, failed_reason, price, atr,
+                       extra=None):
+    """
+    Logs every TQQQ signal rejection to tqqq_gate_blocks.json for monthly
+    review. TQQQ is a mean-reversion bot — silence during bull markets is
+    expected. This log shows exactly how far RSI/score are from triggering
+    a signal, so you can track whether a correction is approaching.
+
+    Separate file from soxl_gate_blocks.json — different ticker, different
+    signal logic, kept clean for independent review.
+
+    Monthly review workflow:
+      Open tqqq_gate_blocks.json
+      Look at the trend in rsi_gap_to_path_a / rsi_gap_to_path_d over time
+      A shrinking gap signals an approaching correction
+      Check whether the bot would have profited had thresholds been looser
+    """
+    dry_run = globals().get("DRY_RUN", False)
+    if dry_run:
+        return
+    try:
+        tz  = pytz.timezone(TIMEZONE)
+        now = datetime.now(tz)
+
+        records = []
+        p = Path(TQQQ_GATE_LOG_FILE)
+        if p.exists():
+            try:
+                records = json.loads(p.read_text())
+            except Exception:
+                records = []
+
+        record = {
+            "id":               f"TQQQ_REJ_{now.strftime('%Y%m%d_%H%M%S')}",
+            "date":             now.strftime("%Y-%m-%d"),
+            "run_time":         now.strftime("%H:%M:%S ET"),
+            "ticker":           ticker,
+            "price":            round(price, 2) if price else None,
+            "rsi":              round(rsi, 1) if rsi is not None else None,
+            "atr":              round(atr, 4) if atr else None,
+            "trend_score":      trend_score,
+            "momentum_score":   momentum_score,
+            "score":            score,
+            "threshold":        threshold,
+            "failed_reason":    failed_reason,
+            "rsi_gap_to_path_a": round(rsi - 35, 1) if rsi is not None else None,
+            "rsi_gap_to_path_d": round(rsi - 50, 1) if rsi is not None else None,
+            "extra":            extra or {},
+            "price_5d_later":   None,
+            "price_10d_later":  None,
+            "notes":            None,
+        }
+        records.append(record)
+        p.write_text(json.dumps(records, indent=2))
+    except Exception as e:
+        print(f"   TQQQ rejection log error: {e}")
+
 
 def load_trade_log() -> list:
     """Loads the trade log from the repo. Returns empty list if not found."""
