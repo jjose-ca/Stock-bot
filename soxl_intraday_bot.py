@@ -128,7 +128,7 @@ COLOR_ORANGE = 16744272
 #  SECTION 2 - DATA FETCHING
 # =============================================================================
 
-def fetch_intraday(ticker=TICKER, days=7):  # 7 calendar days ensures Monday safety
+def fetch_intraday(ticker=TICKER, days=7, et_now=None):  # 7 calendar days ensures Monday safety
     """
     Downloads 15-min bars for the last N days.
     Returns DataFrame with completed bars only — the currently-forming
@@ -157,7 +157,12 @@ def fetch_intraday(ticker=TICKER, days=7):  # 7 calendar days ensures Monday saf
 
         # Snap to last closed bar
         # The currently-forming bar's close is unreliable mid-candle
-        et_now        = datetime.now(et_tz)
+        # Uses the et_now passed from check_market() — ensures the header
+        # timestamp and bar-selection timestamp always agree on "now",
+        # avoiding any mismatch from separate datetime.now() calls
+        # at slightly different moments during a single run.
+        if et_now is None:
+            et_now = datetime.now(et_tz)
         closed_minute = (et_now.minute // 15) * 15
         last_closed   = et_now.replace(
             minute=closed_minute, second=0, microsecond=0
@@ -313,6 +318,7 @@ def calculate_indicators(df):
 
     df.dropna(subset=["RSI", "EMA_9", "EMA_21", "VWAP"], inplace=True)
     return df
+
 
 
 def get_opening_range(df):
@@ -1391,8 +1397,13 @@ def check_market():
         return
 
     # Fetch intraday data
+    # Pass the already-computed et_now so the header timestamp and the
+    # bar-selection logic always agree on "now" — fixes a rare mismatch
+    # where a few seconds' gap between calls could straddle a 15-min
+    # boundary and cause the displayed "last closed bar" to look stale
+    # relative to the printed run timestamp.
     print("Downloading SOXL 15-min bars...")
-    df_raw = fetch_intraday(TICKER, days=7)
+    df_raw = fetch_intraday(TICKER, days=7, et_now=et_now)
     if df_raw is None or df_raw.empty:
         print("No intraday data available.")
         return
