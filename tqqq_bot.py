@@ -55,7 +55,7 @@ import time
 import argparse
 import traceback
 import pandas as pd
-import pandas_ta as ta
+import ta as ta_lib   # replaces pandas_ta — no numpy/pandas version conflicts
 import pytz
 import requests
 import yfinance as yf
@@ -417,7 +417,7 @@ def calculate_daily_relative_volume(df_daily: pd.DataFrame) -> float:
     try:
         if df_daily is None or len(df_daily) < 21:
             return 1.0
-        vol_sma   = ta.sma(df_daily['Volume'].astype(float), length=20).iloc[-2]
+        vol_sma   = ta_lib.trend.SMAIndicator(df_daily['Volume'].astype(float), window=20).sma_indicator().iloc[-2]
         today_vol = float(df_daily['Volume'].iloc[-1])
         if pd.isna(vol_sma) or vol_sma == 0:
             return 1.0
@@ -444,7 +444,7 @@ def check_market_regime(bulk_data: pd.DataFrame) -> tuple[int, bool]:
             print("   ⚠️ VTI: Insufficient data — defaulting BULLISH")
             return 0, True
 
-        vti_sma   = ta.sma(vti_df['Close'], length=200).iloc[-1]
+        vti_sma   = ta_lib.trend.SMAIndicator(vti_df['Close'], window=200).sma_indicator().iloc[-1]
         vti_price = float(vti_df['Close'].iloc[-1])
 
         if vti_price < vti_sma:
@@ -494,17 +494,19 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
 
     df = df_daily.copy()
 
-    df['EMA_21']  = ta.ema(df['Close'], length=21)
-    df['EMA_50']  = ta.ema(df['Close'], length=50)
-    df['EMA_200'] = ta.ema(df['Close'], length=200)
-    df['RSI']     = ta.rsi(df['Close'], length=14)
-    df['ATR']     = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['EMA_21']  = ta_lib.trend.EMAIndicator(df['Close'], window=21).ema_indicator()
+    df['EMA_50']  = ta_lib.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
+    df['EMA_200'] = ta_lib.trend.EMAIndicator(df['Close'], window=200).ema_indicator()
+    df['RSI']     = ta_lib.momentum.RSIIndicator(df['Close'], window=14).rsi()
+    df['ATR']     = ta_lib.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=14).average_true_range()
 
-    macd = ta.macd(df['Close'])
-    if macd is not None:
-        hist_cols = [c for c in macd.columns if c.startswith('MACDh')]
-        if hist_cols:
-            df['MACD_H'] = macd[hist_cols[0]]
+    try:
+        _macd = ta_lib.trend.MACD(df['Close'])
+        df['MACD_H'] = _macd.macd_diff()
+        df['MACD']   = _macd.macd()
+        df['MACDs']  = _macd.macd_signal()
+    except Exception:
+        pass
 
     # Write indicators back to df_daily so generate_signal_chart can access
     # RSI/EMA columns via the df_d reference passed to send_setup_alert.
@@ -513,16 +515,14 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         if col in df.columns:
             df_daily[col] = df[col]
 
-    bb = ta.bbands(df['Close'], length=20, std=2)
-    if bb is not None and not bb.empty:
-        lower_col = [c for c in bb.columns if c.startswith('BBL')]
-        mid_col   = [c for c in bb.columns if c.startswith('BBM')]
-        upper_col = [c for c in bb.columns if c.startswith('BBU')]
-        if lower_col: df['BBL'] = bb[lower_col[0]]
-        if mid_col:   df['BBM'] = bb[mid_col[0]]
-        if upper_col: df['BBU'] = bb[upper_col[0]]
-        if all([lower_col, mid_col, upper_col]):
-            df['BB_WIDTH'] = (df['BBU'] - df['BBL']) / df['BBM']
+    try:
+        _bb = ta_lib.volatility.BollingerBands(df['Close'], window=20, window_dev=2)
+        df['BBL']      = _bb.bollinger_lband()
+        df['BBM']      = _bb.bollinger_mavg()
+        df['BBU']      = _bb.bollinger_hband()
+        df['BB_WIDTH'] = _bb.bollinger_wband() / 100  # ta returns %, normalize to ratio
+    except Exception:
+        pass
 
     df.dropna(subset=['RSI', 'EMA_50', 'ATR'], inplace=True)
     if len(df) < 3:
@@ -2452,20 +2452,19 @@ def check_live_sell_alerts():
     # We access them via the module-level bulk_data reference stored at scan time.
     try:
         import yfinance as yf
-        import pandas_ta as ta
         raw = yf.download('TQQQ', period='60d', interval='1d',
                           auto_adjust=True, progress=False)
         if raw.empty:
             print("   Could not fetch TQQQ daily bars for technical sell check.")
             return
         raw.columns = raw.columns.get_level_values(0)
-        raw['RSI']    = ta.rsi(raw['Close'], length=14)
-        raw['EMA_21'] = ta.ema(raw['Close'], length=21)
-        macd_df = ta.macd(raw['Close'])
-        if macd_df is not None:
-            hist_col = [c for c in macd_df.columns if 'h' in c.lower()]
-            if hist_col:
-                raw['MACD_H'] = macd_df[hist_col[0]]
+        raw['RSI']    = ta_lib.momentum.RSIIndicator(raw['Close'], window=14).rsi()
+        raw['EMA_21'] = ta_lib.trend.EMAIndicator(raw['Close'], window=21).ema_indicator()
+        try:
+            _macd_sell = ta_lib.trend.MACD(raw['Close'])
+            raw['MACD_H'] = _macd_sell.macd_diff()
+        except Exception:
+            pass
         raw.dropna(subset=['RSI', 'EMA_21'], inplace=True)
         if len(raw) < 3:
             return
