@@ -251,5 +251,63 @@
     "price_eod": null,
     "would_have_won": null,
     "notes": null
+  },
+  {
+    "id": "REJ_20260630_122450",
+    "date": "2026-06-30",
+    "run_time": "12:24:50 ET",
+    "signal_type": "PDH",
+    "bar_time": "12:15 PM ET",
+    "bar_close": 263.1,
+    "live_price": null,
+    "failed_conditions": [
+      "vol 0.30x < 1.5x required",
+      "RSI 71.9 outside 45-65",
+      "body too small"
+    ],
+    "indicators": {
+      "prev_high": 238.65,
+      "vwap": 255.63,
+      "rsi": 71.9,
+      "vol_ratio": 0.3,
+      "ema_9": 259.89,
+      "ema_21": 251.68
+    },
+    "take_profit_est": 273.62,
+    "stop_loss_est": 257.84,
+    "price_30min_later": null,
+    "price_eod": null,
+    "would_have_won": null,
+    "notes": null
+  },
+  {
+    "id": "REJ_20260630_122450",
+    "date": "2026-06-30",
+    "run_time": "12:24:50 ET",
+    "signal_type": "ORB",
+    "bar_time": "12:15 PM ET",
+    "bar_close": 263.1,
+    "live_price": null,
+    "failed_conditions": [
+      "vol 0.30x < 1.5x required",
+      "RSI 71.9 outside 45-65",
+      "body 0.10% < 0.3%"
+    ],
+    "indicators": {
+      "or_high": 257.7,
+      "or_low": 240.59,
+      "vwap": 255.63,
+      "rsi": 71.9,
+      "vol_ratio": 0.3,
+      "body_pct": 0.1,
+      "ema_9": 259.89,
+      "ema_21": 251.68
+    },
+    "take_profit_est": 273.62,
+    "stop_loss_est": 257.84,
+    "price_30min_later": null,
+    "price_eod": null,
+    "would_have_won": null,
+    "notes": null
   }
 ]
