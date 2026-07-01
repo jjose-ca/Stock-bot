@@ -1539,31 +1539,45 @@ def check_market():
 def reconcile_gate_blocks():
     """
     Runs once after market close (4:05pm ET via cron --reconcile flag).
-    For every gate block entry from TODAY where price_30min_later is null:
+    Implements full MFE (Maximum Favorable Excursion) simulation for every
+    gate block entry from TODAY where simulated_outcome is null.
 
-      1. Downloads today's complete 15-min bars from yfinance
-      2. Finds the bar 30 minutes after bar_time → fills price_30min_later
-      3. Finds the last bar of today's session → fills price_eod
-      4. Checks price_30min_later >= take_profit_est → fills would_have_won
-      5. Writes updated entries back to soxl_gate_blocks.json
+    MFE logic — walks forward bar by bar from signal bar_time:
+      - Tracks highest High seen as a % gain from bar_close (MFE)
+      - STOPS tracking MFE the moment stop_loss is hit (no phantom post-stop gains)
+      - Records WON / LOST / TIME_STOP outcome with exact exit time and P&L
 
-    Result: after running, every today's rejection entry has full outcome data.
-    push_logs.sh then commits this file to GitHub at 4:10pm ET.
+    Why MFE-until-stop is the gold standard:
+      If price rallies +3.5% then crashes through the -2% stop, locking MFE at 3.5%
+      tells you "a +3% target would have won this trade." Continuing to track after
+      the stop would show phantom gains from the post-stop recovery — misleading.
 
-    Monthly review: open soxl_gate_blocks.json, look for patterns:
-      - Entries where would_have_won=True but volume blocked the signal
-        → evidence the volume threshold is too strict
-      - Entries where would_have_won=False
-        → evidence the filter correctly avoided a bad trade
+    Fields filled per entry:
+      simulated_outcome    WON / LOST / TIME_STOP
+      simulated_exit_price price at which trade would have exited
+      simulated_exit_time  bar time of the exit
+      simulated_pnl_pct    P&L % of the simulated trade
+      mfe_pct              max % gain reached before stop hit (MFE)
+      mfe_vs_target_2pct   True if MFE >= 2% (would win at +2% target)
+      mfe_vs_target_3pct   True if MFE >= 3% (would win at +3% target)
+      mfe_vs_target_4pct   True if MFE >= 4% (would win at current +4% target)
+      would_have_won       True if simulated_outcome == WON
+      price_30min_later    close of bar 30min after signal (kept for reference)
+      price_eod            EOD close price (context only)
+
+    Monthly review using MFE:
+      mfe_pct >= 4.0%:  would have won at current target — was the block justified?
+      mfe_pct 3.0-4.0%: would win at +3% target — consider lowering target
+      mfe_pct 1.0-3.0%: partial move but not enough for any reasonable target
+      mfe_pct <  1.0%:  price never moved in our favour — block was correct
     """
     et_tz = pytz.timezone(TIMEZONE)
     today = datetime.now(et_tz).date()
 
     print(f"\n{'='*60}")
-    print(f"  SOXL Gate Block Reconciliation — {today}")
+    print(f"  SOXL Gate Block Reconciliation (MFE) — {today}")
     print(f"{'='*60}\n")
 
-    # Load gate blocks
     p = Path(GATE_LOG_FILE)
     if not p.exists():
         print("   No gate block log found — nothing to reconcile.")
@@ -1575,13 +1589,13 @@ def reconcile_gate_blocks():
         print(f"   Failed to load gate blocks: {e}")
         return
 
-    # Filter to today's unreconciled entries
+    # Unreconciled = simulated_outcome not yet set
     to_reconcile = [
         r for r in records
         if r.get("date") == str(today)
-        and r.get("price_30min_later") is None
+        and r.get("simulated_outcome") is None
         and r.get("bar_time") not in (None, "?", "live (forming bar)")
-        and r.get("signal_type", "").endswith("_GATE") is False
+        and not r.get("signal_type", "").endswith("_GATE")
     ]
 
     if not to_reconcile:
@@ -1590,7 +1604,7 @@ def reconcile_gate_blocks():
 
     print(f"   Found {len(to_reconcile)} entries to reconcile...")
 
-    # Download today's complete 15-min bars — one call covers everything
+    # Download today's 15-min bars — single call
     try:
         df = yf.download(
             TICKER, period="2d", interval="15m",
@@ -1599,34 +1613,26 @@ def reconcile_gate_blocks():
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df.dropna(subset=["Close"], inplace=True)
-
-        # Convert to ET
         if df.index.tz is None:
             df.index = df.index.tz_localize("UTC").tz_convert(et_tz)
         else:
             df.index = df.index.tz_convert(et_tz)
-
-        # Filter to today's bars only
         today_bars = df[df.index.date == today]
         if today_bars.empty:
-            print("   No bars found for today — market may not have traded.")
+            print("   No bars found for today.")
             return
-
-        # End of day price — last bar's close
         price_eod = float(today_bars["Close"].iloc[-1])
         eod_time  = today_bars.index[-1].strftime("%I:%M %p ET")
-        print(f"   EOD price: ${price_eod:.2f} (from {eod_time} bar)")
-
+        print(f"   EOD price: ${price_eod:.2f} ({eod_time})")
     except Exception as e:
-        print(f"   Failed to download today's bars: {e}")
+        print(f"   Failed to download bars: {e}")
         return
 
-    # Reconcile each entry
     reconciled_count = 0
     for record in records:
         if record.get("date") != str(today):
             continue
-        if record.get("price_30min_later") is not None:
+        if record.get("simulated_outcome") is not None:
             continue
         if record.get("bar_time") in (None, "?", "live (forming bar)"):
             continue
@@ -1634,58 +1640,105 @@ def reconcile_gate_blocks():
             continue
 
         try:
-            # Parse bar_time → find bar 30 min later
-            bar_time_str = record["bar_time"]  # e.g. "02:00 PM ET"
+            bar_time_str = record["bar_time"]
             bar_dt = datetime.strptime(
                 f"{today} {bar_time_str.replace(' ET', '')}",
                 "%Y-%m-%d %I:%M %p"
             ).replace(tzinfo=et_tz)
 
-            # 30 minutes later
-            target_dt = bar_dt + pd.Timedelta(minutes=30)
-
-            # Find the closest bar at or after target_dt in today's data
-            future_bars = today_bars[today_bars.index >= target_dt]
-            if future_bars.empty:
-                # Signal was too late in the day — use EOD price instead
-                price_30min = price_eod
-                print(f"   {bar_time_str}: no bar 30min later — using EOD ${price_eod:.2f}")
-            else:
-                price_30min = float(future_bars["Close"].iloc[0])
-                actual_time = future_bars.index[0].strftime("%I:%M %p ET")
-                print(f"   {bar_time_str}: +30min bar = {actual_time} → ${price_30min:.2f}")
-
-            # would_have_won: did price reach take_profit_est within 30 min?
+            bar_close   = record.get("bar_close")
             take_profit = record.get("take_profit_est")
-            if take_profit is not None:
-                # Check if ANY bar between bar_time and +30min hit the target
-                window_bars = today_bars[
-                    (today_bars.index > bar_dt) &
-                    (today_bars.index <= target_dt)
-                ]
-                hit_target = any(
-                    float(bar["High"]) >= take_profit
-                    for _, bar in window_bars.iterrows()
-                ) if not window_bars.empty else False
-            else:
-                hit_target = None
+            stop_loss   = record.get("stop_loss_est")
 
-            # Update the record
-            record["price_30min_later"] = round(price_30min, 2)
-            record["price_eod"]         = round(price_eod, 2)
-            record["would_have_won"]    = hit_target
+            if not all([bar_close, take_profit, stop_loss]):
+                print(f"   {bar_time_str}: missing price data — skipping")
+                continue
+
+            # ── MFE Walk-Forward Simulation ───────────────────────────────────
+            forward_bars         = today_bars[today_bars.index > bar_dt]
+            mfe_pct              = 0.0
+            simulated_outcome    = "TIME_STOP"
+            simulated_exit_price = round(price_eod, 2)
+            simulated_exit_time  = eod_time
+            simulated_pnl_pct    = round((price_eod - bar_close) / bar_close * 100, 2)
+            price_30min_later    = None
+            target_dt            = bar_dt + pd.Timedelta(minutes=30)
+
+            for bar_time_fwd, bar in forward_bars.iterrows():
+                bar_high      = float(bar["High"])
+                bar_low       = float(bar["Low"])
+                bar_close_fwd = float(bar["Close"])
+
+                # Capture 30-min reference (first bar at or after +30min)
+                if price_30min_later is None and bar_time_fwd >= target_dt:
+                    price_30min_later = round(bar_close_fwd, 2)
+
+                # Update MFE — highest % gain seen so far
+                gain = (bar_high - bar_close) / bar_close * 100
+                if gain > mfe_pct:
+                    mfe_pct = gain
+
+                # Time stop gate (3:35pm ET)
+                is_time_stop = (
+                    bar_time_fwd.hour > EXIT_HOUR or
+                    (bar_time_fwd.hour == EXIT_HOUR and
+                     bar_time_fwd.minute >= EXIT_MINUTE)
+                )
+
+                # Target takes priority over stop on same bar (optimistic)
+                if bar_high >= take_profit:
+                    simulated_outcome    = "WON"
+                    simulated_exit_price = round(take_profit, 2)
+                    simulated_exit_time  = bar_time_fwd.strftime("%I:%M %p ET")
+                    simulated_pnl_pct    = round((take_profit - bar_close) / bar_close * 100, 2)
+                    break
+                elif bar_low <= stop_loss:
+                    # Stop hit — MFE locked here, no more updates after this
+                    simulated_outcome    = "LOST"
+                    simulated_exit_price = round(stop_loss, 2)
+                    simulated_exit_time  = bar_time_fwd.strftime("%I:%M %p ET")
+                    simulated_pnl_pct    = round((stop_loss - bar_close) / bar_close * 100, 2)
+                    break
+                elif is_time_stop:
+                    simulated_outcome    = "TIME_STOP"
+                    simulated_exit_price = round(bar_close_fwd, 2)
+                    simulated_exit_time  = bar_time_fwd.strftime("%I:%M %p ET")
+                    simulated_pnl_pct    = round((bar_close_fwd - bar_close) / bar_close * 100, 2)
+                    break
+
+            if price_30min_later is None:
+                price_30min_later = price_eod
+
+            # ── Fill all fields ───────────────────────────────────────────────
+            record["simulated_outcome"]    = simulated_outcome
+            record["simulated_exit_price"] = simulated_exit_price
+            record["simulated_exit_time"]  = simulated_exit_time
+            record["simulated_pnl_pct"]    = simulated_pnl_pct
+            record["mfe_pct"]              = round(mfe_pct, 2)
+            record["mfe_vs_target_2pct"]   = mfe_pct >= 2.0
+            record["mfe_vs_target_3pct"]   = mfe_pct >= 3.0
+            record["mfe_vs_target_4pct"]   = mfe_pct >= 4.0
+            record["would_have_won"]       = simulated_outcome == "WON"
+            record["price_30min_later"]    = price_30min_later
+            record["price_eod"]            = round(price_eod, 2)
+
+            icon = ("✅" if simulated_outcome == "WON" else
+                    "🛑" if simulated_outcome == "LOST" else "⏰")
+            print(f"   {icon} {bar_time_str}: {simulated_outcome} "
+                  f"{simulated_pnl_pct:+.1f}% | MFE {mfe_pct:.1f}% | "
+                  f"exit {simulated_exit_time}")
             reconciled_count += 1
 
         except Exception as e:
             print(f"   Error reconciling {record.get('id', '?')}: {e}")
             continue
 
-    # Save updated records
     try:
         p.write_text(json.dumps(records, indent=2))
         print(f"\n   ✅ Reconciled {reconciled_count} entries → {GATE_LOG_FILE}")
+        print(f"   MFE guide: ≥4%=would win now | 3-4%=lower target | <1%=correctly blocked")
     except Exception as e:
-        print(f"   Failed to save gate blocks: {e}")
+        print(f"   Failed to save: {e}")
 
 
 # =============================================================================
