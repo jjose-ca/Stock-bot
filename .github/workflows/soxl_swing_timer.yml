@@ -1,7 +1,7 @@
 name: Run SOXL Swing Bot
 
 on:
-  schedule:
+  #schedule:
     # SOXL swing bot runs 3 times in the final hour of the session.
     # This protects against GitHub Actions cron delays — if the 3:20pm
     # run is delayed to 3:38pm, the signal still fires before close.
@@ -16,14 +16,14 @@ on:
     #   EST -> 20:20, 20:35, 20:45 UTC
 
     # EDT offsets (March - November)
-    - cron: '20 19 * * 1-5'   # 3:20pm ET (EDT)
-    - cron: '35 19 * * 1-5'   # 3:35pm ET (EDT)
-    - cron: '45 19 * * 1-5'   # 3:45pm ET (EDT)
+   # - cron: '20 19 * * 1-5'   # 3:20pm ET (EDT)
+   # - cron: '35 19 * * 1-5'   # 3:35pm ET (EDT)
+    #- cron: '45 19 * * 1-5'   # 3:45pm ET (EDT)
 
     # EST offsets (November - March)
-    - cron: '20 20 * * 1-5'   # 3:20pm ET (EST)
-    - cron: '35 20 * * 1-5'   # 3:35pm ET (EST)
-    - cron: '45 20 * * 1-5'   # 3:45pm ET (EST)
+   # - cron: '20 20 * * 1-5'   # 3:20pm ET (EST)
+   # - cron: '35 20 * * 1-5'   # 3:35pm ET (EST)
+  #  - cron: '45 20 * * 1-5'   # 3:45pm ET (EST)
 
   workflow_dispatch:
     inputs:
