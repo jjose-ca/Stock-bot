@@ -40,5 +40,47 @@
     "outcome_pct": -2.64,
     "max_price": 253.49000549316406,
     "min_price": 244.80999755859375
+  },
+  {
+    "id": "TQQQ_20260701_1204",
+    "ticker": "TQQQ",
+    "currency": "USD",
+    "scenario": "SWING",
+    "mode": "SWING",
+    "alert_date": "2026-07-01",
+    "alert_time": "12:04 ET",
+    "entry": 78.74980163574219,
+    "stop_loss": 67.0,
+    "take_profit": 99.04,
+    "rr_ratio": 1.73,
+    "support": 77.15,
+    "support_source": "21 EMA Bounce Wick (Path E)",
+    "score": 4,
+    "threshold": 6,
+    "trend_score": 2,
+    "momentum_score": 2,
+    "penalty": 0,
+    "reasons": [
+      "\ud83d\udcca Path E \u2014 21 EMA Bounce (TIER 2 Medium Conviction)",
+      "\ud83d\udd6f\ufe0f Wick to EMA $77.45 (Low $77.55) + Green Close",
+      "\ud83d\udcc8 Price above 50 EMA $73.04 \u2014 uptrend intact",
+      "\ud83d\udcc9 RSI 52.2 \u2014 momentum neutral, room to run",
+      "\u26a0\ufe0f TIER 2: Deploy 5% of portfolio (smaller size)"
+    ],
+    "rsi": 52.2,
+    "macd_h": -0.4078,
+    "atr": 5.0733,
+    "ema_21": 77.45,
+    "ema_50": 73.04,
+    "bbl": 68.5,
+    "bb_width": 0.2398,
+    "gap_pct": 0.0,
+    "near_52w_high": false,
+    "regime_bullish": true,
+    "status": "OPEN",
+    "outcome_date": null,
+    "outcome_pct": null,
+    "max_price": 78.74980163574219,
+    "min_price": 78.74980163574219
   }
- ]
+]
