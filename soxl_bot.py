@@ -1,3 +1,142 @@
+# =============================================================================
+#  SECTION 10 - SWING GATE BLOCK RECONCILIATION
+# =============================================================================
+
+def reconcile_swing_gate_blocks():
+    """
+    Runs once daily after market close (via --reconcile flag).
+    For every entry in soxl_swing_gate_blocks.json where price_5d_later
+    or price_10d_later is null, downloads SOXL daily bars and fills them in.
+
+    Unlike the intraday MFE reconciliation which runs same-day, swing
+    reconciliation looks back over multiple days:
+      price_5d_later:  SOXL closing price 5 trading days after rejection
+      price_10d_later: SOXL closing price 10 trading days after rejection
+      gain_5d_pct:     % gain/loss from rejection price to 5d later
+      gain_10d_pct:    % gain/loss from rejection price to 10d later
+
+    This answers: "If SOXL had bought at the rejection bar_close,
+    where would it be 5 and 10 trading days later?"
+
+    Monthly review using swing gate data:
+      Large positive gain_10d_pct on a path_d_conditions_failed entry
+      → Signal would have been profitable if conditions were looser
+      → Evidence to relax a specific condition
+
+      Negative gain_10d_pct
+      → Rejection was correct — SOXL continued falling
+    """
+    tz    = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz).date()
+
+    print(f"\n{'='*60}")
+    print(f"  SOXL Swing Gate Block Reconciliation — {today}")
+    print(f"{'='*60}\n")
+
+    p = Path(SOXL_GATE_LOG_FILE)
+    if not p.exists():
+        print("   No swing gate block log found.")
+        return
+
+    try:
+        records = json.loads(p.read_text())
+    except Exception as e:
+        print(f"   Failed to load swing gate blocks: {e}")
+        return
+
+    # Find entries that need reconciliation
+    # price_5d_later null AND 5+ trading days have passed since rejection date
+    to_reconcile = []
+    for r in records:
+        try:
+            entry_date = datetime.strptime(r["date"], "%Y-%m-%d").date()
+            days_since = (today - entry_date).days
+            needs_5d   = r.get("price_5d_later") is None and days_since >= 7
+            needs_10d  = r.get("price_10d_later") is None and days_since >= 14
+            if needs_5d or needs_10d:
+                to_reconcile.append(r)
+        except Exception:
+            continue
+
+    if not to_reconcile:
+        print("   No swing gate entries ready for reconciliation.")
+        print("   (Entries need 7+ calendar days before 5d price is available)")
+        return
+
+    print(f"   Found {len(to_reconcile)} entries to reconcile...")
+
+    # Download 3 months of SOXL daily bars — covers all possible lookback windows
+    try:
+        df = yf.download(
+            TICKER, period="3mo", interval="1d",
+            auto_adjust=True, progress=False,
+        )
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.dropna(subset=["Close"], inplace=True)
+        # Normalize index to date only for easy lookup
+        df.index = pd.to_datetime(df.index).normalize()
+        print(f"   Downloaded {len(df)} daily bars")
+    except Exception as e:
+        print(f"   Failed to download daily bars: {e}")
+        return
+
+    # Helper: find the Nth trading day after a given date
+    def nth_trading_day_after(start_date, n):
+        trading_days = [d for d in df.index if d.date() > start_date]
+        if len(trading_days) >= n:
+            return trading_days[n - 1]
+        return None
+
+    reconciled_count = 0
+    for record in records:
+        try:
+            entry_date  = datetime.strptime(record["date"], "%Y-%m-%d").date()
+            entry_price = record.get("price")
+            days_since  = (today - entry_date).days
+
+            if entry_price is None:
+                continue
+
+            changed = False
+
+            # Fill 5d price (need 7+ calendar days to ensure 5 trading days passed)
+            if record.get("price_5d_later") is None and days_since >= 7:
+                bar_5d = nth_trading_day_after(entry_date, 5)
+                if bar_5d is not None and bar_5d in df.index:
+                    price_5d = round(float(df.loc[bar_5d, "Close"]), 2)
+                    gain_5d  = round((price_5d - entry_price) / entry_price * 100, 2)
+                    record["price_5d_later"] = price_5d
+                    record["gain_5d_pct"]    = gain_5d
+                    changed = True
+                    print(f"   {record['date']} ({record.get('failed_reason','?')}): "
+                          f"5d → ${price_5d:.2f} ({gain_5d:+.1f}%)")
+
+            # Fill 10d price (need 14+ calendar days)
+            if record.get("price_10d_later") is None and days_since >= 14:
+                bar_10d = nth_trading_day_after(entry_date, 10)
+                if bar_10d is not None and bar_10d in df.index:
+                    price_10d = round(float(df.loc[bar_10d, "Close"]), 2)
+                    gain_10d  = round((price_10d - entry_price) / entry_price * 100, 2)
+                    record["price_10d_later"] = price_10d
+                    record["gain_10d_pct"]    = gain_10d
+                    changed = True
+                    print(f"   {record['date']} ({record.get('failed_reason','?')}): "
+                          f"10d → ${price_10d:.2f} ({gain_10d:+.1f}%)")
+
+            if changed:
+                reconciled_count += 1
+
+        except Exception as e:
+            print(f"   Error reconciling {record.get('id', '?')}: {e}")
+            continue
+
+    try:
+        p.write_text(json.dumps(records, indent=2))
+        print(f"\n   ✅ Reconciled {reconciled_count} swing gate entries → {SOXL_GATE_LOG_FILE}")
+    except Exception as e:
+        print(f"   Failed to save: {e}")
+
 """
 =============================================================================
   SOXL ALERT BOT v1.0 — Manual Execution Radar
@@ -1214,10 +1353,12 @@ def check_market():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SOXL Alert Bot v1.0")
-    parser.add_argument("--force",   action="store_true",
+    parser.add_argument("--force",     action="store_true",
                         help="Bypass entry window gate (testing)")
-    parser.add_argument("--dry-run", action="store_true",
+    parser.add_argument("--dry-run",   action="store_true",
                         help="Skip trade log dedup (testing)")
+    parser.add_argument("--reconcile", action="store_true",
+                        help="Run swing gate block reconciliation (fill 5d/10d prices)")
     args = parser.parse_args()
 
     DRY_RUN   = args.dry_run
@@ -1228,4 +1369,7 @@ if __name__ == "__main__":
     if FORCE_RUN:
         print("--force active - entry window bypassed")
 
-    check_market()
+    if args.reconcile:
+        reconcile_swing_gate_blocks()
+    else:
+        check_market()
