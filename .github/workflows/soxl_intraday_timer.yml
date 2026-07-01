@@ -1,7 +1,7 @@
 name: Run SOXL Intraday Bot
 
 on:
-  schedule:
+  #schedule:
     # SOXL intraday bot runs every 15 minutes from 10:00am to 3:20pm ET.
     # Compact multi-value cron syntax covers both EDT and EST seasons.
     #
