@@ -1,3 +1,142 @@
+# =============================================================================
+#  SECTION 10 - SWING GATE BLOCK RECONCILIATION
+# =============================================================================
+
+def reconcile_swing_gate_blocks():
+    """
+    Runs once daily after market close (via --reconcile flag).
+    For every entry in soxl_swing_gate_blocks.json where price_5d_later
+    or price_10d_later is null, downloads SOXL daily bars and fills them in.
+
+    Unlike the intraday MFE reconciliation which runs same-day, swing
+    reconciliation looks back over multiple days:
+      price_5d_later:  SOXL closing price 5 trading days after rejection
+      price_10d_later: SOXL closing price 10 trading days after rejection
+      gain_5d_pct:     % gain/loss from rejection price to 5d later
+      gain_10d_pct:    % gain/loss from rejection price to 10d later
+
+    This answers: "If SOXL had bought at the rejection bar_close,
+    where would it be 5 and 10 trading days later?"
+
+    Monthly review using swing gate data:
+      Large positive gain_10d_pct on a path_d_conditions_failed entry
+      → Signal would have been profitable if conditions were looser
+      → Evidence to relax a specific condition
+
+      Negative gain_10d_pct
+      → Rejection was correct — SOXL continued falling
+    """
+    tz    = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz).date()
+
+    print(f"\n{'='*60}")
+    print(f"  SOXL Swing Gate Block Reconciliation — {today}")
+    print(f"{'='*60}\n")
+
+    p = Path(SOXL_GATE_LOG_FILE)
+    if not p.exists():
+        print("   No swing gate block log found.")
+        return
+
+    try:
+        records = json.loads(p.read_text())
+    except Exception as e:
+        print(f"   Failed to load swing gate blocks: {e}")
+        return
+
+    # Find entries that need reconciliation
+    # price_5d_later null AND 5+ trading days have passed since rejection date
+    to_reconcile = []
+    for r in records:
+        try:
+            entry_date = datetime.strptime(r["date"], "%Y-%m-%d").date()
+            days_since = (today - entry_date).days
+            needs_5d   = r.get("price_5d_later") is None and days_since >= 7
+            needs_10d  = r.get("price_10d_later") is None and days_since >= 14
+            if needs_5d or needs_10d:
+                to_reconcile.append(r)
+        except Exception:
+            continue
+
+    if not to_reconcile:
+        print("   No swing gate entries ready for reconciliation.")
+        print("   (Entries need 7+ calendar days before 5d price is available)")
+        return
+
+    print(f"   Found {len(to_reconcile)} entries to reconcile...")
+
+    # Download 3 months of SOXL daily bars — covers all possible lookback windows
+    try:
+        df = yf.download(
+            TICKER, period="3mo", interval="1d",
+            auto_adjust=True, progress=False,
+        )
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.dropna(subset=["Close"], inplace=True)
+        # Normalize index to date only for easy lookup
+        df.index = pd.to_datetime(df.index).normalize()
+        print(f"   Downloaded {len(df)} daily bars")
+    except Exception as e:
+        print(f"   Failed to download daily bars: {e}")
+        return
+
+    # Helper: find the Nth trading day after a given date
+    def nth_trading_day_after(start_date, n):
+        trading_days = [d for d in df.index if d.date() > start_date]
+        if len(trading_days) >= n:
+            return trading_days[n - 1]
+        return None
+
+    reconciled_count = 0
+    for record in records:
+        try:
+            entry_date  = datetime.strptime(record["date"], "%Y-%m-%d").date()
+            entry_price = record.get("price")
+            days_since  = (today - entry_date).days
+
+            if entry_price is None:
+                continue
+
+            changed = False
+
+            # Fill 5d price (need 7+ calendar days to ensure 5 trading days passed)
+            if record.get("price_5d_later") is None and days_since >= 7:
+                bar_5d = nth_trading_day_after(entry_date, 5)
+                if bar_5d is not None and bar_5d in df.index:
+                    price_5d = round(float(df.loc[bar_5d, "Close"]), 2)
+                    gain_5d  = round((price_5d - entry_price) / entry_price * 100, 2)
+                    record["price_5d_later"] = price_5d
+                    record["gain_5d_pct"]    = gain_5d
+                    changed = True
+                    print(f"   {record['date']} ({record.get('failed_reason','?')}): "
+                          f"5d → ${price_5d:.2f} ({gain_5d:+.1f}%)")
+
+            # Fill 10d price (need 14+ calendar days)
+            if record.get("price_10d_later") is None and days_since >= 14:
+                bar_10d = nth_trading_day_after(entry_date, 10)
+                if bar_10d is not None and bar_10d in df.index:
+                    price_10d = round(float(df.loc[bar_10d, "Close"]), 2)
+                    gain_10d  = round((price_10d - entry_price) / entry_price * 100, 2)
+                    record["price_10d_later"] = price_10d
+                    record["gain_10d_pct"]    = gain_10d
+                    changed = True
+                    print(f"   {record['date']} ({record.get('failed_reason','?')}): "
+                          f"10d → ${price_10d:.2f} ({gain_10d:+.1f}%)")
+
+            if changed:
+                reconciled_count += 1
+
+        except Exception as e:
+            print(f"   Error reconciling {record.get('id', '?')}: {e}")
+            continue
+
+    try:
+        p.write_text(json.dumps(records, indent=2))
+        print(f"\n   ✅ Reconciled {reconciled_count} swing gate entries → {SOXL_GATE_LOG_FILE}")
+    except Exception as e:
+        print(f"   Failed to save: {e}")
+
 """
 =============================================================================
   SOXL ALERT BOT v1.0 — Manual Execution Radar
@@ -115,6 +254,7 @@ EARNINGS_SCORE_PENALTY = 2
 # Trade log - persisted in repo, survives between GitHub Actions runs
 TRADE_LOG_FILE        = "soxl_trade_log.json"
 EARNINGS_CACHE_FILE   = "soxl_earnings_cache.json"
+SOXL_GATE_LOG_FILE    = "soxl_swing_gate_blocks.json"  # swing rejections — separate from intraday
 OUTCOME_CHECK_DAYS    = 12
 OUTCOME_DISCORD_DAILY = True
 
@@ -242,10 +382,11 @@ def get_active_ladder_tranche(rsi):
             continue
         if tranche["tranche"] > 1:
             prev_label = next(
-                t["label"] for t in LADDER_TRANCHES
-                if t["tranche"] == tranche["tranche"] - 1
+                (t["label"] for t in LADDER_TRANCHES
+                 if t["tranche"] == tranche["tranche"] - 1),
+                None  # safe fallback if config ever has gaps in tranche numbers
             )
-            if prev_label not in open_labels:
+            if prev_label is None or prev_label not in open_labels:
                 continue
         return tranche
     return None
@@ -328,6 +469,12 @@ def run_swing_engine(df_daily, total_penalty, ticker="SOXL"):
         active_tranche = get_active_ladder_tranche(rsi)
         if active_tranche is None:
             print(f"   [{ticker}] PATH A RSI {rsi:.1f} - all qualifying tranches OPEN")
+            if ticker == "SOXL":
+                log_soxl_rejection(
+                    rsi=rsi, price=price, atr=atr,
+                    ema_21=ema_21, ema_50=ema_50, ema_200=ema_200,
+                    path="A", failed_reason="all_tranches_already_open"
+                )
         else:
             t_num   = active_tranche["tranche"]
             t_mult  = active_tranche["target_mult"]
@@ -399,6 +546,25 @@ def run_swing_engine(df_daily, total_penalty, ticker="SOXL"):
             "position_size_pct": TIER1_POSITION_PCT,
             "reasons": reasons, "mode": "SWING",
         }
+
+    # Log Path D near-miss — RSI was in range but other conditions failed
+    # Path D requires: price < ema_21, price < ema_50, 35 <= rsi < 45,
+    #                  higher low, green close, RSI turning up
+    prev_rsi_d = float(prev["RSI"]) if not pd.isna(prev.get("RSI", float("nan"))) else rsi
+    if 35 <= rsi < 45 and ticker == "SOXL":
+        failed_d = []
+        if not (price < ema_21):   failed_d.append(f"price ${price:.2f} above 21 EMA ${ema_21:.2f}")
+        if not (price < ema_50):   failed_d.append(f"price ${price:.2f} above 50 EMA ${ema_50:.2f}")
+        if not (bar_low > float(prev["Low"])): failed_d.append("no higher low")
+        if not (bar_close > bar_open):         failed_d.append("red bar")
+        if not (rsi > prev_rsi_d):             failed_d.append(f"RSI not turning up ({prev_rsi_d:.1f}→{rsi:.1f})")
+        if failed_d:
+            log_soxl_rejection(
+                rsi=rsi, price=price, atr=atr,
+                ema_21=ema_21, ema_50=ema_50, ema_200=ema_200,
+                path="D", failed_reason="path_d_conditions_failed",
+                extra={"failed": failed_d}
+            )
 
     # ── PATH E - 21 EMA BOUNCE (TIER 2) ──────────────────────────────────
     # RSI ceiling 50 (backtest confirmed no edge above 50 on SOXL).
@@ -492,6 +658,14 @@ def validate_risk(signal):
     if actual_pct > dynamic_max_stop:
         print(f"   [SOXL] Stop too wide ({actual_pct*100:.1f}% > "
               f"{dynamic_max_stop*100:.1f}%). Rejected.")
+        log_soxl_rejection(
+            rsi=signal.get("rsi"), price=price, atr=atr,
+            ema_21=signal.get("ema_21"), ema_50=signal.get("ema_50"),
+            ema_200=signal.get("ema_200"),
+            path=signal.get("path"), failed_reason="risk_stop_too_wide",
+            extra={"actual_stop_pct": round(actual_pct * 100, 2),
+                   "dynamic_max_stop_pct": round(dynamic_max_stop * 100, 2)}
+        )
         return None
 
     risk = price - stop_loss
@@ -501,6 +675,14 @@ def validate_risk(signal):
     structural_rr = round((target - price) / risk, 2)
     if structural_rr < MIN_RR_RATIO:
         print(f"   [SOXL] R/R {structural_rr:.2f} below minimum. Rejected.")
+        log_soxl_rejection(
+            rsi=signal.get("rsi"), price=price, atr=atr,
+            ema_21=signal.get("ema_21"), ema_50=signal.get("ema_50"),
+            ema_200=signal.get("ema_200"),
+            path=signal.get("path"), failed_reason="risk_rr_too_low",
+            extra={"structural_rr": structural_rr,
+                   "min_rr_required": MIN_RR_RATIO}
+        )
         return None
 
     signal["rr_ratio"] = structural_rr
@@ -534,6 +716,68 @@ def calculate_position_size(score, threshold, price, atr, tier=1):
 # =============================================================================
 #  SECTION 6 - TRADE LOG (PIECE 2 - OUTCOME TRACKER)
 # =============================================================================
+
+def log_soxl_rejection(rsi, price, atr, failed_reason,
+                       ema_21=None, ema_50=None, ema_200=None,
+                       path=None, extra=None):
+    """
+    Logs every SOXL swing signal rejection to soxl_gate_blocks.json.
+
+    Unlike SOXL intraday which fires every 15 min, the swing bot only
+    runs 3 times per day near close — so each entry represents a
+    daily bar evaluation, not a 15-min bar.
+
+    Key fields for monthly review:
+      rsi_gap_to_path_a:  how far RSI is from the < 40 Path A threshold
+      rsi_gap_to_path_d:  how far RSI is from the < 45 Path D threshold
+      failed_reason:      why the signal was blocked
+
+    When rsi_gap_to_path_a shrinks toward 0 across consecutive days,
+    a Path A signal is approaching — useful leading indicator.
+    """
+    dry_run = globals().get("DRY_RUN", False)
+    if dry_run:
+        return
+    try:
+        tz  = pytz.timezone(TIMEZONE)
+        now = datetime.now(tz)
+
+        records = []
+        p = Path(SOXL_GATE_LOG_FILE)
+        if p.exists():
+            try:
+                records = json.loads(p.read_text())
+            except Exception:
+                records = []
+
+        record = {
+            "id":                  f"SOXL_REJ_{now.strftime('%Y%m%d_%H%M%S')}",
+            "date":                now.strftime("%Y-%m-%d"),
+            "run_time":            now.strftime("%H:%M:%S ET"),
+            "ticker":              "SOXL",
+            "price":               round(price, 2) if price else None,
+            "rsi":                 round(rsi, 1) if rsi is not None else None,
+            "atr":                 round(atr, 4) if atr else None,
+            "ema_21":              round(ema_21, 2) if ema_21 else None,
+            "ema_50":              round(ema_50, 2) if ema_50 else None,
+            "ema_200":             round(ema_200, 2) if ema_200 else None,
+            "path_attempted":      path,
+            "failed_reason":       failed_reason,
+            # Distance to Path A and D thresholds — tracks how close
+            # SOXL is to triggering the RSI Ladder or Path D reversal
+            "rsi_gap_to_path_a":   round(rsi - RSI_PATH_A, 1) if rsi is not None else None,
+            "rsi_gap_to_path_d":   round(rsi - 45, 1) if rsi is not None else None,
+            "extra":               extra or {},
+            # Monthly review fields
+            "price_5d_later":      None,
+            "price_10d_later":     None,
+            "notes":               None,
+        }
+        records.append(record)
+        p.write_text(json.dumps(records, indent=2))
+    except Exception as e:
+        print(f"   SOXL rejection log error: {e}")
+
 
 def load_trade_log():
     try:
@@ -1109,10 +1353,12 @@ def check_market():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SOXL Alert Bot v1.0")
-    parser.add_argument("--force",   action="store_true",
+    parser.add_argument("--force",     action="store_true",
                         help="Bypass entry window gate (testing)")
-    parser.add_argument("--dry-run", action="store_true",
+    parser.add_argument("--dry-run",   action="store_true",
                         help="Skip trade log dedup (testing)")
+    parser.add_argument("--reconcile", action="store_true",
+                        help="Run swing gate block reconciliation (fill 5d/10d prices)")
     args = parser.parse_args()
 
     DRY_RUN   = args.dry_run
@@ -1123,4 +1369,7 @@ if __name__ == "__main__":
     if FORCE_RUN:
         print("--force active - entry window bypassed")
 
-    check_market()
+    if args.reconcile:
+        reconcile_swing_gate_blocks()
+    else:
+        check_market()
