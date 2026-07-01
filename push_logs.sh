@@ -13,6 +13,7 @@ git config user.email "vps-stock-bot@noreply.github.com"
 # Stage all JSON trade logs
 git add soxl_intraday_trade_log.json \
         soxl_gate_blocks.json \
+        soxl_swing_gate_blocks.json \
         tqqq_gate_blocks.json \
         soxl_trade_log.json \
         trade_log.json \
