@@ -30,12 +30,12 @@ on:
     #   3:00pm + 3:20pm  | 19:00+19:20 | 20:00+20:20
 
     # EDT (March - November) — every 15 min, 10:00am to 3:20pm
-    - cron: '0,15,30,45 14-18 * * 1-5'   # 10:00am-2:45pm ET (EDT)
-    - cron: '0,20 19 * * 1-5'             # 3:00pm + 3:20pm ET (EDT)
+   # - cron: '0,15,30,45 14-18 * * 1-5'   # 10:00am-2:45pm ET (EDT)
+    #- cron: '0,20 19 * * 1-5'             # 3:00pm + 3:20pm ET (EDT)
 
     # EST (November - March) — every 15 min, 10:00am to 3:20pm
-    - cron: '0,15,30,45 15-19 * * 1-5'   # 10:00am-2:45pm ET (EST)
-    - cron: '0,20 20 * * 1-5'             # 3:00pm + 3:20pm ET (EST)
+   # - cron: '0,15,30,45 15-19 * * 1-5'   # 10:00am-2:45pm ET (EST)
+    #- cron: '0,20 20 * * 1-5'             # 3:00pm + 3:20pm ET (EST)
 
   workflow_dispatch:
     inputs:
