@@ -1656,7 +1656,8 @@ def reconcile_gate_blocks():
 
             # ── MFE Walk-Forward Simulation ───────────────────────────────────
             forward_bars         = today_bars[today_bars.index > bar_dt]
-            mfe_pct              = 0.0
+            mfe_pct              = 0.0          # max favorable excursion %
+            mae_pct              = 0.0          # max adverse excursion % (negative value)
             simulated_outcome    = "TIME_STOP"
             simulated_exit_price = round(price_eod, 2)
             simulated_exit_time  = eod_time
@@ -1673,10 +1674,15 @@ def reconcile_gate_blocks():
                 if price_30min_later is None and bar_time_fwd >= target_dt:
                     price_30min_later = round(bar_close_fwd, 2)
 
-                # Update MFE — highest % gain seen so far
+                # Update MFE — highest % gain seen so far (stops updating after stop hit)
                 gain = (bar_high - bar_close) / bar_close * 100
                 if gain > mfe_pct:
                     mfe_pct = gain
+
+                # Update MAE — deepest % loss seen so far (stops updating after target hit)
+                loss = (bar_low - bar_close) / bar_close * 100
+                if loss < mae_pct:
+                    mae_pct = loss
 
                 # Time stop gate (3:35pm ET)
                 is_time_stop = (
@@ -1685,19 +1691,24 @@ def reconcile_gate_blocks():
                      bar_time_fwd.minute >= EXIT_MINUTE)
                 )
 
-                # Target takes priority over stop on same bar (optimistic)
-                if bar_high >= take_profit:
-                    simulated_outcome    = "WON"
-                    simulated_exit_price = round(take_profit, 2)
-                    simulated_exit_time  = bar_time_fwd.strftime("%I:%M %p ET")
-                    simulated_pnl_pct    = round((take_profit - bar_close) / bar_close * 100, 2)
-                    break
-                elif bar_low <= stop_loss:
+                # Conservative same-bar handling:
+                # If BOTH target and stop are hit on the same bar, stop wins.
+                # We cannot know which happened first on a 15-min bar, so
+                # assuming the stop was hit first is the conservative,
+                # realistic approach — prevents overstating win rate.
+                both_hit = bar_high >= take_profit and bar_low <= stop_loss
+                if both_hit or bar_low <= stop_loss:
                     # Stop hit — MFE locked here, no more updates after this
                     simulated_outcome    = "LOST"
                     simulated_exit_price = round(stop_loss, 2)
                     simulated_exit_time  = bar_time_fwd.strftime("%I:%M %p ET")
                     simulated_pnl_pct    = round((stop_loss - bar_close) / bar_close * 100, 2)
+                    break
+                elif bar_high >= take_profit:
+                    simulated_outcome    = "WON"
+                    simulated_exit_price = round(take_profit, 2)
+                    simulated_exit_time  = bar_time_fwd.strftime("%I:%M %p ET")
+                    simulated_pnl_pct    = round((take_profit - bar_close) / bar_close * 100, 2)
                     break
                 elif is_time_stop:
                     simulated_outcome    = "TIME_STOP"
@@ -1715,6 +1726,7 @@ def reconcile_gate_blocks():
             record["simulated_exit_time"]  = simulated_exit_time
             record["simulated_pnl_pct"]    = simulated_pnl_pct
             record["mfe_pct"]              = round(mfe_pct, 2)
+            record["mae_pct"]              = round(mae_pct, 2)
             record["mfe_vs_target_2pct"]   = mfe_pct >= 2.0
             record["mfe_vs_target_3pct"]   = mfe_pct >= 3.0
             record["mfe_vs_target_4pct"]   = mfe_pct >= 4.0
@@ -1726,7 +1738,7 @@ def reconcile_gate_blocks():
                     "🛑" if simulated_outcome == "LOST" else "⏰")
             print(f"   {icon} {bar_time_str}: {simulated_outcome} "
                   f"{simulated_pnl_pct:+.1f}% | MFE {mfe_pct:.1f}% | "
-                  f"exit {simulated_exit_time}")
+                  f"MAE {mae_pct:.1f}% | exit {simulated_exit_time}")
             reconciled_count += 1
 
         except Exception as e:
