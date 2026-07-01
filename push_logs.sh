@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================================================
 #  PUSH LOGS — commits VPS trade log JSON files to GitHub once daily
-#  Cron: 10 20 * * 1-5  /bin/bash /root/Stock-bot/push_logs.sh
-#  Runs at 4:10pm ET (after reconciliation at 4:05pm ET)
+#  Cron: 15 20 * * 1-5  /bin/bash /root/Stock-bot/push_logs.sh
+#  Runs at 4:15pm ET (after reconciliation at 4:05pm ET)
 # =============================================================================
 
 cd /root/Stock-bot || exit 1
@@ -29,9 +29,11 @@ fi
 # Commit the staged changes
 git commit -m "chore: daily trade log update $(date '+%Y-%m-%d') [skip ci]"
 
-# Pull remote changes using merge (not rebase) to avoid unstaged-changes error
-# --no-edit accepts the merge commit message automatically
-git pull --no-rebase --no-edit origin master >> /root/logs/git_sync.log 2>&1
+# Rebase local log commit on top of any remote changes.
+# Safe to use --rebase here because git add + git commit runs first,
+# leaving a clean working tree with no unstaged changes at pull time.
+# Avoids cluttering history with merge commits every single day.
+git pull --rebase origin master >> /root/logs/git_sync.log 2>&1
 
 # Push to GitHub
 git push origin master >> /root/logs/git_sync.log 2>&1
