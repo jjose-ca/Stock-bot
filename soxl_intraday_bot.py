@@ -1511,15 +1511,173 @@ def check_market():
 
 
 # =============================================================================
+#  SECTION 10 - NIGHTLY RECONCILIATION
+# =============================================================================
+
+def reconcile_gate_blocks():
+    """
+    Runs once after market close (4:05pm ET via cron --reconcile flag).
+    For every gate block entry from TODAY where price_30min_later is null:
+
+      1. Downloads today's complete 15-min bars from yfinance
+      2. Finds the bar 30 minutes after bar_time → fills price_30min_later
+      3. Finds the last bar of today's session → fills price_eod
+      4. Checks price_30min_later >= take_profit_est → fills would_have_won
+      5. Writes updated entries back to soxl_gate_blocks.json
+
+    Result: after running, every today's rejection entry has full outcome data.
+    push_logs.sh then commits this file to GitHub at 4:10pm ET.
+
+    Monthly review: open soxl_gate_blocks.json, look for patterns:
+      - Entries where would_have_won=True but volume blocked the signal
+        → evidence the volume threshold is too strict
+      - Entries where would_have_won=False
+        → evidence the filter correctly avoided a bad trade
+    """
+    et_tz = pytz.timezone(TIMEZONE)
+    today = datetime.now(et_tz).date()
+
+    print(f"\n{'='*60}")
+    print(f"  SOXL Gate Block Reconciliation — {today}")
+    print(f"{'='*60}\n")
+
+    # Load gate blocks
+    p = Path(GATE_LOG_FILE)
+    if not p.exists():
+        print("   No gate block log found — nothing to reconcile.")
+        return
+
+    try:
+        records = json.loads(p.read_text())
+    except Exception as e:
+        print(f"   Failed to load gate blocks: {e}")
+        return
+
+    # Filter to today's unreconciled entries
+    to_reconcile = [
+        r for r in records
+        if r.get("date") == str(today)
+        and r.get("price_30min_later") is None
+        and r.get("bar_time") not in (None, "?", "live (forming bar)")
+        and r.get("signal_type", "").endswith("_GATE") is False
+    ]
+
+    if not to_reconcile:
+        print("   No entries to reconcile for today.")
+        return
+
+    print(f"   Found {len(to_reconcile)} entries to reconcile...")
+
+    # Download today's complete 15-min bars — one call covers everything
+    try:
+        df = yf.download(
+            TICKER, period="2d", interval="15m",
+            auto_adjust=True, progress=False,
+        )
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.dropna(subset=["Close"], inplace=True)
+
+        # Convert to ET
+        if df.index.tz is None:
+            df.index = df.index.tz_localize("UTC").tz_convert(et_tz)
+        else:
+            df.index = df.index.tz_convert(et_tz)
+
+        # Filter to today's bars only
+        today_bars = df[df.index.date == today]
+        if today_bars.empty:
+            print("   No bars found for today — market may not have traded.")
+            return
+
+        # End of day price — last bar's close
+        price_eod = float(today_bars["Close"].iloc[-1])
+        eod_time  = today_bars.index[-1].strftime("%I:%M %p ET")
+        print(f"   EOD price: ${price_eod:.2f} (from {eod_time} bar)")
+
+    except Exception as e:
+        print(f"   Failed to download today's bars: {e}")
+        return
+
+    # Reconcile each entry
+    reconciled_count = 0
+    for record in records:
+        if record.get("date") != str(today):
+            continue
+        if record.get("price_30min_later") is not None:
+            continue
+        if record.get("bar_time") in (None, "?", "live (forming bar)"):
+            continue
+        if record.get("signal_type", "").endswith("_GATE"):
+            continue
+
+        try:
+            # Parse bar_time → find bar 30 min later
+            bar_time_str = record["bar_time"]  # e.g. "02:00 PM ET"
+            bar_dt = datetime.strptime(
+                f"{today} {bar_time_str.replace(' ET', '')}",
+                "%Y-%m-%d %I:%M %p"
+            ).replace(tzinfo=et_tz)
+
+            # 30 minutes later
+            target_dt = bar_dt + pd.Timedelta(minutes=30)
+
+            # Find the closest bar at or after target_dt in today's data
+            future_bars = today_bars[today_bars.index >= target_dt]
+            if future_bars.empty:
+                # Signal was too late in the day — use EOD price instead
+                price_30min = price_eod
+                print(f"   {bar_time_str}: no bar 30min later — using EOD ${price_eod:.2f}")
+            else:
+                price_30min = float(future_bars["Close"].iloc[0])
+                actual_time = future_bars.index[0].strftime("%I:%M %p ET")
+                print(f"   {bar_time_str}: +30min bar = {actual_time} → ${price_30min:.2f}")
+
+            # would_have_won: did price reach take_profit_est within 30 min?
+            take_profit = record.get("take_profit_est")
+            if take_profit is not None:
+                # Check if ANY bar between bar_time and +30min hit the target
+                window_bars = today_bars[
+                    (today_bars.index > bar_dt) &
+                    (today_bars.index <= target_dt)
+                ]
+                hit_target = any(
+                    float(bar["High"]) >= take_profit
+                    for _, bar in window_bars.iterrows()
+                ) if not window_bars.empty else False
+            else:
+                hit_target = None
+
+            # Update the record
+            record["price_30min_later"] = round(price_30min, 2)
+            record["price_eod"]         = round(price_eod, 2)
+            record["would_have_won"]    = hit_target
+            reconciled_count += 1
+
+        except Exception as e:
+            print(f"   Error reconciling {record.get('id', '?')}: {e}")
+            continue
+
+    # Save updated records
+    try:
+        p.write_text(json.dumps(records, indent=2))
+        print(f"\n   ✅ Reconciled {reconciled_count} entries → {GATE_LOG_FILE}")
+    except Exception as e:
+        print(f"   Failed to save gate blocks: {e}")
+
+
+# =============================================================================
 #  ENTRY POINT
 # =============================================================================
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SOXL Intraday Momentum Bot v1.0")
-    parser.add_argument("--force",   action="store_true",
+    parser.add_argument("--force",     action="store_true",
                         help="Bypass market hours gate (testing)")
-    parser.add_argument("--dry-run", action="store_true",
+    parser.add_argument("--dry-run",   action="store_true",
                         help="Skip trade log writes (testing)")
+    parser.add_argument("--reconcile", action="store_true",
+                        help="Run nightly gate block reconciliation (4:05pm ET)")
     args = parser.parse_args()
 
     DRY_RUN   = args.dry_run
@@ -1530,4 +1688,7 @@ if __name__ == "__main__":
     if FORCE_RUN:
         print("--force active — market hours gate bypassed")
 
-    check_market()
+    if args.reconcile:
+        reconcile_gate_blocks()
+    else:
+        check_market()
