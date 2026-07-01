@@ -115,6 +115,7 @@ EARNINGS_SCORE_PENALTY = 2
 # Trade log - persisted in repo, survives between GitHub Actions runs
 TRADE_LOG_FILE        = "soxl_trade_log.json"
 EARNINGS_CACHE_FILE   = "soxl_earnings_cache.json"
+SOXL_GATE_LOG_FILE    = "soxl_swing_gate_blocks.json"  # swing rejections — separate from intraday
 OUTCOME_CHECK_DAYS    = 12
 OUTCOME_DISCORD_DAILY = True
 
@@ -242,10 +243,11 @@ def get_active_ladder_tranche(rsi):
             continue
         if tranche["tranche"] > 1:
             prev_label = next(
-                t["label"] for t in LADDER_TRANCHES
-                if t["tranche"] == tranche["tranche"] - 1
+                (t["label"] for t in LADDER_TRANCHES
+                 if t["tranche"] == tranche["tranche"] - 1),
+                None  # safe fallback if config ever has gaps in tranche numbers
             )
-            if prev_label not in open_labels:
+            if prev_label is None or prev_label not in open_labels:
                 continue
         return tranche
     return None
@@ -328,6 +330,12 @@ def run_swing_engine(df_daily, total_penalty, ticker="SOXL"):
         active_tranche = get_active_ladder_tranche(rsi)
         if active_tranche is None:
             print(f"   [{ticker}] PATH A RSI {rsi:.1f} - all qualifying tranches OPEN")
+            if ticker == "SOXL":
+                log_soxl_rejection(
+                    rsi=rsi, price=price, atr=atr,
+                    ema_21=ema_21, ema_50=ema_50, ema_200=ema_200,
+                    path="A", failed_reason="all_tranches_already_open"
+                )
         else:
             t_num   = active_tranche["tranche"]
             t_mult  = active_tranche["target_mult"]
@@ -399,6 +407,25 @@ def run_swing_engine(df_daily, total_penalty, ticker="SOXL"):
             "position_size_pct": TIER1_POSITION_PCT,
             "reasons": reasons, "mode": "SWING",
         }
+
+    # Log Path D near-miss — RSI was in range but other conditions failed
+    # Path D requires: price < ema_21, price < ema_50, 35 <= rsi < 45,
+    #                  higher low, green close, RSI turning up
+    prev_rsi_d = float(prev["RSI"]) if not pd.isna(prev.get("RSI", float("nan"))) else rsi
+    if 35 <= rsi < 45 and ticker == "SOXL":
+        failed_d = []
+        if not (price < ema_21):   failed_d.append(f"price ${price:.2f} above 21 EMA ${ema_21:.2f}")
+        if not (price < ema_50):   failed_d.append(f"price ${price:.2f} above 50 EMA ${ema_50:.2f}")
+        if not (bar_low > float(prev["Low"])): failed_d.append("no higher low")
+        if not (bar_close > bar_open):         failed_d.append("red bar")
+        if not (rsi > prev_rsi_d):             failed_d.append(f"RSI not turning up ({prev_rsi_d:.1f}→{rsi:.1f})")
+        if failed_d:
+            log_soxl_rejection(
+                rsi=rsi, price=price, atr=atr,
+                ema_21=ema_21, ema_50=ema_50, ema_200=ema_200,
+                path="D", failed_reason="path_d_conditions_failed",
+                extra={"failed": failed_d}
+            )
 
     # ── PATH E - 21 EMA BOUNCE (TIER 2) ──────────────────────────────────
     # RSI ceiling 50 (backtest confirmed no edge above 50 on SOXL).
@@ -492,6 +519,14 @@ def validate_risk(signal):
     if actual_pct > dynamic_max_stop:
         print(f"   [SOXL] Stop too wide ({actual_pct*100:.1f}% > "
               f"{dynamic_max_stop*100:.1f}%). Rejected.")
+        log_soxl_rejection(
+            rsi=signal.get("rsi"), price=price, atr=atr,
+            ema_21=signal.get("ema_21"), ema_50=signal.get("ema_50"),
+            ema_200=signal.get("ema_200"),
+            path=signal.get("path"), failed_reason="risk_stop_too_wide",
+            extra={"actual_stop_pct": round(actual_pct * 100, 2),
+                   "dynamic_max_stop_pct": round(dynamic_max_stop * 100, 2)}
+        )
         return None
 
     risk = price - stop_loss
@@ -501,6 +536,14 @@ def validate_risk(signal):
     structural_rr = round((target - price) / risk, 2)
     if structural_rr < MIN_RR_RATIO:
         print(f"   [SOXL] R/R {structural_rr:.2f} below minimum. Rejected.")
+        log_soxl_rejection(
+            rsi=signal.get("rsi"), price=price, atr=atr,
+            ema_21=signal.get("ema_21"), ema_50=signal.get("ema_50"),
+            ema_200=signal.get("ema_200"),
+            path=signal.get("path"), failed_reason="risk_rr_too_low",
+            extra={"structural_rr": structural_rr,
+                   "min_rr_required": MIN_RR_RATIO}
+        )
         return None
 
     signal["rr_ratio"] = structural_rr
@@ -534,6 +577,68 @@ def calculate_position_size(score, threshold, price, atr, tier=1):
 # =============================================================================
 #  SECTION 6 - TRADE LOG (PIECE 2 - OUTCOME TRACKER)
 # =============================================================================
+
+def log_soxl_rejection(rsi, price, atr, failed_reason,
+                       ema_21=None, ema_50=None, ema_200=None,
+                       path=None, extra=None):
+    """
+    Logs every SOXL swing signal rejection to soxl_gate_blocks.json.
+
+    Unlike SOXL intraday which fires every 15 min, the swing bot only
+    runs 3 times per day near close — so each entry represents a
+    daily bar evaluation, not a 15-min bar.
+
+    Key fields for monthly review:
+      rsi_gap_to_path_a:  how far RSI is from the < 40 Path A threshold
+      rsi_gap_to_path_d:  how far RSI is from the < 45 Path D threshold
+      failed_reason:      why the signal was blocked
+
+    When rsi_gap_to_path_a shrinks toward 0 across consecutive days,
+    a Path A signal is approaching — useful leading indicator.
+    """
+    dry_run = globals().get("DRY_RUN", False)
+    if dry_run:
+        return
+    try:
+        tz  = pytz.timezone(TIMEZONE)
+        now = datetime.now(tz)
+
+        records = []
+        p = Path(SOXL_GATE_LOG_FILE)
+        if p.exists():
+            try:
+                records = json.loads(p.read_text())
+            except Exception:
+                records = []
+
+        record = {
+            "id":                  f"SOXL_REJ_{now.strftime('%Y%m%d_%H%M%S')}",
+            "date":                now.strftime("%Y-%m-%d"),
+            "run_time":            now.strftime("%H:%M:%S ET"),
+            "ticker":              "SOXL",
+            "price":               round(price, 2) if price else None,
+            "rsi":                 round(rsi, 1) if rsi is not None else None,
+            "atr":                 round(atr, 4) if atr else None,
+            "ema_21":              round(ema_21, 2) if ema_21 else None,
+            "ema_50":              round(ema_50, 2) if ema_50 else None,
+            "ema_200":             round(ema_200, 2) if ema_200 else None,
+            "path_attempted":      path,
+            "failed_reason":       failed_reason,
+            # Distance to Path A and D thresholds — tracks how close
+            # SOXL is to triggering the RSI Ladder or Path D reversal
+            "rsi_gap_to_path_a":   round(rsi - RSI_PATH_A, 1) if rsi is not None else None,
+            "rsi_gap_to_path_d":   round(rsi - 45, 1) if rsi is not None else None,
+            "extra":               extra or {},
+            # Monthly review fields
+            "price_5d_later":      None,
+            "price_10d_later":     None,
+            "notes":               None,
+        }
+        records.append(record)
+        p.write_text(json.dumps(records, indent=2))
+    except Exception as e:
+        print(f"   SOXL rejection log error: {e}")
+
 
 def load_trade_log():
     try:
