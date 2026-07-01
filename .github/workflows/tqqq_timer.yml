@@ -1,7 +1,7 @@
 name: Run TQQQ Bot
 
 on:
-  schedule:
+#  schedule:
     # All times target ET market hours. GitHub Actions cron runs in UTC.
     # DST is handled by running BOTH UTC offsets year-round — the bot's
     # internal market-hours gate (elapsed_minutes check) rejects any run
@@ -17,12 +17,12 @@ on:
 
     # Every 15 min, 9:30am-3:45pm ET
     #   EDT -> 13:30-19:45 UTC  |  EST -> 14:30-20:45 UTC
-    - cron: '30,45 13 * * 1-5'
-    - cron: '0,15,30,45 14-18 * * 1-5'
-    - cron: '0,15,30,45 19 * * 1-5'
-    - cron: '30,45 14 * * 1-5'
-    - cron: '0,15,30,45 15-19 * * 1-5'
-    - cron: '0,15,30,45 20 * * 1-5'
+# #   - cron: '30,45 13 * * 1-5'
+ #   - cron: '0,15,30,45 14-18 * * 1-5'
+   # - cron: '0,15,30,45 19 * * 1-5'
+    #- cron: '30,45 14 * * 1-5'
+   # - cron: '0,15,30,45 15-19 * * 1-5'
+    #- cron: '0,15,30,45 20 * * 1-5'
 
   workflow_dispatch:
     inputs:
