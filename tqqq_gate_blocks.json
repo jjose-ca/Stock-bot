@@ -44,5 +44,71 @@
     "price_5d_later": null,
     "price_10d_later": null,
     "notes": null
+  },
+  {
+    "id": "TQQQ_REJ_20260702_143003",
+    "date": "2026-07-02",
+    "run_time": "14:30:03 ET",
+    "ticker": "TQQQ",
+    "price": 72.9,
+    "rsi": 46.0,
+    "atr": 5.2618,
+    "trend_score": 1,
+    "momentum_score": 2,
+    "score": 3,
+    "threshold": 6,
+    "failed_reason": "score_below_threshold",
+    "rsi_gap_to_path_a": 11.0,
+    "rsi_gap_to_path_d": -4.0,
+    "extra": {
+      "penalty": 0
+    },
+    "price_5d_later": null,
+    "price_10d_later": null,
+    "notes": null
+  },
+  {
+    "id": "TQQQ_REJ_20260702_153003",
+    "date": "2026-07-02",
+    "run_time": "15:30:03 ET",
+    "ticker": "TQQQ",
+    "price": 72.42,
+    "rsi": 45.6,
+    "atr": 5.2618,
+    "trend_score": 1,
+    "momentum_score": 2,
+    "score": 3,
+    "threshold": 6,
+    "failed_reason": "score_below_threshold",
+    "rsi_gap_to_path_a": 10.6,
+    "rsi_gap_to_path_d": -4.4,
+    "extra": {
+      "penalty": 0
+    },
+    "price_5d_later": null,
+    "price_10d_later": null,
+    "notes": null
+  },
+  {
+    "id": "TQQQ_REJ_20260702_154703",
+    "date": "2026-07-02",
+    "run_time": "15:47:03 ET",
+    "ticker": "TQQQ",
+    "price": 72.59,
+    "rsi": 45.7,
+    "atr": 5.2618,
+    "trend_score": 1,
+    "momentum_score": 2,
+    "score": 3,
+    "threshold": 6,
+    "failed_reason": "score_below_threshold",
+    "rsi_gap_to_path_a": 10.7,
+    "rsi_gap_to_path_d": -4.3,
+    "extra": {
+      "penalty": 0
+    },
+    "price_5d_later": null,
+    "price_10d_later": null,
+    "notes": null
   }
 ]
