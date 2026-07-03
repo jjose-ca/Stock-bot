@@ -578,34 +578,27 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
         is_bullish      = price > ema_21
         high_52w        = float(df['High'].tail(252).max())
         near_52w_high   = price >= high_52w * 0.98
-        # Support anchor: use 200 EMA if available and below price, else fall back
-        # to 50 EMA, then 21 EMA. For TQQQ below all EMAs, use volatility stop.
-        if ema_200 is not None and price > ema_200:
-            support        = ema_200
-            support_source = "200 EMA"
-        elif price > ema_50:
-            support        = ema_50
-            support_source = "50 EMA"
-        elif price > ema_21:
-            support        = ema_21
-            support_source = "21 EMA"
-        else:
-            support        = entry_price   # volatility stop — TQQQ below all EMAs
-            support_source = "Volatility Stop (below all EMAs)"
-        stop_loss       = support - (atr * SWING_ATR_STOP_MULT)
-        if stop_loss >= entry_price:
-            stop_loss = entry_price - atr
-        take_profit = entry_price + (atr * SWING_ATR_TARGET_MULT)
-        rr_ratio = 0.0  # placeholder — validate_risk overwrites with ATR ratio (3.5/2.5=1.40)
+        # Fixed 15% stop — not ATR-anchored to support.
+        # During crash events (Apr 2025 tariff crash, Aug 2024 VIX spike) ATR
+        # explodes to $8-12, making ATR-based stops 20-25% wide and exceeding
+        # ABSOLUTE_MAX_STOP_PCT. This blocked RSI 23-25 entries — the highest-
+        # conviction setups. Fixed % stop gives consistent risk regardless of ATR.
+        # validate_risk is NOT called for Path A — it was designed for normal
+        # market conditions, not capitulation events where ATR is structurally high.
+        support        = entry_price   # informational only — not used for stop
+        support_source = "Fixed 15% Stop (Path A crash entry)"
+        stop_loss      = round(entry_price * (1 - ABSOLUTE_MAX_STOP_PCT), 2)
+        take_profit    = entry_price + (atr * SWING_ATR_TARGET_MULT)
+        rr_ratio       = 0.0  # placeholder — overwritten by build_final_signal
         reasons = [
             f"💎 Deep Oversold Bounce — RSI {rsi:.1f} (TQQQ Path A)",
-            f"📍 Support anchor: {support_source} ${support:.2f}",
+            f"🛡️ Stop: ${stop_loss:.2f} (fixed {ABSOLUTE_MAX_STOP_PCT*100:.0f}% — ATR too wide during crash)",
         ]
         if ema_200 is not None:
             ema200_rel = "above" if price > ema_200 else "below"
             reasons.append(f"📊 200 EMA ${ema_200:.2f} ({ema200_rel} — informational)")
         print(f"   [{ticker}] ✅ PATH A — Deep Oversold Bypass "
-              f"RSI={rsi:.1f} support={support_source} ${support:.2f}")
+              f"RSI={rsi:.1f} stop=${stop_loss:.2f} (fixed 15%)")
         return {
             "price": entry_price, "entry_price": entry_price,
             "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
@@ -620,6 +613,7 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
             "is_bullish": is_bullish, "near_52w_high": near_52w_high,
             "mode": "SWING", "reasons": reasons, "path": "A",
             "tier": 1, "hold_days": 10, "position_size_pct": TIER1_POSITION_PCT,
+            "skip_risk_validation": True,  # Path A: fixed stop, ATR-based validation not appropriate
             "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
         }
 
@@ -1809,7 +1803,7 @@ def send_setup_alert(ticker, currency, signal,
                         "value": (f"[TradingView](https://www.tradingview.com/chart/?symbol={ticker}) · "
                                   f"[Yahoo Finance](https://finance.yahoo.com/quote/{ticker})"),
                         "inline": False}],
-            "footer": {"text": f"TQQQ Alert Bot v6.2 | Path {path} | Tier {tier} | ATR: {signal.get('atr_source','—')}"},
+            "footer": {"text": f"TQQQ Alert Bot v6.3 | Path {path} | Tier {tier} | ATR: {signal.get('atr_source','—')}"},
         }],
     }
 
@@ -1876,7 +1870,7 @@ def check_market(mode: str, tickers_override: list | None = None):
     et_now = datetime.now(tz)
 
     print(f"\n{'='*60}")
-    print(f"  TQQQ Alert Bot v6.2 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
+    print(f"  TQQQ Alert Bot v6.3 — {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
     print(f"  Mode: {mode.upper()}")
     print(f"{'='*60}\n")
 
@@ -2112,10 +2106,11 @@ def check_market(mode: str, tickers_override: list | None = None):
             # if is_on_cooldown(ticker, final_signal["mode"]):
             #     continue
 
-            # Risk validation
-            final_signal = validate_risk(final_signal, ticker=ticker)
-            if final_signal is None:
-                continue
+            # Risk validation — skipped for Path A (fixed stop, crash conditions)
+            if not final_signal.get("skip_risk_validation", False):
+                final_signal = validate_risk(final_signal, ticker=ticker)
+                if final_signal is None:
+                    continue
 
             print(f"   📊 R/R {final_signal['rr_ratio']:.2f} | "
                   f"Stop ${final_signal['stop_loss']:.2f} | "
@@ -2519,7 +2514,7 @@ def check_live_sell_alerts():
             "title":       titled,
             "description": desc,
             "color":       color,
-            "footer":      {"text": "TQQQ Alert Bot v6.2 | Technical Sell Signal"},
+            "footer":      {"text": "TQQQ Alert Bot v6.3 | Technical Sell Signal"},
             "timestamp":   datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }]}
         _post_discord(payload)
@@ -2789,7 +2784,7 @@ def send_outcome_summary(resolved: list, bulk_data):
             "title":       "📈 Trade Outcome Tracker",
             "description": desc[:4096],
             "color":       5763719 if win_rate >= 50 else 15548997,
-            "footer":      {"text": f"TQQQ Alert Bot v6.2 | {len(trades)} total trades logged"},
+            "footer":      {"text": f"TQQQ Alert Bot v6.3 | {len(trades)} total trades logged"},
         }]}
         _post_discord(payload)
         print(f"   📊 Outcome summary sent ({len(open_tr)} open, {len(resolved)} resolved)")
@@ -2802,7 +2797,7 @@ def send_outcome_summary(resolved: list, bulk_data):
 # =============================================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="TQQQ Alert Bot v6.2")
+    parser = argparse.ArgumentParser(description="TQQQ Alert Bot v6.3")
     parser.add_argument('--mode',
         choices=['auto', 'premarket', 'swing'],
         default='auto',
