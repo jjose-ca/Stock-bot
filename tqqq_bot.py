@@ -1,26 +1,29 @@
 """
 =============================================================================
-  TQQQ ALERT BOT v6.2 — Manual Trading Edition
+  TQQQ ALERT BOT v6.3 — Tier 1 Only Edition
 =============================================================================
 
 WHAT THIS BOT DOES:
-  Scans TQQQ every 15 minutes during market hours (9:30am–4:00pm ET).
+  Scans TQQQ at 2:30pm, 3:30pm, 3:47pm ET on market days.
   Sends Discord buy alerts when signal conditions are met.
   Sends Discord sell alerts based on live technicals (RSI, EMA, MACD).
-  You execute all trades manually on IBKR — no orders are placed automatically.
-  Runs automatically via GitHub Actions — no server needed.
+  You execute all trades manually — no orders are placed automatically.
+  Runs on Servarica VPS (Ubuntu 22.04) via crontab.
 
 BUY SIGNAL LOGIC:
-  Tier 1 — High Conviction (deploy TIER1_POSITION_PCT = 10%)
-    Path A: RSI(14) < 35 — deep oversold bypass
+  Tier 1 only — High Conviction (deploy TIER1_POSITION_PCT = 10%)
+    Path A: RSI(14) < 35 — deep oversold bypass (~2-3x per year)
     Path D: Pivot low reversal (higher low + green close + RSI turning up)
 
-  Tier 2 — Medium Conviction (deploy TIER2_POSITION_PCT = 5%)
-    Path E: 21 EMA Bounce — price wicks 21 EMA and closes green, RSI 40–65
-    Path F: MACD Cross — MACD line crosses above signal line below zero
+  Tier 2 paths (B, E, F) DISABLED — backtested 3 years (Sep 2023 – Jul 2026):
+    - Path E: 0 wins in 27 signals at quality thresholds (RSI<50, vol>0.8x)
+    - Path B: 0 wins in 13 signals across 3 years
+    - Path F: 1 signal, insufficient data
+    - Structural R/R broken: avg loss -11.6% vs avg win +7.8% at 44% WR
+    - Decision: disabled 2026-07-03, retain code for future reference
 
   All paths: RSI and ATR calculated on daily bars.
-  Alerts fire every 15 min while conditions hold.
+  Alerts fire at each cron run while conditions hold.
   First alert labelled "NEW SIGNAL", subsequent ones "STILL ACTIVE".
 
 SELL SIGNAL LOGIC (price-agnostic — no entry price needed):
@@ -39,12 +42,11 @@ HOW TO RUN MANUALLY:
 ARCHITECTURE:
   Stage 1: Bulk daily data download — VTI (regime) + TQQQ (1 API call)
   Stage 2: Sell alert check — live price via yfinance fast_info
-  Stage 3: Buy signal scoring on daily bars
+  Stage 3: Buy signal scoring on daily bars (Tier 1 only)
   Stage 4: Outcome tracking — open trades checked against daily closes
 
 HOLD PERIODS:
   Tier 1: 10 trading days
-  Tier 2: 5 trading days
 =============================================================================
 """
 
@@ -102,25 +104,21 @@ TICKERS_CAD = []
 DISCORD_WEBHOOK_URL = os.getenv('DISCORD_URL')
 
 # =============================================================================
-#  TWO-TIER SIGNAL SYSTEM
+#  SIGNAL SYSTEM — TIER 1 ONLY (as of 2026-07-03)
 # =============================================================================
 #
 #  TIER 1 — HIGH CONVICTION (deploy more capital, ~2-3x per year)
 #    Path A: RSI(14) < 35 — deep oversold, multi-day selloff
-#    Path D: RSI 35–50 + pivot low confirmation
+#    Path D: RSI 35–50 + pivot low confirmation (higher low + green close)
 #    Expected win rate: ~75-80% | Hold: 10 days
 #
-#  TIER 2 — MEDIUM CONVICTION (deploy less capital, ~1x per week)
-#    Path E: EMA Bounce — price touches/wicks 21 EMA and closes green
-#    Path F: MACD Cross — MACD crosses above signal line below zero
-#    Expected win rate: ~55-65% | Hold: 5 days (shorter — less conviction)
-#
-#  Discord alert labels each tier clearly so you always know what you're
-#  acting on and can size accordingly.
+#  TIER 2 — DISABLED (backtested 2023-2026, no edge found)
+#    Path E: 0 signals at quality thresholds (RSI<50, vol>0.8x) in 3 years
+#    Path B: 0 wins in 13 signals across 3 years
+#    Path F: 1 signal only — insufficient data
 #
 #  POSITION SIZING GUIDE (set your own amounts in PORTFOLIO_VALUE):
 #    Tier 1 signal → deploy TIER1_POSITION_PCT % of portfolio
-#    Tier 2 signal → deploy TIER2_POSITION_PCT % of portfolio
 # =============================================================================
 
 TIER1_POSITION_PCT = 10.0   # % of portfolio per Tier 1 (high conviction) signal
@@ -685,131 +683,25 @@ def run_swing_engine(df_daily: pd.DataFrame, total_penalty: int, ticker: str = "
             "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
         }
 
-    # ── PATH E — EMA BOUNCE (TIER 2) ─────────────────────────────────────────
-    # Medium-conviction setup. Fires when TQQQ pulls back to its 21 EMA and
-    # shows a live rejection — price wicks down to the EMA but closes above it,
-    # signalling buyers defending the level in real time.
-    #
-    # Conditions:
-    #   - Today's low touches or comes within 1.5% of 21 EMA (the wick)
-    #   - Today closes ABOVE 21 EMA (rejection confirmed)
-    #   - Today closes green (close > open — buyers won intraday)
-    #   - RSI between 35–65: not deep oversold (Path A/D handles that),
-    #     not overbought (no mean-reversion edge above 65)
-    #   - Price above 50 EMA: broad uptrend intact, this is a pullback not collapse
-    #
-    # Stop: below the wick low (yesterday's low) — market drew the line there
-    # Target: TIER2_ATR_TARGET_MULT x ATR (wider than Tier 1 to compensate for
-    #         lower win rate — needs good R/R to be positive expectancy)
-    # Hold:  TIER2_HOLD_DAYS (5 days — shorter than Tier 1's 10 days)
-    ema_bounce_wick    = bar_low <= ema_21 * 1.015    # low touched within 1.5% of 21 EMA
-    ema_bounce_close   = bar_close > ema_21            # closed above 21 EMA
-    ema_bounce_green   = bar_close > bar_open          # green candle
-    ema_bounce_rsi     = 35 <= rsi <= 65               # not extreme
-    ema_bounce_trend   = price > ema_50                # above 50 EMA — uptrend intact
+    # ── PATH E — EMA BOUNCE (TIER 2) — DISABLED 2026-07-03 ──────────────────
+    # Backtested 3 years (Sep 2023 – Jul 2026): 0 signals at quality thresholds
+    # (RSI < 50, vol > 0.8x). Without filters: 27 signals, 0 wins, avg loss -11.6%
+    # vs avg expired +3.45%. Structural R/R broken for TQQQ. Retained for reference.
+    # if ema_bounce_wick and ema_bounce_close and ema_bounce_green and ema_bounce_rsi and ema_bounce_trend:
+    #     ... (disabled)
 
-    if ema_bounce_wick and ema_bounce_close and ema_bounce_green and ema_bounce_rsi and ema_bounce_trend:
-        support        = min(bar_low, float(prev['Low']))   # wick low as stop anchor
-        support_source = "21 EMA Bounce Wick (Path E)"
-        stop_loss      = support - (atr * TIER2_ATR_STOP_MULT)
-        if stop_loss >= entry_price:
-            stop_loss = entry_price - atr
-        take_profit    = entry_price + (atr * TIER2_ATR_TARGET_MULT)
-        rr_ratio       = 0.0
-        high_52w       = float(df['High'].tail(252).max())
-        near_52w_high  = price >= high_52w * 0.98
-        tier2_reasons  = [
-            f"📊 Path E — 21 EMA Bounce (TIER 2 Medium Conviction)",
-            f"🕯️ Wick to EMA ${ema_21:.2f} (Low ${bar_low:.2f}) + Green Close",
-            f"📈 Price above 50 EMA ${ema_50:.2f} — uptrend intact",
-            f"📉 RSI {rsi:.1f} — momentum neutral, room to run",
-            f"⚠️ TIER 2: Deploy {TIER2_POSITION_PCT:.0f}% of portfolio (smaller size)",
-        ]
-        print(f"   [{ticker}] ✅ PATH E — EMA Bounce (Tier 2) "
-              f"RSI={rsi:.1f} wick=${bar_low:.2f} ema21=${ema_21:.2f}")
-        return {
-            "price": entry_price, "entry_price": entry_price,
-            "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
-            "rr_ratio": round(rr_ratio, 2), "score": 4, "threshold": 6,
-            "trend_score": 2, "momentum_score": 2,
-            "oversold_bypass": False, "atr": round(atr, 4), "atr_source": "Daily",
-            "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
-            "ema_200": round(ema_200, 2) if ema_200 else None,
-            "rsi": round(rsi, 1), "bbl": round(bbl, 2) if bbl else None,
-            "bb_width": round(bb_width, 4), "macd_h": round(macd_h, 4),
-            "support": round(support, 2), "support_source": support_source,
-            "is_bullish": True, "near_52w_high": near_52w_high,
-            "mode": "SWING", "reasons": tier2_reasons, "path": "E",
-            "tier": 2, "hold_days": TIER2_HOLD_DAYS,
-            "position_size_pct": TIER2_POSITION_PCT,
-            "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
-        }
+    # ── PATH F — MACD CROSS (TIER 2) — DISABLED 2026-07-03 ──────────────────
+    # Only 1 signal in 3 years — insufficient data. Disabled alongside Path E/B
+    # as part of Tier 2 removal. Retained for reference.
+    # if macd_cross and both_below_zero and macd_rsi_ok and macd_trend_ok and macd_green:
+    #     ... (disabled)
+    # ── PATH B — ADDITIVE SCORING (TIER 2) — DISABLED 2026-07-03 ────────────
+    # Backtested 3 years: 0 wins in 13 signals. Disabled as part of Tier 2
+    # removal. Path A and D (Tier 1 only) are the active signal paths.
+    # Returning None here exits run_swing_engine — only Path A/D can fire.
+    return None
 
-    # ── PATH F — MACD CROSS (TIER 2) ─────────────────────────────────────────
-    # Medium-conviction setup. Fires when momentum shifts from negative to
-    # positive — MACD histogram crosses zero while both lines still below zero.
-    # The "below zero" requirement catches early recovery from a real pullback,
-    # not a late-stage cross that often precedes a fade.
-    #
-    # Conditions:
-    #   - MACD histogram crosses zero (was negative yesterday, positive today)
-    #   - Both MACD and signal line still below zero (early recovery)
-    #   - RSI < 60: not already overbought at the cross
-    #   - Price above 21 EMA (not 50 EMA): when MACD lines are below zero on
-    #     TQQQ, price has typically sold off below the 50 EMA — requiring
-    #     price > 50 EMA creates a near-impossible conflict. The 21 EMA reclaim
-    #     is the correct confirmation: it shows short-term momentum has turned
-    #     before the 50 EMA has even been reached.
-    #   - Today closes green: price confirming the momentum shift
-    #
-    # Stop: below prior day's low — natural support before the cross
-    # Target: TIER2_ATR_TARGET_MULT x ATR
-    macd_cross      = prev_mh < 0 and macd_h >= 0          # histogram just crossed zero
-    macd_line       = float(scored.get('MACD', macd_h))     # MACD line value
-    macd_signal_val = float(scored.get('MACDs', 0))         # signal line value
-    both_below_zero = macd_line < 0 and macd_signal_val < 0 # both still below zero (early recovery)
-    macd_rsi_ok     = rsi < 60                              # not overbought
-    macd_trend_ok   = price > ema_21                        # 21 EMA reclaimed (relaxed from 50 EMA)
-    macd_green      = bar_close > bar_open                  # green close confirming
-
-    if macd_cross and both_below_zero and macd_rsi_ok and macd_trend_ok and macd_green:
-        prev_low_f     = float(prev['Low'])
-        support        = prev_low_f
-        support_source = "Prior Day Low (Path F MACD Cross)"
-        stop_loss      = support - (atr * TIER2_ATR_STOP_MULT)
-        if stop_loss >= entry_price:
-            stop_loss = entry_price - atr
-        take_profit    = entry_price + (atr * TIER2_ATR_TARGET_MULT)
-        rr_ratio       = 0.0
-        high_52w       = float(df['High'].tail(252).max())
-        near_52w_high  = price >= high_52w * 0.98
-        tier2_reasons  = [
-            f"📊 Path F — MACD Cross (TIER 2 Medium Conviction)",
-            f"🔄 MACD Histogram crossed zero: {prev_mh:.3f} → {macd_h:.3f}",
-            f"📉 Both lines still below zero — early recovery, not late-stage",
-            f"📈 Price above 21 EMA ${ema_21:.2f} (momentum turning) | RSI {rsi:.1f}",
-            f"⚠️ TIER 2: Deploy {TIER2_POSITION_PCT:.0f}% of portfolio (smaller size)",
-        ]
-        print(f"   [{ticker}] ✅ PATH F — MACD Cross (Tier 2) "
-              f"RSI={rsi:.1f} macd_h={prev_mh:.3f}→{macd_h:.3f}")
-        return {
-            "price": entry_price, "entry_price": entry_price,
-            "stop_loss": round(stop_loss, 2), "take_profit": round(take_profit, 2),
-            "rr_ratio": round(rr_ratio, 2), "score": 4, "threshold": 6,
-            "trend_score": 2, "momentum_score": 2,
-            "oversold_bypass": False, "atr": round(atr, 4), "atr_source": "Daily",
-            "ema_21": round(ema_21, 2), "ema_50": round(ema_50, 2),
-            "ema_200": round(ema_200, 2) if ema_200 else None,
-            "rsi": round(rsi, 1), "bbl": round(bbl, 2) if bbl else None,
-            "bb_width": round(bb_width, 4), "macd_h": round(macd_h, 4),
-            "support": round(support, 2), "support_source": support_source,
-            "is_bullish": True, "near_52w_high": near_52w_high,
-            "mode": "SWING", "reasons": tier2_reasons, "path": "F",
-            "tier": 2, "hold_days": TIER2_HOLD_DAYS,
-            "position_size_pct": TIER2_POSITION_PCT,
-            "vwap": None, "gap_pct": 0.0, "bb_squeeze_warning": False,
-        }
-    # PATH B only — Path A (RSI<35 + above 200 EMA) bypasses this entirely.
+    # Dead code below retained for reference — unreachable after return above.
     trend_score     = 0
     oversold_bypass = False
     trend_cap       = SWING_CATEGORY_CAPS["trend"]
