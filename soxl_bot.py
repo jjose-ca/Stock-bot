@@ -1280,6 +1280,40 @@ def send_setup_alert(signal, elapsed_minutes, regime_bullish):
 #  SECTION 9 - MAIN EXECUTION LOOP
 # =============================================================================
 
+
+def is_market_open_today(et_now=None) -> bool:
+    """
+    Checks if the US market is open today using a live yfinance 1m probe.
+    Handles full holidays (July 4, Christmas) AND early closes (July 3, Black Friday).
+
+    Method mirrors soxl_intraday_bot.py — no external calendar library needed.
+    Returns False if:
+      - yfinance returns no intraday data (full holiday or weekend)
+      - Most recent bar is not from today (early close already happened)
+    Returns True if market has traded today and is within normal hours.
+    """
+    try:
+        tz   = pytz.timezone(TIMEZONE)
+        now  = et_now or datetime.now(tz)
+        pre  = yf.download("SPY", period="1d", interval="1m",
+                           auto_adjust=True, progress=False)
+        if isinstance(pre.columns, pd.MultiIndex):
+            pre.columns = pre.columns.get_level_values(0)
+        if pre.empty:
+            print("   🚫 No intraday data — market closed (holiday or weekend).")
+            return False
+        last = pre.index[-1]
+        if hasattr(last, "tz_convert"):
+            last = last.tz_convert(tz)
+        if last.date() < now.date():
+            print("   🚫 No today's data — market closed (holiday or early close).")
+            return False
+        return True
+    except Exception as e:
+        print(f"   ⚠️ Market open check failed ({e}) — proceeding anyway.")
+        return True   # fail open — better to run unnecessarily than miss a signal
+
+
 def check_market():
     tz     = pytz.timezone(TIMEZONE)
     et_now = datetime.now(tz)
@@ -1287,6 +1321,12 @@ def check_market():
     print(f"\n{'='*60}")
     print(f"  SOXL Alert Bot v1.1 RSI Ladder - {et_now.strftime('%A %b %d %Y %I:%M %p ET')}")
     print(f"{'='*60}\n")
+
+    # Holiday / early-close check — catches July 3, Good Friday, Thanksgiving etc.
+    force_override = globals().get("FORCE_RUN", False)
+    if not force_override and not is_market_open_today(et_now):
+        print("🚫 Market not open today (holiday or early close) — exiting.")
+        return
 
     mkt_open    = et_now.replace(hour=9, minute=30, second=0, microsecond=0)
     elapsed_min = max((et_now - mkt_open).total_seconds() / 60.0, 0.0)
