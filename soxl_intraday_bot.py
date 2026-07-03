@@ -142,20 +142,115 @@ def fetch_intraday(ticker=TICKER, days=7, et_now=None):  # 7 calendar days ensur
     Downloads 15-min bars for the last N days.
     Returns DataFrame with completed bars only — the currently-forming
     bar is excluded using snap-to-last-closed logic.
+
+    Uses retry logic to handle Yahoo Finance API publication lag.
+    After a 15-min bar closes, Yahoo can take 30-90 seconds to publish it.
+    Without retry, the bot may evaluate the prior bar instead of the latest one.
+
+    Retry logic:
+      Calculates the expected last bar timestamp from et_now
+      Polls yfinance every 5 seconds until the bar is published
+      Gives up after 60 seconds (12 retries × 5 seconds)
+      On timeout, proceeds with whatever data is available
     """
+    et_tz = pytz.timezone(TIMEZONE)
+    if et_now is None:
+        et_now = datetime.now(et_tz)
+
+    # Calculate the expected last closed bar timestamp
+    closed_minute = (et_now.minute // 15) * 15
+    expected_bar_time = et_now.replace(
+        minute=closed_minute, second=0, microsecond=0
+    )
+
+    # Quick holiday/weekend pre-check before entering the retry loop
+    # On US holidays and weekends, yfinance returns no intraday data for today
+    # Without this check, the retry loop burns 60 seconds waiting for bars
+    # that will never come (e.g. July 4th, Thanksgiving, Christmas)
     try:
-        df = yf.download(
-            ticker, period=f"{days}d", interval="15m",
-            auto_adjust=True, progress=False,
-        )
-        if df.empty:
+        _pre = yf.download(ticker, period="1d", interval="1m",
+                           auto_adjust=True, progress=False)
+        if isinstance(_pre.columns, pd.MultiIndex):
+            _pre.columns = _pre.columns.get_level_values(0)
+        if _pre.empty:
+            print("   No intraday data available — market likely closed (holiday or weekend).")
+            return None
+        # Check if the most recent bar is from today
+        _tz = pytz.timezone(TIMEZONE)
+        _last = _pre.index[-1]
+        if hasattr(_last, "tz_convert"):
+            _last = _last.tz_convert(_tz)
+        if _last.date() < (et_now or datetime.now(_tz)).date():
+            print("   No today's data — market closed (holiday or early close).")
+            return None
+    except Exception:
+        pass  # If pre-check fails, proceed to retry loop normally
+
+    # Retry loop — polls until Yahoo publishes the expected bar
+    MAX_RETRIES  = 12   # 12 × 5 seconds = 60 second max wait
+    WAIT_SECONDS = 5
+    df = None
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            raw = yf.download(
+                ticker, period=f"{days}d", interval="15m",
+                auto_adjust=True, progress=False,
+            )
+            if raw.empty:
+                time.sleep(WAIT_SECONDS)
+                continue
+
+            # Flatten MultiIndex if present
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.get_level_values(0)
+
+            raw.dropna(subset=["Close"], inplace=True)
+
+            # Convert to ET for bar timestamp comparison
+            if raw.index.tz is None:
+                raw.index = raw.index.tz_localize("UTC").tz_convert(et_tz)
+            else:
+                raw.index = raw.index.tz_convert(et_tz)
+
+            last_bar = raw.index[-1]
+
+            # Check if Yahoo has published the bar we expect
+            if last_bar >= expected_bar_time:
+                df = raw
+                if attempt > 0:
+                    print(f"   yfinance: got expected bar after {attempt * WAIT_SECONDS}s delay")
+                break
+            else:
+                if attempt == 0:
+                    print(f"   yfinance: waiting for {expected_bar_time.strftime('%I:%M %p')} bar "
+                          f"(latest: {last_bar.strftime('%I:%M %p')})...")
+                time.sleep(WAIT_SECONDS)
+
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(WAIT_SECONDS)
+            continue
+
+    if df is None:
+        # Timeout — use whatever data we have
+        print(f"   yfinance: bar publication timeout after {MAX_RETRIES * WAIT_SECONDS}s — using latest available")
+        try:
+            df = yf.download(ticker, period=f"{days}d", interval="15m",
+                             auto_adjust=True, progress=False)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df.dropna(subset=["Close"], inplace=True)
+            if df.index.tz is None:
+                df.index = df.index.tz_localize("UTC").tz_convert(et_tz)
+            else:
+                df.index = df.index.tz_convert(et_tz)
+        except Exception:
             return None
 
-        # Flatten MultiIndex if present
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
-        df.dropna(subset=["Close"], inplace=True)
+    try:
+        if df.empty:
+            return None
 
         # Convert index to ET for easier time comparisons
         et_tz = pytz.timezone(TIMEZONE)
@@ -165,23 +260,31 @@ def fetch_intraday(ticker=TICKER, days=7, et_now=None):  # 7 calendar days ensur
             df.index = df.index.tz_convert(et_tz)
 
         # Snap to last closed bar
-        # The currently-forming bar's close is unreliable mid-candle
+        # Snap to last CLOSED bar — exclude the currently forming bar
         # Uses the et_now passed from check_market() — ensures the header
-        # timestamp and bar-selection timestamp always agree on "now",
-        # avoiding any mismatch from separate datetime.now() calls
-        # at slightly different moments during a single run.
+        # timestamp and bar-selection timestamp always agree on "now".
+        #
+        # CRITICAL: use strictly < (not <=) to exclude the forming bar.
+        # When the retry loop waits for the 10:30am bar to appear,
+        # Yahoo labels it with timestamp 10:30. Using <= would include it
+        # as a "closed" bar when it has only been open for seconds.
+        # Using < drops it, leaving the 10:15am bar (fully finalized) last.
         if et_now is None:
             et_now = datetime.now(et_tz)
-        closed_minute = (et_now.minute // 15) * 15
-        last_closed   = et_now.replace(
-            minute=closed_minute, second=0, microsecond=0
+        current_block_minute = (et_now.minute // 15) * 15
+        current_block_time   = et_now.replace(
+            minute=current_block_minute, second=0, microsecond=0
         )
-        df = df[df.index <= last_closed]
+
+        # Strictly less than — drops the currently forming bar
+        df = df[df.index < current_block_time]
 
         if df.empty:
             return None
 
-        delay_min = (et_now - last_closed).total_seconds() / 60
+        # The actual last closed bar is one 15-min block before current
+        actual_last_closed = current_block_time - timedelta(minutes=15)
+        delay_min = (et_now - actual_last_closed).total_seconds() / 60
         bar_time  = df.index[-1].strftime("%I:%M %p ET")
         print(f"   Last closed bar: {bar_time} "
               f"(bot ran {delay_min:.0f} min after bar close)")
@@ -1779,3 +1882,15 @@ if __name__ == "__main__":
         reconcile_gate_blocks()
     else:
         check_market()
+
+    # Heartbeat — simple timestamp confirming bot ran successfully
+    # Useful for confirming the bot is alive on quiet days with no signals
+    # Check /root/logs/heartbeat.log to verify cron is firing correctly
+    if not args.dry_run and not args.reconcile:
+        try:
+            et_tz = pytz.timezone(TIMEZONE)
+            now   = datetime.now(et_tz)
+            with open("/root/logs/heartbeat.log", "a") as _hb:
+                _hb.write(f"[{now.strftime('%Y-%m-%d %H:%M:%S ET')}] soxl_intraday_bot OK\n")
+        except Exception:
+            pass  # heartbeat failure never blocks the bot
