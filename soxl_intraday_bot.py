@@ -428,6 +428,18 @@ def calculate_indicators(df):
     df["VOL_AVG"]   = df["Volume"].rolling(10).mean()
     df["VOL_RATIO"] = df["Volume"] / df["VOL_AVG"]
 
+    # CLV (Close Location Value) — measures buying vs selling pressure per bar
+    # +1.0 = closed at High (buyers dominated completely)
+    # -1.0 = closed at Low (sellers dominated completely)
+    #  0.0 = closed at midpoint (neutral)
+    # Used as a gate block log field for monthly review
+    # Backtest confirmed: CLV >= 0.7 adds no signal value on top of existing
+    # conditions, but useful for understanding near-miss quality
+    _range = df["High"] - df["Low"]
+    _range = _range.replace(0, float("nan"))
+    df["CLV"] = ((df["Close"] - df["Low"]) - (df["High"] - df["Close"])) / _range
+    df["CLV"] = df["CLV"].fillna(0.0)
+
     df.dropna(subset=["RSI", "EMA_9", "EMA_21", "VWAP"], inplace=True)
     return df
 
@@ -594,6 +606,7 @@ def check_pdh_signal(df, or_high, prev_high):
                     "vol_ratio":  round(vol_ratio, 2),
                     "ema_9":      round(ema_9, 2),
                     "ema_21":     round(ema_21, 2),
+                    "clv":        round(float(scored.get("CLV", 0.0)), 3),
                 }
             )
         return None
@@ -745,6 +758,7 @@ def check_orb_signal(df, or_high, or_low):
                     "body_pct":    round(candle_body_pct * 100, 2),
                     "ema_9":       round(ema_9, 2),
                     "ema_21":      round(ema_21, 2),
+                    "clv":        round(float(scored.get("CLV", 0.0)), 3),
                 }
             )
         return None
@@ -882,6 +896,7 @@ def check_vwap_signal(df):
                     "macd_h":        round(macd_h, 4),
                     "prev_macd_h":   round(prev_macd_h, 4),
                     "ema_9":         round(ema_9, 2),
+                    "clv":        round(float(scored.get("CLV", 0.0)), 3),
                 }
             )
         return None
