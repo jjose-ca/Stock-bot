@@ -23,9 +23,10 @@ import requests
 import os
 import sys
 import json
+import time
 import argparse
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
@@ -42,6 +43,12 @@ TRADE_START_H   = 10
 TRADE_START_M   = 0
 TRADE_END_H     = 15
 TRADE_END_M     = 30
+
+# Retry logic — matches soxl_intraday_bot.py's convention. After a bar's
+# window closes, yfinance/Yahoo can take 30-90 seconds to actually publish
+# it. Without retry, the bot may evaluate stale data one bar behind.
+MAX_RETRIES     = 12   # 12 x 5 seconds = 60 second max wait
+WAIT_SECONDS    = 5
 
 ET              = ZoneInfo("America/New_York")
 FLAG_DIR        = os.path.dirname(os.path.abspath(__file__))
@@ -302,27 +309,109 @@ def fetch_15min_bars() -> pd.DataFrame:
     Fetch 5 days of 1-min bars to seed EMA13 and time-of-day volume avg from
     open. True VWAP computed on 1-min data, then carried into 15-min bars.
     Only strictly completed 15-min bars are returned (no partial bar).
+
+    Uses retry logic to handle Yahoo Finance API publication lag, matching
+    soxl_intraday_bot.py's convention. After a 1-min bar's minute elapses,
+    Yahoo can take 30-90 seconds to actually publish it. Without retry, the
+    bot may evaluate slightly stale data — missing the most recent minute(s)
+    needed to correctly determine whether the latest 15-min bar has fully
+    closed yet.
+
+    Retry logic:
+      Calculates the expected last-closed-bar boundary from the current time
+      Polls yfinance every 5 seconds until fresh-enough data is published
+      Gives up after 60 seconds (12 retries x 5 seconds) and proceeds with
+      whatever data is available at that point (fail open, not fail closed)
+
+    A lightweight holiday/weekend pre-check runs first — on US market
+    holidays yfinance returns no fresh intraday data for today at all, and
+    without this check the retry loop would burn a full 60 seconds waiting
+    for bars that will never arrive (e.g. July 4th, Thanksgiving, Christmas).
     """
+    now = datetime.now(ET)
+    closed_minute = (now.minute // 15) * 15
+    # We fetch 1-MIN bars (unlike soxl_intraday_bot.py, which fetches native
+    # 15-min bars directly). closed_minute lands on the START of the just-
+    # opened 15-min window (e.g. 10:15 at 10:15:02) — a 1-min bar with that
+    # exact label cannot possibly exist yet, since that minute just started.
+    # We actually want to confirm the LAST 1-min bar of the previously-closed
+    # window has arrived (e.g. the 10:14 bar, which closed at 10:15:00) —
+    # hence the -1 minute adjustment below.
+    expected_bar_time = now.replace(minute=closed_minute, second=0, microsecond=0) - timedelta(minutes=1)
+
+    # ── Holiday/weekend pre-check ────────────────────────────────────────────
+    try:
+        _pre = yf.download(SYMBOL, period="1d", interval="1m",
+                           auto_adjust=True, progress=False)
+        if isinstance(_pre.columns, pd.MultiIndex):
+            _pre.columns = _pre.columns.get_level_values(0)
+        if _pre.empty:
+            log.warning("No intraday data available — market likely closed (holiday or weekend).")
+            return pd.DataFrame()
+        _last = _pre.index[-1]
+        if hasattr(_last, "tz_convert"):
+            _last = pd.Timestamp(_last).tz_convert(ET) if _last.tzinfo else pd.Timestamp(_last).tz_localize("UTC").tz_convert(ET)
+        if _last.date() < now.date():
+            log.warning("No today's data — market closed (holiday or early close).")
+            return pd.DataFrame()
+    except Exception:
+        pass  # If pre-check fails, proceed to retry loop normally
+
+    # ── Retry loop — polls until Yahoo publishes fresh enough 1-min data ─────
     log.info("Fetching TQQQ 1-min bars (5d) from yfinance...")
-    raw = yf.download(
-        SYMBOL,
-        period="5d",
-        interval="1m",
-        progress=False,
-        auto_adjust=True,
-    )
+    raw = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            candidate = yf.download(SYMBOL, period="5d", interval="1m",
+                                    progress=False, auto_adjust=True)
+            if candidate.empty:
+                time.sleep(WAIT_SECONDS)
+                continue
+
+            if isinstance(candidate.columns, pd.MultiIndex):
+                candidate.columns = candidate.columns.get_level_values(0)
+            candidate.index = pd.to_datetime(candidate.index)
+            if candidate.index.tz is None:
+                candidate.index = candidate.index.tz_localize("UTC")
+            candidate.index = candidate.index.tz_convert(ET)
+
+            last_bar = candidate.index[-1]
+            if last_bar >= expected_bar_time:
+                raw = candidate
+                if attempt > 0:
+                    log.info(f"yfinance: got expected bar after {attempt * WAIT_SECONDS}s delay")
+                break
+            else:
+                if attempt == 0:
+                    log.info(f"yfinance: waiting for {expected_bar_time.strftime('%I:%M %p')} bar "
+                             f"(latest: {last_bar.strftime('%I:%M %p')})...")
+                time.sleep(WAIT_SECONDS)
+        except Exception:
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(WAIT_SECONDS)
+            continue
+
+    if raw is None:
+        # Timeout — proceed with whatever's available rather than blocking entirely
+        log.warning(f"yfinance: bar publication timeout after {MAX_RETRIES * WAIT_SECONDS}s "
+                    f"— using latest available data")
+        try:
+            raw = yf.download(SYMBOL, period="5d", interval="1m",
+                              progress=False, auto_adjust=True)
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.get_level_values(0)
+            raw.index = pd.to_datetime(raw.index)
+            if raw.index.tz is None:
+                raw.index = raw.index.tz_localize("UTC")
+            raw.index = raw.index.tz_convert(ET)
+        except Exception:
+            log.warning("yfinance returned no usable data after timeout fallback.")
+            return pd.DataFrame()
 
     if raw.empty:
         log.warning("yfinance returned empty dataframe.")
         return pd.DataFrame()
 
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
-
-    raw.index = pd.to_datetime(raw.index)
-    if raw.index.tz is None:
-        raw.index = raw.index.tz_localize("UTC")
-    raw.index = raw.index.tz_convert(ET)
     raw.columns = [c.lower() for c in raw.columns]
 
     raw = raw.between_time("09:30", "15:59")
