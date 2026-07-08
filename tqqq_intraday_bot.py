@@ -46,6 +46,7 @@ TRADE_END_M     = 30
 ET              = ZoneInfo("America/New_York")
 FLAG_DIR        = os.path.dirname(os.path.abspath(__file__))
 TRADE_LOG_PATH  = os.path.join(FLAG_DIR, "tqqq_intraday_trade_log.json")
+HEARTBEAT_PATH  = "/root/logs/heartbeat.log"
 
 # ── LOGGING ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -58,6 +59,22 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger(__name__)
+
+
+def write_heartbeat():
+    """
+    Append a single OK line to the shared heartbeat.log, matching the exact
+    convention used by soxl_intraday_bot.py — check /root/logs/heartbeat.log
+    to verify cron is firing correctly. Only called on successful completion
+    of a normal (non-reconcile) run; silently swallowed on failure since a
+    missing/failed write here shouldn't ever break the bot itself.
+    """
+    now = datetime.now(ET)
+    try:
+        with open(HEARTBEAT_PATH, "a") as _hb:
+            _hb.write(f"[{now.strftime('%Y-%m-%d %H:%M:%S ET')}] tqqq_intraday_bot OK\n")
+    except Exception:
+        pass
 
 
 # ── TRADE LOG HELPERS ─────────────────────────────────────────────────────────
@@ -530,31 +547,51 @@ def send_reconcile_summary_to_discord():
 def main():
     log.info(f"-- TQQQ Intraday Bot: {datetime.now(ET).strftime('%Y-%m-%d %H:%M ET')} --")
 
-    if not is_market_day():
-        log.info("Weekend — skipping.")
-        return
+    # Heartbeat convention matches soxl_intraday_bot.py: written once per
+    # normal (non-reconcile) run, on successful completion of the checks
+    # below — regardless of whether a signal fired. A stale heartbeat.log
+    # (no new entries during market hours) is itself the "something's
+    # wrong" signal, checked separately from the Discord crash alert below.
+    try:
+        if not is_market_day():
+            log.info("Weekend — skipping.")
+            write_heartbeat()
+            return
 
-    if not in_trading_window():
-        log.info("Outside trading window (10:00-15:30 ET) — skipping.")
-        return
+        if not in_trading_window():
+            log.info("Outside trading window (10:00-15:30 ET) — skipping.")
+            write_heartbeat()
+            return
 
-    df = fetch_15min_bars()
-    if df.empty:
-        log.info("No data — market may be closed or holiday.")
-        return
+        df = fetch_15min_bars()
+        if df.empty:
+            log.warning("No data — market may be closed, holiday, or yfinance issue.")
+            write_heartbeat()
+            return
 
-    df = add_indicators(df)
-    signal = check_signal(df)
+        df = add_indicators(df)
+        signal = check_signal(df)
 
-    if signal is None:
-        log.info("No signal this bar.")
-        return
+        if signal is None:
+            log.info("No signal this bar.")
+        else:
+            prior_count = signals_today_count()
+            signal_number = prior_count + 1
+            send_discord_alert(signal, signal_number=signal_number)
+            append_signal_to_log(signal, signal_number=signal_number)
+            log.info(f"Done. Signal #{signal_number} today.")
 
-    prior_count = signals_today_count()
-    signal_number = prior_count + 1
-    send_discord_alert(signal, signal_number=signal_number)
-    append_signal_to_log(signal, signal_number=signal_number)
-    log.info(f"Done. Signal #{signal_number} today.")
+        write_heartbeat()
+
+    except Exception as e:
+        log.error(f"UNHANDLED EXCEPTION in main(): {e}", exc_info=True)
+        alert_msg = f"[ERROR] TQQQ Intraday Bot crashed: {e}\nCheck tqqq_intraday_bot.log for full traceback."
+        if DISCORD_WEBHOOK:
+            try:
+                requests.post(DISCORD_WEBHOOK, json={"content": alert_msg}, timeout=10)
+            except Exception:
+                pass  # don't let a failed alert mask the original crash
+        sys.exit(1)  # handled here — don't let it bubble up and double-alert
 
 
 if __name__ == "__main__":
@@ -579,11 +616,22 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.reconcile:
-        reconcile(target_date=args.date)
-        if args.notify:
-            send_reconcile_summary_to_discord()
-    elif args.summary:
-        print_summary()
-    else:
-        main()
+    try:
+        if args.reconcile:
+            reconcile(target_date=args.date)
+            if args.notify:
+                send_reconcile_summary_to_discord()
+        elif args.summary:
+            print_summary()
+        else:
+            main()  # main() has its own internal try/except + heartbeat
+
+    except Exception as e:
+        log.error(f"UNHANDLED EXCEPTION: {e}", exc_info=True)
+        alert_msg = f"[ERROR] TQQQ Intraday Bot crashed: {e}\nCheck tqqq_intraday_bot.log for full traceback."
+        if DISCORD_WEBHOOK:
+            try:
+                requests.post(DISCORD_WEBHOOK, json={"content": alert_msg}, timeout=10)
+            except Exception:
+                pass
+        sys.exit(1)
