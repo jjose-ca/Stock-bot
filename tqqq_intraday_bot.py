@@ -131,6 +131,10 @@ def append_signal_to_log(signal: dict, signal_number: int = 1):
         "prev_low":          signal["prev_low"],
         "prev_vwap":         signal["prev_vwap"],
         "prev_ema9":         signal["prev_ema9"],
+        "ema_spread_cur":     signal["ema_spread_cur"],      # logged silently — not on live alert
+        "ema_spread_prev":    signal["ema_spread_prev"],     # (see check_signal for reasoning)
+        "momentum_note":      signal["momentum_note"],
+        "vwap_extension_pct": signal["vwap_extension_pct"],  # shown on live alert
         "alert_sent_at":     datetime.now(ET).isoformat(),
         # ── Filled in automatically by --reconcile ──────────────────────────
         "reconciled":        False,
@@ -195,7 +199,13 @@ def reconcile(target_date: str = None):
         entry_after = signal_ts + pd.Timedelta(minutes=15)  # signal bar closes here
 
         day_bars = raw[raw.index.date == signal_ts.date()]
-        future = day_bars[day_bars.index > entry_after]
+        # Include the bar labeled exactly entry_after itself — that bar
+        # (e.g. the 1-min bar labeled 10:30) covers the very first minute
+        # the trade is actually open, and its high/low must be checked for
+        # target/stop just like every subsequent bar. Strict '>' here would
+        # skip that first minute entirely (caught during review — same
+        # off-by-one class of bug as check_earlier_signals_status below).
+        future = day_bars[day_bars.index >= entry_after]
 
         if future.empty:
             log.info(f"No 1-min data available yet for signal @ {record['bar_time']} "
@@ -467,6 +477,64 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── SIGNAL CHECK ──────────────────────────────────────────────────────────────
 
+def check_earlier_signals_status(df: pd.DataFrame) -> list:
+    """
+    For any signal(s) already fired today, determine their current live
+    status using the 15-min df already fetched for this run (no extra API
+    call). This is a lightweight, same-day-only estimate — the authoritative
+    outcome still comes from --reconcile at 4:30pm using 1-min data. Here we
+    only need "is it still open, or has it likely hit target/stop already"
+    to give context on a new alert, not a precise fill price.
+
+    Returns a list of dicts: {bar_time, status, detail}
+    """
+    trades  = load_trade_log()
+    today   = date.today().isoformat()
+    todays  = [t for t in trades if t["date"] == today]
+    results = []
+
+    for t in todays:
+        entry_price = t["alert_price"]
+        tp, sl      = t["target"], t["stop"]
+        signal_ts   = pd.Timestamp(t["signal_bar_ts"])
+        entry_after = signal_ts + pd.Timedelta(minutes=15)
+
+        # Include the 15-min bar labeled exactly entry_after itself — that
+        # bar (e.g. labeled 10:30) covers 10:30-10:45, which is when the
+        # trade actually enters and starts being exposed to target/stop.
+        # Strict '>' would skip this first 15-min window entirely (caught
+        # during review — same off-by-one class of bug as reconcile() above).
+        future = df[df.index >= entry_after]
+        if future.empty:
+            results.append({"bar_time": t["bar_time"], "status": "OPEN",
+                            "detail": "no bars yet since entry"})
+            continue
+
+        hit_target = (future["high"] >= tp).any()
+        hit_stop   = (future["low"]  <= sl).any()
+
+        if hit_target and hit_stop:
+            # Both touched at some point across available 15-min bars —
+            # can't tell which came first at this resolution; flag as
+            # ambiguous rather than guess. --reconcile resolves this
+            # precisely later using 1-min data.
+            results.append({"bar_time": t["bar_time"], "status": "LIKELY CLOSED",
+                            "detail": "both target and stop touched — see reconcile for exact outcome"})
+        elif hit_target:
+            results.append({"bar_time": t["bar_time"], "status": "CLOSED",
+                            "detail": f"hit target ${tp}"})
+        elif hit_stop:
+            results.append({"bar_time": t["bar_time"], "status": "CLOSED",
+                            "detail": f"hit stop ${sl}"})
+        else:
+            last_price = float(future["close"].iloc[-1])
+            unrealized = round(last_price - entry_price, 2)
+            results.append({"bar_time": t["bar_time"], "status": "OPEN",
+                            "detail": f"currently ${last_price:.2f} ({unrealized:+.2f} unrealized)"})
+
+    return results
+
+
 def check_signal(df: pd.DataFrame) -> dict | None:
     """
     Check the last completed 15-min bar for a momentum pullback signal.
@@ -536,33 +604,85 @@ def check_signal(df: pd.DataFrame) -> dict | None:
 
     pullback_src = "VWAP + EMA9" if (near_vwap and near_ema) else ("VWAP" if near_vwap else "EMA9")
 
+    # ── Momentum trend: EMA spread on current bar vs prior bar ─────────────────
+    # Logged silently to the trade log for future analysis — NOT shown on the
+    # live Discord alert. Decided against surfacing this live: unlike VWAP
+    # extension below, it doesn't answer a decision that's actually come up
+    # in practice, and there's no backtest evidence trend-of-spread (as
+    # opposed to spread threshold, which was tested) predicts anything. Kept
+    # here so --summary can check later whether it correlates with outcomes
+    # once enough live signals accumulate.
+    cur_spread  = float(cur["ema_fast"])  - float(cur["ema_slow"])
+    prev_spread = float(prev["ema_fast"]) - float(prev["ema_slow"])
+    if cur_spread > prev_spread:
+        momentum_note = "Accelerating (spread widening)"
+    elif cur_spread < prev_spread:
+        momentum_note = "Decelerating (spread narrowing)"
+    else:
+        momentum_note = "Steady (spread unchanged)"
+
+    # ── VWAP extension: how far price has stretched from the session anchor ──
+    # Shown live on the alert. Not a quality signal (every valid setup is
+    # positive, by definition of condition c1) — a stretch/risk gauge: small
+    # extension = fresh move, more room before mean-reversion pressure;
+    # large extension = already-stretched, higher odds of entering late.
+    # No backtested threshold exists yet for this specific strategy — shown
+    # as context for judgment, not a filter.
+    vwap_extension_pct = ((float(cur["close"]) - float(cur["vwap"])) / float(cur["vwap"])) * 100
+
     signal = {
-        "bar_time":     cur.name.strftime("%H:%M ET"),
-        "bar_ts":       cur.name.isoformat(),   # exact timestamp, used by reconcile
-        "close":        round(float(cur["close"]), 2),
-        "vwap":         round(float(cur["vwap"]), 2),
-        "ema_fast":     round(float(cur["ema_fast"]), 2),
-        "ema_slow":     round(float(cur["ema_slow"]), 2),
-        "volume":       int(cur["volume"]),
-        "vol_avg":      int(vol_avg),
-        "vol_mult":     round(cur["volume"] / vol_avg, 1),
-        "prev_low":     round(float(prev["low"]), 2),
-        "prev_vwap":    round(float(prev["vwap"]), 2),
-        "prev_ema9":    round(float(prev["ema_fast"]), 2),
-        "entry_zone":   round(float(entry_zone), 2),
-        "tp":           tp,
-        "sl":           sl,
-        "pullback_src": pullback_src,
+        "bar_time":       cur.name.strftime("%H:%M ET"),
+        "bar_ts":         cur.name.isoformat(),   # exact timestamp, used by reconcile
+        "close":          round(float(cur["close"]), 2),
+        "vwap":           round(float(cur["vwap"]), 2),
+        "ema_fast":       round(float(cur["ema_fast"]), 2),
+        "ema_slow":       round(float(cur["ema_slow"]), 2),
+        "volume":         int(cur["volume"]),
+        "vol_avg":        int(vol_avg),
+        "vol_mult":       round(cur["volume"] / vol_avg, 1),
+        "prev_low":       round(float(prev["low"]), 2),
+        "prev_vwap":      round(float(prev["vwap"]), 2),
+        "prev_ema9":      round(float(prev["ema_fast"]), 2),
+        "entry_zone":     round(float(entry_zone), 2),
+        "tp":             tp,
+        "sl":             sl,
+        "pullback_src":   pullback_src,
+        "ema_spread_cur":     round(cur_spread, 4),
+        "ema_spread_prev":    round(prev_spread, 4),
+        "momentum_note":      momentum_note,
+        "vwap_extension_pct": round(vwap_extension_pct, 3),
     }
 
-    log.info(f"SIGNAL at {signal['bar_time']} | entry ~${entry_zone:.2f} | TP ${tp} | SL ${sl}")
+    log.info(f"SIGNAL at {signal['bar_time']} | entry ~${entry_zone:.2f} | TP ${tp} | SL ${sl} | "
+             f"VWAP ext {vwap_extension_pct:.2f}% | {momentum_note}")
     return signal
 
 
 # ── DISCORD ALERT ─────────────────────────────────────────────────────────────
 
-def send_discord_alert(signal: dict, signal_number: int = 1):
+def send_discord_alert(signal: dict, signal_number: int = 1, earlier_status: list = None):
     label = f"[SIGNAL #{signal_number} TODAY]" if signal_number > 1 else "[SIGNAL]"
+
+    # ── Time remaining until forced exit ────────────────────────────────────
+    now    = datetime.now(ET)
+    cutoff = now.replace(hour=TRADE_END_H, minute=TRADE_END_M, second=0, microsecond=0)
+    remaining = cutoff - now
+    if remaining.total_seconds() > 0:
+        rem_h, rem_rem = divmod(int(remaining.total_seconds()), 3600)
+        rem_m = rem_rem // 60
+        time_left_note = f"{rem_h}h {rem_m}m until 3:30 PM ET cutoff"
+    else:
+        time_left_note = "past 3:30 PM ET cutoff"
+
+    # ── Earlier same-day signal status block (only if any exist) ───────────
+    earlier_block = ""
+    if earlier_status:
+        lines = [f"  {e['bar_time']}: {e['status']} — {e['detail']}" for e in earlier_status]
+        earlier_block = (
+            f"------------------------------\n"
+            f"Earlier signal(s) today:\n" + "\n".join(lines) + "\n"
+        )
+
     msg = (
         f"{label} TQQQ INTRADAY MOMENTUM\n"
         f"------------------------------\n"
@@ -575,6 +695,9 @@ def send_discord_alert(signal: dict, signal_number: int = 1):
         f"EMA{EMA_FAST}       : ${signal['ema_fast']}  [OK] above EMA{EMA_SLOW} (${signal['ema_slow']})\n"
         f"Volume     : {signal['vol_mult']}x avg  [OK]  ({signal['volume']:,} vs avg {signal['vol_avg']:,})\n"
         f"Pullback   : prev low ${signal['prev_low']} near {signal['pullback_src']}  [OK]\n"
+        f"VWAP ext   : {signal['vwap_extension_pct']:+.2f}% above session VWAP\n"
+        f"Time left  : {time_left_note}\n"
+        + earlier_block +
         f"------------------------------\n"
         + (f"Note: {signal_number - 1} earlier signal(s) fired today — use judgment.\n"
            if signal_number > 1 else "")
@@ -666,7 +789,8 @@ def main():
         else:
             prior_count = signals_today_count()
             signal_number = prior_count + 1
-            send_discord_alert(signal, signal_number=signal_number)
+            earlier_status = check_earlier_signals_status(df) if prior_count > 0 else None
+            send_discord_alert(signal, signal_number=signal_number, earlier_status=earlier_status)
             append_signal_to_log(signal, signal_number=signal_number)
             log.info(f"Done. Signal #{signal_number} today.")
 
