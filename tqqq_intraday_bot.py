@@ -37,7 +37,7 @@ TARGET_PROFIT   = 0.50
 STOP_LOSS       = 0.40
 EMA_FAST        = 9
 EMA_SLOW        = 13
-VOLUME_MULT     = 1.0
+VOLUME_MULT     = 1.2   # re-validated against corrected time-of-day volume methodology (was 1.0, tuned against a flawed rolling-20-bar baseline)
 PULLBACK_DIST   = 0.75   # widened from 0.50 — sweep showed tighter threshold was filtering out good setups
 TRADE_START_H   = 10
 TRADE_START_M   = 0
@@ -178,7 +178,7 @@ def reconcile(target_date: str = None):
 
     log.info(f"Reconciling {len(unreconciled)} trade(s)...")
 
-    raw = yf.download(SYMBOL, period="5d", interval="1m", progress=False, auto_adjust=True)
+    raw = yf.download(SYMBOL, period="7d", interval="1m", progress=False, auto_adjust=True)
     if raw.empty:
         log.warning("yfinance returned empty dataframe — cannot reconcile.")
         return
@@ -316,7 +316,7 @@ def is_market_day() -> bool:
 
 def fetch_15min_bars() -> pd.DataFrame:
     """
-    Fetch 5 days of 1-min bars to seed EMA13 and time-of-day volume avg from
+    Fetch 7 days (Yahoo's hard limit for 1-min data) of bars to seed EMA13 and time-of-day volume avg from
     open. True VWAP computed on 1-min data, then carried into 15-min bars.
     Only strictly completed 15-min bars are returned (no partial bar).
 
@@ -368,11 +368,11 @@ def fetch_15min_bars() -> pd.DataFrame:
         pass  # If pre-check fails, proceed to retry loop normally
 
     # ── Retry loop — polls until Yahoo publishes fresh enough 1-min data ─────
-    log.info("Fetching TQQQ 1-min bars (5d) from yfinance...")
+    log.info("Fetching TQQQ 1-min bars (7d) from yfinance...")
     raw = None
     for attempt in range(MAX_RETRIES):
         try:
-            candidate = yf.download(SYMBOL, period="5d", interval="1m",
+            candidate = yf.download(SYMBOL, period="7d", interval="1m",
                                     progress=False, auto_adjust=True)
             if candidate.empty:
                 time.sleep(WAIT_SECONDS)
@@ -406,7 +406,7 @@ def fetch_15min_bars() -> pd.DataFrame:
         log.warning(f"yfinance: bar publication timeout after {MAX_RETRIES * WAIT_SECONDS}s "
                     f"— using latest available data")
         try:
-            raw = yf.download(SYMBOL, period="5d", interval="1m",
+            raw = yf.download(SYMBOL, period="7d", interval="1m",
                               progress=False, auto_adjust=True)
             if isinstance(raw.columns, pd.MultiIndex):
                 raw.columns = raw.columns.get_level_values(0)
@@ -460,18 +460,39 @@ def fetch_15min_bars() -> pd.DataFrame:
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     VWAP already computed in fetch. Add EMAs and volume avg.
-    vol_avg uses time-of-day averaging across the 5-day window, so a
-    10am bar is compared against historical 10am bars, not yesterday
-    afternoon's slower volume.
+
+    vol_avg uses time-of-day averaging across PRIOR trading days only —
+    today's own bars are explicitly excluded from their own baseline.
+    Without this exclusion, today's own 11:15 bar would be one of only
+    ~4-6 data points feeding its own comparison average (self-referencing:
+    a high-volume bar inflates the very average it's being measured
+    against, and vice versa) — caught during review, since with a short
+    ~7-day window today's bar can carry 15-25% of the average's weight,
+    unlike the 1,128-day backtest dataset where any single day is
+    negligible. A 10am bar is compared against PRIOR days' 10am bars only,
+    never against itself or later bars from today.
     """
     df = df.copy()
     df["ema_fast"] = df["close"].ewm(span=EMA_FAST, adjust=False).mean()
     df["ema_slow"] = df["close"].ewm(span=EMA_SLOW, adjust=False).mean()
 
     df["time_of_day"] = df.index.time
-    time_vol_avg       = df.groupby("time_of_day")["volume"].mean()
-    df["vol_avg"]      = df["time_of_day"].map(time_vol_avg)
-    df = df.drop(columns=["time_of_day"])
+    df["cal_date"]     = df.index.date
+    today               = date.today()
+
+    prior_days_only     = df[df["cal_date"] < today]
+    if prior_days_only.empty:
+        # Extreme edge case: no prior-day data at all (e.g. very first day
+        # ever run, or a long VPS outage). Fall back to including today
+        # rather than leaving vol_avg entirely NaN and blocking all signals.
+        log.warning("No prior-day data available for volume baseline — "
+                    "falling back to same-day average (self-referencing).")
+        time_vol_avg = df.groupby("time_of_day")["volume"].mean()
+    else:
+        time_vol_avg = prior_days_only.groupby("time_of_day")["volume"].mean()
+
+    df["vol_avg"] = df["time_of_day"].map(time_vol_avg)
+    df = df.drop(columns=["time_of_day", "cal_date"])
     return df
 
 
