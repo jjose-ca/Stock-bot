@@ -53,6 +53,7 @@ WAIT_SECONDS    = 5
 ET              = ZoneInfo("America/New_York")
 FLAG_DIR        = os.path.dirname(os.path.abspath(__file__))
 TRADE_LOG_PATH  = os.path.join(FLAG_DIR, "tqqq_intraday_trade_log.json")
+REJECTION_LOG_PATH = os.path.join(FLAG_DIR, "tqqq_intraday_rejections.jsonl")
 HEARTBEAT_PATH  = "/root/logs/heartbeat.log"
 
 # ── LOGGING ───────────────────────────────────────────────────────────────────
@@ -100,6 +101,99 @@ def load_trade_log() -> list:
 def save_trade_log(trades: list):
     with open(TRADE_LOG_PATH, "w") as f:
         json.dump(trades, f, indent=2, default=str)
+
+
+def log_rejection(candle_end_time, failed_detail: dict):
+    """
+    Append one line to the rejection log for a bar that failed one or more
+    signal conditions. JSON Lines format (one JSON object per line) — cheap
+    to append (no read-rewrite-whole-file), and safe to grep/tail directly
+    like any other log, unlike a single large JSON array.
+
+    failed_detail: dict keyed by condition name, each value containing
+    {actual, required, pct_of_required} — not just which condition failed,
+    but how close it was. This is what lets --blocker-summary distinguish
+    a near-miss (e.g. volume at 84% of threshold) from a wide miss (40%),
+    and retrospectively answer "would a looser threshold have helped" from
+    real live data, not just the backtest.
+
+    Note on `pct_of_required` direction: for volume/vwap/ema_trend/recovery,
+    higher % = closer to passing (100% = right at the boundary). For
+    `pullback`, it's inverted — `actual` is a distance that must be BELOW
+    the threshold to pass, so higher % = further from passing, not closer.
+    """
+    record = {
+        "date":   date.today().isoformat(),
+        "time":   candle_end_time.strftime("%H:%M"),
+        "failed": failed_detail,   # dict: {condition: {actual, required, pct_of_required}}
+    }
+    try:
+        with open(REJECTION_LOG_PATH, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception as e:
+        log.warning(f"Could not write rejection log: {e}")
+
+
+def blocker_summary(days: int = 30):
+    """
+    Read the rejection log and tally which condition(s) blocked a signal
+    most often, over the last N calendar days. Also reports the average
+    "closeness" (pct_of_required) per condition, so a condition that fails
+    often but by a wide margin can be distinguished from one that fails
+    often but is usually a near-miss.
+    """
+    if not os.path.exists(REJECTION_LOG_PATH):
+        print("No rejection log yet — nothing to summarize.")
+        return
+
+    cutoff = (datetime.now(ET) - pd.Timedelta(days=days)).date()
+    counts = {}
+    pct_sums = {}
+    total_checks = 0
+    total_rejections = 0
+
+    with open(REJECTION_LOG_PATH, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            rec_date = date.fromisoformat(rec["date"])
+            if rec_date < cutoff:
+                continue
+            total_checks += 1
+            failed = rec.get("failed", {})
+            if failed:
+                total_rejections += 1
+                for cond, detail in failed.items():
+                    counts[cond] = counts.get(cond, 0) + 1
+                    pct = detail.get("pct_of_required") if isinstance(detail, dict) else None
+                    if pct is not None:
+                        pct_sums.setdefault(cond, []).append(pct)
+
+    if total_checks == 0:
+        print(f"No rejection log entries in the last {days} days.")
+        return
+
+    print(f"\n{'='*66}")
+    print(f"  TQQQ INTRADAY — BLOCKER SUMMARY (last {days} days)")
+    print(f"{'='*66}")
+    print(f"  Total bar checks logged : {total_checks}")
+    print(f"  Bars with a rejection   : {total_rejections}")
+    print(f"{'-'*66}")
+    print(f"  {'Condition':<14} {'Count':>7} {'% of rejections':>16} {'Avg %-of-req':>14}")
+    for cond, n in sorted(counts.items(), key=lambda x: -x[1]):
+        pct_of_rej = n / total_rejections * 100 if total_rejections else 0
+        avg_pct = sum(pct_sums.get(cond, [])) / len(pct_sums[cond]) if pct_sums.get(cond) else None
+        avg_str = f"{avg_pct:.1f}%" if avg_pct is not None else "n/a"
+        print(f"  {cond:<14} {n:>7} {pct_of_rej:>15.1f}% {avg_str:>14}")
+    print(f"{'-'*66}")
+    print(f"  Note: for 'pullback', lower avg %-of-req = closer to passing")
+    print(f"  (inverted vs other conditions — see log_rejection() docstring)")
+    print(f"{'='*66}\n")
 
 
 def signals_today_count() -> int:
@@ -588,35 +682,66 @@ def check_signal(df: pd.DataFrame) -> dict | None:
         return None
 
     reasons = []
+    failed_detail = {}   # structured detail for rejection log — condition -> {actual, required, pct_of_required}
 
     c1 = cur["close"] > cur["vwap"]
     if not c1:
         reasons.append(f"close ${cur['close']:.2f} <= VWAP ${cur['vwap']:.2f}")
+        failed_detail["vwap"] = {
+            "actual":   round(float(cur["close"]), 4),
+            "required": round(float(cur["vwap"]), 4),
+            "pct_of_required": round(float(cur["close"]) / float(cur["vwap"]) * 100, 1) if cur["vwap"] else None,
+        }
 
     c2 = cur["ema_fast"] > cur["ema_slow"]
     if not c2:
         reasons.append(f"EMA{EMA_FAST} ${cur['ema_fast']:.2f} <= EMA{EMA_SLOW} ${cur['ema_slow']:.2f}")
+        failed_detail["ema_trend"] = {
+            "actual":   round(float(cur["ema_fast"]), 4),
+            "required": round(float(cur["ema_slow"]), 4),
+            "pct_of_required": round(float(cur["ema_fast"]) / float(cur["ema_slow"]) * 100, 1) if cur["ema_slow"] else None,
+        }
 
     vol_avg = cur["vol_avg"]
     c3 = pd.notna(vol_avg) and cur["volume"] >= VOLUME_MULT * vol_avg
     if not c3:
+        required_vol = VOLUME_MULT * vol_avg if pd.notna(vol_avg) else None
         reasons.append(f"volume {cur['volume']:,.0f} < {VOLUME_MULT}x avg {vol_avg:,.0f}")
+        failed_detail["volume"] = {
+            "actual":   int(cur["volume"]),
+            "required": round(float(required_vol), 0) if required_vol is not None else None,
+            "pct_of_required": round(cur["volume"] / required_vol * 100, 1) if required_vol else None,
+        }
 
     near_vwap = abs(prev["low"] - prev["vwap"])     <= PULLBACK_DIST
     near_ema  = abs(prev["low"] - prev["ema_fast"]) <= PULLBACK_DIST
     c4 = near_vwap or near_ema
     if not c4:
+        actual_dist = min(abs(prev["low"] - prev["vwap"]), abs(prev["low"] - prev["ema_fast"]))
         reasons.append(
             f"prev low ${prev['low']:.2f} not within ${PULLBACK_DIST} "
             f"of VWAP ${prev['vwap']:.2f} or EMA9 ${prev['ema_fast']:.2f}"
         )
+        failed_detail["pullback"] = {
+            "actual":   round(float(actual_dist), 4),      # closest distance achieved (smaller = closer to passing)
+            "required": PULLBACK_DIST,                      # max allowed distance
+            "pct_of_required": round(actual_dist / PULLBACK_DIST * 100, 1) if PULLBACK_DIST else None,
+        }
 
     c5 = cur["close"] >= cur["vwap"] and cur["close"] >= cur["ema_fast"]
     if not c5:
         reasons.append("close did not recover above VWAP and EMA9")
+        shortfall = max(cur["vwap"] - cur["close"], cur["ema_fast"] - cur["close"], 0)
+        reference = max(cur["vwap"], cur["ema_fast"])
+        failed_detail["recovery"] = {
+            "actual":   round(float(cur["close"]), 4),
+            "required": round(float(reference), 4),
+            "pct_of_required": round(float(cur["close"]) / float(reference) * 100, 1) if reference else None,
+        }
 
     if not all([c1, c2, c3, c4, c5]):
         log.info(f"No signal [{candle_end_time}]: {' | '.join(reasons)}")
+        log_rejection(candle_end_time, failed_detail)
         return None
 
     entry_zone = cur["close"]
@@ -845,6 +970,13 @@ if __name__ == "__main__":
         help="Print a performance summary of all reconciled signals."
     )
     parser.add_argument(
+        "--blocker-summary", nargs="?", const=30, type=int, metavar="DAYS",
+        help="Print a ranked tally of which condition(s) blocked a signal "
+             "most often, over the last N days (default 30). Reads the "
+             "structured rejection log — separate from the human-readable "
+             "text log. Example: --blocker-summary  or  --blocker-summary 90"
+    )
+    parser.add_argument(
         "--notify", action="store_true",
         help="With --reconcile, also post today's results to Discord."
     )
@@ -857,6 +989,8 @@ if __name__ == "__main__":
                 send_reconcile_summary_to_discord()
         elif args.summary:
             print_summary()
+        elif args.blocker_summary is not None:
+            blocker_summary(days=args.blocker_summary)
         else:
             main()  # main() has its own internal try/except + heartbeat
 
