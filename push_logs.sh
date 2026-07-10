@@ -4,7 +4,7 @@ DISCORD_URL="${DISCORD_URL:-}"
 git config core.fileMode false
 git config user.name  "vps-stock-bot"
 git config user.email "vps-stock-bot@noreply.github.com"
-git add soxl_intraday_trade_log.json soxl_gate_blocks.json soxl_swing_gate_blocks.json tqqq_gate_blocks.json soxl_trade_log.json trade_log.json soxl_earnings_cache.json earnings_cache.json tqqq_intraday_trade_log.json tqqq_intraday_rejections.jsonl 2>/dev/null
+git add soxl_intraday_trade_log.json soxl_gate_blocks.json soxl_swing_gate_blocks.json tqqq_gate_blocks.json soxl_trade_log.json trade_log.json soxl_earnings_cache.json earnings_cache.json tqqq_intraday_trade_log.json tqqq_intraday_rejections.jsonl tqqq_intraday_near_miss_outcomes.jsonl 2>/dev/null
 if git diff --staged --quiet; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] No changes to push." >> /root/logs/git_sync.log
     exit 0
