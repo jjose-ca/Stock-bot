@@ -54,6 +54,8 @@ ET              = ZoneInfo("America/New_York")
 FLAG_DIR        = os.path.dirname(os.path.abspath(__file__))
 TRADE_LOG_PATH  = os.path.join(FLAG_DIR, "tqqq_intraday_trade_log.json")
 REJECTION_LOG_PATH = os.path.join(FLAG_DIR, "tqqq_intraday_rejections.jsonl")
+NEAR_MISS_THRESHOLD = 80   # pct_of_required >= this counts as "worth reconciling"
+NEAR_MISS_LOG_PATH = os.path.join(FLAG_DIR, "tqqq_intraday_near_miss_outcomes.jsonl")
 HEARTBEAT_PATH  = "/root/logs/heartbeat.log"
 
 # ── LOGGING ───────────────────────────────────────────────────────────────────
@@ -117,10 +119,16 @@ def log_rejection(candle_end_time, failed_detail: dict):
     and retrospectively answer "would a looser threshold have helped" from
     real live data, not just the backtest.
 
-    Note on `pct_of_required` direction: for volume/vwap/ema_trend/recovery,
-    higher % = closer to passing (100% = right at the boundary). For
-    `pullback`, it's inverted — `actual` is a distance that must be BELOW
-    the threshold to pass, so higher % = further from passing, not closer.
+    `pct_of_required` is normalized to mean the same thing for every
+    condition: higher % = closer to passing, 100% = right at the boundary.
+    For "must meet/exceed" conditions (volume, vwap, ema_trend, recovery)
+    this is actual/required directly. For "must stay under" conditions
+    (pullback — a distance that must be below the threshold), it's
+    required/actual — inverted on purpose, so the interpretation direction
+    stays uniform across every condition without the reader needing to
+    remember an exception. This uniformity is required for near-miss
+    threshold filtering (NEAR_MISS_THRESHOLD) to work correctly across
+    all condition types with one simple ">=" comparison.
     """
     record = {
         "date":   date.today().isoformat(),
@@ -191,8 +199,7 @@ def blocker_summary(days: int = 30):
         avg_str = f"{avg_pct:.1f}%" if avg_pct is not None else "n/a"
         print(f"  {cond:<14} {n:>7} {pct_of_rej:>15.1f}% {avg_str:>14}")
     print(f"{'-'*66}")
-    print(f"  Note: for 'pullback', lower avg %-of-req = closer to passing")
-    print(f"  (inverted vs other conditions — see log_rejection() docstring)")
+    print(f"  Higher Avg %-of-req = closer to passing, for every condition")
     print(f"{'='*66}\n")
 
 
@@ -244,6 +251,87 @@ def append_signal_to_log(signal: dict, signal_number: int = 1):
     log.info(f"Trade record appended to {TRADE_LOG_PATH}")
 
 
+def _fetch_reconcile_raw_data():
+    """
+    Shared 1-min data fetch for both real-trade reconciliation and
+    near-miss reconciliation — extracted so both jobs reuse the SAME
+    yfinance call instead of each fetching independently (halves the
+    reconcile-time API load).
+    """
+    raw = yf.download(SYMBOL, period="7d", interval="1m", progress=False, auto_adjust=True)
+    if raw.empty:
+        return None
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(0)
+    raw.columns = [c.lower() for c in raw.columns]
+    raw.index = pd.to_datetime(raw.index)
+    if raw.index.tz is None:
+        raw.index = raw.index.tz_localize("UTC")
+    raw.index = raw.index.tz_convert(ET)
+    raw = raw.between_time("09:30", "15:59")
+    raw = raw[raw["volume"] > 0].copy()
+    return raw
+
+
+def _replay_forward(raw, signal_date, entry_after, target, stop):
+    """
+    Shared replay-forward logic — walks 1-min bars from entry_after onward,
+    tracking max_favorable/max_adverse, returns (entry_price, exit_price,
+    exit_reason, exit_time, max_favorable, max_adverse) or None if no data
+    is available yet to determine an outcome.
+
+    `target`/`stop` and `entry_price` can be derived from different bars up
+    to 15 minutes apart (e.g. a signal's alert price vs. the next 1-min
+    bar's open where the trade actually enters, or — for near-miss
+    reconciliation — a rejected bar's close vs. its own +15min entry
+    point). If price moves in that gap, entry_price can land outside the
+    [stop, target] range the exit logic assumes, which without a fix could
+    label an exit "TARGET" while pricing it below entry_price (net loss on
+    a "win"), or "STOP" while pricing it above entry_price (net gain on a
+    "loss") — caught during review, verified with a test that reproduced
+    exactly this using synthetic gap data.
+
+    Fixed by clamping: a TARGET exit is never priced below entry_price
+    (guarantees non-negative P&L for anything labeled a win), and a STOP
+    exit is never priced above entry_price (guarantees non-positive P&L
+    for anything labeled a loss) — the label and the sign of the P&L can
+    never contradict each other.
+    """
+    end_h, end_m = TRADE_END_H, TRADE_END_M
+    day_bars = raw[raw.index.date == signal_date]
+    future = day_bars[day_bars.index >= entry_after]
+
+    if future.empty:
+        return None
+
+    entry_price   = future.iloc[0]["open"]
+    max_favorable = entry_price
+    max_adverse   = entry_price
+    exit_price = exit_reason = exit_time = None
+
+    for ts, bar in future.iterrows():
+        max_favorable = max(max_favorable, bar["high"])
+        max_adverse   = min(max_adverse, bar["low"])
+
+        bar_end_time = ts.time()
+        cutoff = ts.replace(hour=end_h, minute=end_m, second=0).time()
+
+        if bar_end_time >= cutoff:
+            exit_price, exit_reason, exit_time = bar["open"], "TIME", ts
+            break
+        if bar["low"] <= stop:
+            exit_price, exit_reason, exit_time = min(stop, entry_price), "STOP", ts
+            break
+        if bar["high"] >= target:
+            exit_price, exit_reason, exit_time = max(target, entry_price), "TARGET", ts
+            break
+
+    if exit_price is None:
+        return None  # ran out of data — caller should retry later
+
+    return entry_price, exit_price, exit_reason, exit_time, max_favorable, max_adverse
+
+
 def reconcile(target_date: str = None):
     """
     Automatically determine the outcome of every unreconciled signal by
@@ -272,70 +360,29 @@ def reconcile(target_date: str = None):
 
     log.info(f"Reconciling {len(unreconciled)} trade(s)...")
 
-    raw = yf.download(SYMBOL, period="7d", interval="1m", progress=False, auto_adjust=True)
-    if raw.empty:
+    raw = _fetch_reconcile_raw_data()
+    if raw is None:
         log.warning("yfinance returned empty dataframe — cannot reconcile.")
         return
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
-    raw.columns = [c.lower() for c in raw.columns]
-    raw.index = pd.to_datetime(raw.index)
-    if raw.index.tz is None:
-        raw.index = raw.index.tz_localize("UTC")
-    raw.index = raw.index.tz_convert(ET)
-    raw = raw.between_time("09:30", "15:59")
-    raw = raw[raw["volume"] > 0].copy()
-
-    end_h, end_m = TRADE_END_H, TRADE_END_M
 
     for record in unreconciled:
         signal_ts = pd.Timestamp(record["signal_bar_ts"])
-        entry_after = signal_ts + pd.Timedelta(minutes=15)  # signal bar closes here
-
-        day_bars = raw[raw.index.date == signal_ts.date()]
         # Include the bar labeled exactly entry_after itself — that bar
         # (e.g. the 1-min bar labeled 10:30) covers the very first minute
         # the trade is actually open, and its high/low must be checked for
         # target/stop just like every subsequent bar. Strict '>' here would
         # skip that first minute entirely (caught during review — same
         # off-by-one class of bug as check_earlier_signals_status below).
-        future = day_bars[day_bars.index >= entry_after]
+        entry_after = signal_ts + pd.Timedelta(minutes=15)
 
-        if future.empty:
-            log.info(f"No 1-min data available yet for signal @ {record['bar_time']} "
-                     f"({record['date']}) — will retry on next reconcile run.")
-            continue
-
-        entry_price = future.iloc[0]["open"]
-        tp = record["target"]
-        sl = record["stop"]
-
-        max_favorable = entry_price
-        max_adverse   = entry_price
-        exit_price = exit_reason = exit_time = None
-
-        for ts, bar in future.iterrows():
-            max_favorable = max(max_favorable, bar["high"])
-            max_adverse   = min(max_adverse, bar["low"])
-
-            bar_end_time = ts.time()
-            cutoff = ts.replace(hour=end_h, minute=end_m, second=0).time()
-
-            if bar_end_time >= cutoff:
-                exit_price, exit_reason, exit_time = bar["open"], "TIME", ts
-                break
-            if bar["low"] <= sl:
-                exit_price, exit_reason, exit_time = sl, "STOP", ts
-                break
-            if bar["high"] >= tp:
-                exit_price, exit_reason, exit_time = tp, "TARGET", ts
-                break
-
-        if exit_price is None:
-            # Ran out of available data without a clean exit — leave for next run
+        result = _replay_forward(raw, signal_ts.date(), entry_after,
+                                 record["target"], record["stop"])
+        if result is None:
             log.info(f"Signal @ {record['bar_time']} ({record['date']}) still open "
                      f"in available data — will retry on next reconcile run.")
             continue
+
+        entry_price, exit_price, exit_reason, exit_time, max_favorable, max_adverse = result
 
         idx = trades.index(record)
         trades[idx]["reconciled"]    = True
@@ -355,6 +402,202 @@ def reconcile(target_date: str = None):
 
     save_trade_log(trades)
     log.info("Reconcile complete.")
+
+    # Near-miss reconciliation reuses the SAME raw data fetched above —
+    # no second API call.
+    reconcile_near_misses(raw, target_date=target_date)
+
+
+def _load_rejection_log():
+    if not os.path.exists(REJECTION_LOG_PATH):
+        return []
+    records = []
+    with open(REJECTION_LOG_PATH, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return records
+
+
+def _load_near_miss_outcomes() -> set:
+    """Returns a set of (date, time) tuples already reconciled, so we never
+    replay the same near-miss twice."""
+    if not os.path.exists(NEAR_MISS_LOG_PATH):
+        return set()
+    seen = set()
+    with open(NEAR_MISS_LOG_PATH, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                seen.add((rec["date"], rec["time"]))
+            except (json.JSONDecodeError, KeyError):
+                continue
+    return seen
+
+
+def reconcile_near_misses(raw, target_date: str = None):
+    """
+    For every rejection in the rejection log where at least one failed
+    condition is a near-miss (pct_of_required >= NEAR_MISS_THRESHOLD),
+    replay 1-min data forward as if a trade HAD been entered at that bar,
+    and record the hypothetical outcome. Answers "would loosening this
+    threshold actually have won trades, or were we right to reject it" —
+    from real live data, not just the backtest.
+
+    Uses the entry-zone convention: hypothetical entry = the rejected bar's
+    own close (same assumption real signals use for alert_price), target/
+    stop computed the same way live signals compute them.
+    """
+    rejections = _load_rejection_log()
+    if target_date:
+        rejections = [r for r in rejections if r["date"] == target_date]
+
+    already_done = _load_near_miss_outcomes()
+
+    candidates = []
+    for rec in rejections:
+        key = (rec["date"], rec["time"])
+        if key in already_done:
+            continue
+        failed = rec.get("failed", {})
+        is_near_miss = any(
+            isinstance(d, dict) and d.get("pct_of_required") is not None
+            and d["pct_of_required"] >= NEAR_MISS_THRESHOLD
+            for d in failed.values()
+        )
+        if is_near_miss:
+            candidates.append(rec)
+
+    if not candidates:
+        log.info("No new near-miss rejections to reconcile.")
+        return
+
+    log.info(f"Reconciling {len(candidates)} near-miss rejection(s)...")
+
+    for rec in candidates:
+        rec_date = date.fromisoformat(rec["date"])
+        rec_time = datetime.strptime(rec["time"], "%H:%M").time()
+        # The rejected bar itself is labeled with its start time (left-label,
+        # matching every other bar in this system) and covers 15 minutes —
+        # reconstruct its ISO timestamp the same way a real signal's
+        # signal_bar_ts would look, then apply the identical +15min entry
+        # convention used everywhere else in this file.
+        bar_ts = datetime.combine(rec_date, rec_time, tzinfo=ET)
+        entry_after = pd.Timestamp(bar_ts) + pd.Timedelta(minutes=15)
+
+        # Hypothetical target/stop: same fixed offsets every real signal uses.
+        # Uses the bar's close proxy via the raw 1-min data at entry_after
+        # itself (first available bar) as the hypothetical entry_zone,
+        # mirroring how a real signal's alert_price = signal bar close.
+        day_bars = raw[raw.index.date == rec_date]
+        anchor = day_bars[day_bars.index >= pd.Timestamp(bar_ts)]
+        if anchor.empty:
+            continue
+        hypothetical_entry_zone = anchor.iloc[0]["close"]
+        tp = hypothetical_entry_zone + TARGET_PROFIT
+        sl = hypothetical_entry_zone - STOP_LOSS
+
+        result = _replay_forward(raw, rec_date, entry_after, tp, sl)
+        if result is None:
+            continue  # not enough data yet — will retry on a future reconcile run
+
+        entry_price, exit_price, exit_reason, exit_time, max_favorable, max_adverse = result
+
+        outcome = {
+            "date":               rec["date"],
+            "time":               rec["time"],
+            "failed_conditions":  list(rec.get("failed", {}).keys()),
+            "closest_pct":        max(
+                (d.get("pct_of_required", 0) for d in rec.get("failed", {}).values()
+                 if isinstance(d, dict) and d.get("pct_of_required") is not None),
+                default=None
+            ),
+            "hypothetical_entry":       round(float(entry_price), 4),
+            "hypothetical_exit":        round(float(exit_price), 4),
+            "hypothetical_exit_reason": exit_reason,
+            "hypothetical_pnl":         round(float(exit_price) - float(entry_price), 4),
+            "max_favorable":            round(float(max_favorable), 4),
+            "max_adverse":              round(float(max_adverse), 4),
+        }
+
+        try:
+            with open(NEAR_MISS_LOG_PATH, "a") as f:
+                f.write(json.dumps(outcome) + "\n")
+        except Exception as e:
+            log.warning(f"Could not write near-miss outcome: {e}")
+
+        log.info(
+            f"Near-miss reconciled {rec['date']} {rec['time']} "
+            f"(failed: {outcome['failed_conditions']}, closest {outcome['closest_pct']}%): "
+            f"hypothetical P&L ${outcome['hypothetical_pnl']:+.2f} [{exit_reason}]"
+        )
+
+    log.info("Near-miss reconciliation complete.")
+
+
+def near_miss_summary(days: int = 30):
+    """
+    Print aggregate hypothetical performance across reconciled near-misses —
+    the direct answer to "would loosening our thresholds actually have won
+    more trades, or were the rejections correct."
+    """
+    if not os.path.exists(NEAR_MISS_LOG_PATH):
+        print("No near-miss outcomes yet — run --reconcile first (near-miss "
+              "reconciliation runs automatically as part of it).")
+        return
+
+    cutoff = (datetime.now(ET) - pd.Timedelta(days=days)).date()
+    records = []
+    with open(NEAR_MISS_LOG_PATH, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if date.fromisoformat(rec["date"]) >= cutoff:
+                records.append(rec)
+
+    if not records:
+        print(f"No near-miss outcomes in the last {days} days.")
+        return
+
+    wins   = [r for r in records if r["hypothetical_pnl"] > 0]
+    losses = [r for r in records if r["hypothetical_pnl"] <= 0]
+    wr     = len(wins) / len(records) * 100
+    avg_w  = sum(r["hypothetical_pnl"] for r in wins)   / len(wins)   if wins   else 0
+    avg_l  = sum(r["hypothetical_pnl"] for r in losses) / len(losses) if losses else 0
+    exp    = (wr/100 * avg_w) + ((1-wr/100) * avg_l)
+    total  = sum(r["hypothetical_pnl"] for r in records)
+
+    print(f"\n{'='*66}")
+    print(f"  TQQQ INTRADAY — NEAR-MISS HYPOTHETICAL PERFORMANCE (last {days} days)")
+    print(f"{'='*66}")
+    print(f"  Reconciled near-misses : {len(records)}")
+    print(f"  Hypothetical win rate  : {wr:.1f}%  ({len(wins)}W / {len(losses)}L)")
+    print(f"  Hypothetical expectancy: ${exp:.3f}/share")
+    print(f"  Hypothetical total P&L : ${total:.2f}/share")
+    print(f"{'-'*66}")
+    print(f"  Compare against real signal performance via --summary.")
+    print(f"  If near-miss win rate/expectancy is comparably healthy, the")
+    print(f"  rejected threshold may be too strict. If meaningfully worse,")
+    print(f"  the current threshold is correctly filtering these out.")
+    print(f"{'-'*66}")
+    for r in records[-15:]:
+        print(f"  {r['date']} {r['time']}  failed={r['failed_conditions']}  "
+              f"closest={r['closest_pct']}%  "
+              f"P&L ${r['hypothetical_pnl']:+.2f} [{r['hypothetical_exit_reason']}]")
+    print(f"{'='*66}\n")
 
 
 def print_summary():
@@ -722,10 +965,19 @@ def check_signal(df: pd.DataFrame) -> dict | None:
             f"prev low ${prev['low']:.2f} not within ${PULLBACK_DIST} "
             f"of VWAP ${prev['vwap']:.2f} or EMA9 ${prev['ema_fast']:.2f}"
         )
+        # NOTE: pullback is a "must stay UNDER threshold" condition, unlike
+        # the other four ("must meet/exceed threshold"). To keep
+        # pct_of_required meaning "higher % = closer to passing" UNIFORMLY
+        # across every condition (required for near-miss selection to work
+        # correctly), this is inverted (required/actual) rather than the
+        # naive (actual/required) used elsewhere. Since this only runs when
+        # c4 has already failed, actual_dist > PULLBACK_DIST always holds,
+        # so this always yields a value under 100% here — a value near 100%
+        # means "just barely too far"; a low value means "way too far".
         failed_detail["pullback"] = {
-            "actual":   round(float(actual_dist), 4),      # closest distance achieved (smaller = closer to passing)
+            "actual":   round(float(actual_dist), 4),      # closest distance achieved
             "required": PULLBACK_DIST,                      # max allowed distance
-            "pct_of_required": round(actual_dist / PULLBACK_DIST * 100, 1) if PULLBACK_DIST else None,
+            "pct_of_required": round(PULLBACK_DIST / actual_dist * 100, 1) if actual_dist else None,
         }
 
     c5 = cur["close"] >= cur["vwap"] and cur["close"] >= cur["ema_fast"]
@@ -977,6 +1229,13 @@ if __name__ == "__main__":
              "text log. Example: --blocker-summary  or  --blocker-summary 90"
     )
     parser.add_argument(
+        "--near-miss-summary", nargs="?", const=30, type=int, metavar="DAYS",
+        help="Print hypothetical win rate/expectancy for near-miss rejections "
+             "(reconciled automatically during --reconcile). Answers: would "
+             "loosening the current thresholds actually have won more trades? "
+             "Example: --near-miss-summary  or  --near-miss-summary 90"
+    )
+    parser.add_argument(
         "--notify", action="store_true",
         help="With --reconcile, also post today's results to Discord."
     )
@@ -991,6 +1250,8 @@ if __name__ == "__main__":
             print_summary()
         elif args.blocker_summary is not None:
             blocker_summary(days=args.blocker_summary)
+        elif args.near_miss_summary is not None:
+            near_miss_summary(days=args.near_miss_summary)
         else:
             main()  # main() has its own internal try/except + heartbeat
 
