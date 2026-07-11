@@ -460,12 +460,25 @@ def _load_near_miss_outcomes() -> set:
 
 def reconcile_near_misses(raw, target_date: str = None):
     """
-    For every rejection in the rejection log where at least one failed
-    condition is a near-miss (pct_of_required >= NEAR_MISS_THRESHOLD),
-    replay 1-min data forward as if a trade HAD been entered at that bar,
-    and record the hypothetical outcome. Answers "would loosening this
-    threshold actually have won trades, or were we right to reject it" —
-    from real live data, not just the backtest.
+    For every rejection in the rejection log where the setup was GENUINELY
+    close overall — not just one condition among several — replay 1-min
+    data forward as if a trade HAD been entered at that bar, and record
+    the hypothetical outcome. Answers "would loosening this threshold
+    actually have won trades, or were we right to reject it" — from real
+    live data, not just the backtest.
+
+    Near-miss definition (tightened after review — the original version
+    used ANY failed condition >= threshold, which let bars through that
+    failed 4-5 conditions simultaneously with only ONE of them coincidentally
+    scoring high; caught in practice when a live day's summary included
+    several such bars mixed in with genuine single-condition near-misses,
+    corrupting the aggregate win-rate/expectancy numbers). Now requires
+    BOTH:
+      1. At most 2 conditions failed at all (readability/intent — a bar
+         failing most of the signal isn't "close" no matter the numbers)
+      2. EVERY failed condition scored >= NEAR_MISS_THRESHOLD (correctness —
+         one close condition alongside a wide miss on another is not a
+         genuine near-miss of the whole setup)
 
     Uses the entry-zone convention: hypothetical entry = the rejected bar's
     own close (same assumption real signals use for alert_price), target/
@@ -483,10 +496,14 @@ def reconcile_near_misses(raw, target_date: str = None):
         if key in already_done:
             continue
         failed = rec.get("failed", {})
-        is_near_miss = any(
-            isinstance(d, dict) and d.get("pct_of_required") is not None
-            and d["pct_of_required"] >= NEAR_MISS_THRESHOLD
-            for d in failed.values()
+        is_near_miss = (
+            bool(failed)
+            and len(failed) <= 2
+            and all(
+                isinstance(d, dict) and d.get("pct_of_required") is not None
+                and d["pct_of_required"] >= NEAR_MISS_THRESHOLD
+                for d in failed.values()
+            )
         )
         if is_near_miss:
             candidates.append(rec)
