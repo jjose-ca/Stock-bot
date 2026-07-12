@@ -1,6 +1,6 @@
 """
 TQQQ Intraday Momentum Bot
-Strategy : VWAP + EMA9/13 pullback on 15-min bars
+Strategy : VWAP + EMA5/13 pullback on 15-min bars
 Data     : yfinance (5d, 1-min) — resampled to 15-min
 Alert    : Discord webhook
 Execution: Manual on IBKR / Wealthsimple
@@ -35,7 +35,10 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_URL", "")
 
 TARGET_PROFIT   = 0.50
 STOP_LOSS       = 0.40
-EMA_FAST        = 9
+EMA_FAST        = 5    # was 9 — 2D sweep + out-of-sample validation confirmed
+                        # EMA5/13 consistently beats EMA9/13 in both independent
+                        # time periods (2022-2024 and 2024-2026), not just the
+                        # blended full-dataset average
 EMA_SLOW        = 13
 VOLUME_MULT     = 1.2   # re-validated against corrected time-of-day volume methodology (was 1.0, tuned against a flawed rolling-20-bar baseline)
 PULLBACK_DIST   = 0.75   # widened from 0.50 — sweep showed tighter threshold was filtering out good setups
@@ -231,7 +234,11 @@ def append_signal_to_log(signal: dict, signal_number: int = 1):
         "pullback_src":      signal["pullback_src"],
         "prev_low":          signal["prev_low"],
         "prev_vwap":         signal["prev_vwap"],
-        "prev_ema9":         signal["prev_ema9"],
+        "prev_ema_fast":     signal["prev_ema_fast"],  # renamed from prev_ema9 (2026-07 EMA5 switch) —
+                                                         # records written before this change use the old
+                                                         # "prev_ema9" key; both represent the same thing
+                                                         # (prev bar's EMA_FAST value), just under whatever
+                                                         # period was live at signal time
         "ema_spread_cur":     signal["ema_spread_cur"],      # logged silently — not on live alert
         "ema_spread_prev":    signal["ema_spread_prev"],     # (see check_signal for reasoning)
         "momentum_note":      signal["momentum_note"],
@@ -930,12 +937,14 @@ def check_signal(df: pd.DataFrame) -> dict | None:
     Check the last completed 15-min bar for a momentum pullback signal.
     All incomplete bars already stripped in fetch — safe to use iloc[-1].
 
-    Conditions (all must be true):
+    Conditions (all must be true; thresholds below are current config
+    values — see EMA_FAST/EMA_SLOW/VOLUME_MULT/PULLBACK_DIST constants,
+    not hardcoded here since they're tuned periodically via backtest):
       1. close > VWAP
-      2. EMA9 > EMA13
-      3. volume > 1.0x time-of-day avg
-      4. prev bar low within $0.50 of VWAP or EMA9  (pullback)
-      5. close >= VWAP and close >= EMA9             (recovery)
+      2. EMA_FAST > EMA_SLOW
+      3. volume > VOLUME_MULT x time-of-day avg
+      4. prev bar low within $PULLBACK_DIST of VWAP or EMA_FAST (pullback)
+      5. close >= VWAP and close >= EMA_FAST                    (recovery)
     """
     if len(df) < EMA_SLOW + 2:
         log.info(f"Not enough bars ({len(df)}) for signal check — need {EMA_SLOW + 2}.")
@@ -995,7 +1004,7 @@ def check_signal(df: pd.DataFrame) -> dict | None:
         actual_dist = min(abs(prev["low"] - prev["vwap"]), abs(prev["low"] - prev["ema_fast"]))
         reasons.append(
             f"prev low ${prev['low']:.2f} not within ${PULLBACK_DIST} "
-            f"of VWAP ${prev['vwap']:.2f} or EMA9 ${prev['ema_fast']:.2f}"
+            f"of VWAP ${prev['vwap']:.2f} or EMA{EMA_FAST} ${prev['ema_fast']:.2f}"
         )
         # NOTE: pullback is a "must stay UNDER threshold" condition, unlike
         # the other four ("must meet/exceed threshold"). To keep
@@ -1014,7 +1023,7 @@ def check_signal(df: pd.DataFrame) -> dict | None:
 
     c5 = cur["close"] >= cur["vwap"] and cur["close"] >= cur["ema_fast"]
     if not c5:
-        reasons.append("close did not recover above VWAP and EMA9")
+        reasons.append(f"close did not recover above VWAP and EMA{EMA_FAST}")
         shortfall = max(cur["vwap"] - cur["close"], cur["ema_fast"] - cur["close"], 0)
         reference = max(cur["vwap"], cur["ema_fast"])
         failed_detail["recovery"] = {
@@ -1032,7 +1041,7 @@ def check_signal(df: pd.DataFrame) -> dict | None:
     tp         = round(entry_zone + TARGET_PROFIT, 2)
     sl         = round(entry_zone - STOP_LOSS, 2)
 
-    pullback_src = "VWAP + EMA9" if (near_vwap and near_ema) else ("VWAP" if near_vwap else "EMA9")
+    pullback_src = f"VWAP + EMA{EMA_FAST}" if (near_vwap and near_ema) else ("VWAP" if near_vwap else f"EMA{EMA_FAST}")
 
     # ── Momentum trend: EMA spread on current bar vs prior bar ─────────────────
     # Logged silently to the trade log for future analysis — NOT shown on the
@@ -1072,7 +1081,7 @@ def check_signal(df: pd.DataFrame) -> dict | None:
         "vol_mult":       round(cur["volume"] / vol_avg, 1),
         "prev_low":       round(float(prev["low"]), 2),
         "prev_vwap":      round(float(prev["vwap"]), 2),
-        "prev_ema9":      round(float(prev["ema_fast"]), 2),
+        "prev_ema_fast":  round(float(prev["ema_fast"]), 2),  # renamed from prev_ema9 — field name shouldn't hardcode a period that's now tunable (was EMA9, now EMA5)
         "entry_zone":     round(float(entry_zone), 2),
         "tp":             tp,
         "sl":             sl,
