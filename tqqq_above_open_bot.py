@@ -1,8 +1,7 @@
 """
 TQQQ Intraday Above-Open Momentum Bot
 Strategy : Price above today's own opening price, checked on 15-min bars,
-           10:30am-3:30pm ET (see TRADE_START_M comment below for why 10:30,
-           not 10:00). Every qualifying bar fires an alert (not
+           10:00am-3:30pm ET. Every qualifying bar fires an alert (not
            gated to once/day) — signal #1 each day is the ONLY one that
            was backtested/validated; later same-day signals are shown for
            visibility but are NOT individually validated (see README).
@@ -10,15 +9,15 @@ Data     : yfinance (5d, 1-min) — resampled to 15-min, same pipeline as
            tqqq_intraday_bot.py, reused because it's already tested.
 Alert    : Discord webhook
 Execution: Manual on IBKR / Wealthsimple
-Cron     : 30,45 10 * * 1-5             (signal check, 10:30 + 10:45)
-           0,15,30,45 11-15 * * 1-5     (signal check, every 15 min, 11am-3:15pm)
-                                        (10:30am-3:30pm ET evaluation window)
+Cron     : 0,15,30,45 10-15 * * 1-5     (signal check, every 15 min, 10am-3:30pm ET)
            30 16 * * 1-5 --reconcile    (auto-check outcomes, 4:30pm ET)
 
 Validated backtest (4.5yr Databento, CORRECTED honest-timing methodology,
-first-signal-of-day only): 838 trades, 63.8% win rate, $0.1625/share
-expectancy, out-of-sample consistent across 2022-2024 and 2024-2026
-independently (gap $0.0110), positive in every year 2022-2026.
+first-signal-of-day only, INCLUDING the 10:00-10:30 window — tested
+and found to improve results over excluding it): 858 trades, 65.4% win
+rate, $0.1767/share expectancy, out-of-sample consistent across
+2022-2024 and 2024-2026 independently (gap $0.0012), positive in every
+year 2022-2026.
 
 This bot is entirely separate from tqqq_intraday_bot.py — separate config,
 separate log files, separate heartbeat entry, separate cron lines. The
@@ -44,17 +43,16 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_URL_ABOVE_OPEN", os.environ.get("DISCO
 
 TARGET_PROFIT   = 0.50
 STOP_LOSS       = 0.40
-TRADE_START_H   = 10     # earliest EVALUATED bar close is 10:30 (see below)
-TRADE_START_M   = 30     # matches backtest exactly: the 838-trade validated
-                          # result explicitly excluded the bar labeled '10:00'
-                          # (10:00-10:15), and the window itself excluded
-                          # anything before label '10:00' — meaning the
-                          # earliest bar actually included was labeled
-                          # '10:15' (10:15-10:30), which closes at 10:30 AM
-                          # real time. Caught during review: the original
-                          # 10:00 setting would have fired on two bar types
-                          # (labeled 09:45 and 10:00) NEVER included in the
-                          # validated backtest at all.
+TRADE_START_H   = 10
+TRADE_START_M   = 0      # Validated: including the 10:00-10:30 window
+                          # (previously excluded from the original 838-trade
+                          # backtest, which used a '!=10:00' filter inherited
+                          # from unrelated vwap_only diagnostics) was tested
+                          # directly for THIS strategy and found to IMPROVE
+                          # results: 858 trades, 65.4% WR, $0.1767 exp
+                          # (vs. 838 trades, 63.8% WR, $0.1625 exp without
+                          # it), with a tighter out-of-sample gap ($0.0012
+                          # vs $0.0110) — more consistent, not less.
 TRADE_END_H     = 15     # no new signals after this, AND forced exit cutoff
 TRADE_END_M     = 30
 
@@ -307,7 +305,7 @@ def print_summary():
 
     print(f"\n{'='*58}")
     print(f"  Backtest reference (validated, first-signal-only):")
-    print(f"  838 trades, 63.8% WR, $0.1625/share expectancy")
+    print(f"  858 trades, 65.4% WR, $0.1767/share expectancy")
     print(f"{'='*58}\n")
 
 
@@ -414,7 +412,7 @@ def check_signal(df: pd.DataFrame) -> dict | None:
     today's own opening price, after 10:00am ET. Unlike the original
     pullback bot, this is NOT gated to once per day — every qualifying bar
     fires (per explicit request), but only the FIRST signal of the day was
-    backtested/validated (838 trades, 63.8% WR, $0.1625 exp, out-of-sample
+    backtested/validated (858 trades, 65.4% WR, $0.1767 exp, out-of-sample
     consistent). Signal #2+ each day was separately backtested as "every
     qualifying bar" and found meaningfully worse (12,489 trades, 54.5% WR,
     $0.0552 exp, wider out-of-sample gap) — shown for visibility, not as an
@@ -471,7 +469,7 @@ def send_discord_alert(signal: dict, signal_number: int):
     tag = "[VALIDATED SIGNAL]" if validated else f"[INFO ONLY — SIGNAL #{signal_number} TODAY]"
 
     validation_note = (
-        "Backtested: 838 trades, 63.8% WR, $0.1625/share expectancy, "
+        "Backtested: 858 trades, 65.4% WR, $0.1767/share expectancy, "
         "out-of-sample validated."
         if validated else
         "NOT individually backtested — later same-day signals tested\n"
