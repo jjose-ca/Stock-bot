@@ -105,14 +105,24 @@ def save_trade_log(trades: list):
 
 def signals_today_count() -> int:
     trades = load_trade_log()
-    today  = date.today().isoformat()
+    today  = datetime.now(ET).date().isoformat()  # was date.today() — read the
+                                                     # OS/system clock, not ET.
+                                                     # VPS runs UTC by default;
+                                                     # CRON_TZ only controls WHEN
+                                                     # cron fires, not what
+                                                     # date.today() returns inside
+                                                     # the running process. Bites
+                                                     # specifically on manual runs
+                                                     # after ~7-8pm ET, where UTC
+                                                     # has already rolled to the
+                                                     # next calendar day.
     return sum(1 for t in trades if t["date"] == today)
 
 
 def append_signal_to_log(signal: dict, signal_number: int):
     trades = load_trade_log()
     record = {
-        "date":              date.today().isoformat(),
+        "date":              datetime.now(ET).date().isoformat(),  # same fix
         "bar_time":          signal["bar_time"],
         "signal_bar_ts":     signal["bar_ts"],
         "signal_number":     signal_number,   # 1 = validated; 2+ = informational only
@@ -211,7 +221,7 @@ def _replay_forward(raw, signal_date, entry_after, target, stop):
     return entry_price, exit_price, exit_reason, exit_time, max_favorable, max_adverse
 
 
-def reconcile(target_date: str = None):
+def reconcile(target_date: str = None, notify: bool = False):
     """
     Determines the real outcome of every unreconciled signal by replaying
     1-min price data forward from the entry point (signal_bar_ts + 15min,
@@ -224,6 +234,8 @@ def reconcile(target_date: str = None):
 
     if not unreconciled:
         log.info("No unreconciled trades to process.")
+        if notify:
+            send_reconcile_summary_to_discord(target_date)
         return
 
     log.info(f"Reconciling {len(unreconciled)} trade(s)...")
@@ -263,6 +275,69 @@ def reconcile(target_date: str = None):
 
     save_trade_log(trades)
     log.info("Reconcile complete.")
+
+    if notify:
+        send_reconcile_summary_to_discord(target_date)
+
+
+def send_reconcile_summary_to_discord(target_date: str = None):
+    """
+    Posts a daily reconciliation wrap-up to Discord — every signal reconciled
+    TODAY (or target_date, if reconciling a past date), split into VALIDATED
+    (signal #1) and INFO-ONLY (signal #2+), matching the same distinction
+    used everywhere else in this bot. Fails open: if Discord posting fails,
+    logs a warning but never blocks or breaks the reconcile job itself.
+    """
+    date_str = target_date or datetime.now(ET).date().isoformat()  # same fix
+    trades = load_trade_log()
+    today_trades = [t for t in trades if t["date"] == date_str and t["reconciled"]]
+
+    if not today_trades:
+        msg = f"[RECONCILE] TQQQ ABOVE-OPEN — {date_str}\nNo signals reconciled today."
+        if not DISCORD_WEBHOOK:
+            print("\n" + msg + "\n")
+            return
+        try:
+            requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=10)
+        except Exception as e:
+            log.warning(f"Discord reconcile summary send failed: {e}")
+        return
+
+    validated = [t for t in today_trades if t["validated"]]
+    info_only = [t for t in today_trades if not t["validated"]]
+
+    def _line(t):
+        return (f"  #{t['signal_number']} {t['bar_time']}: "
+                f"${t['alert_price']:.2f} -> ${t['exit_price']:.2f} "
+                f"[{t['exit_reason']}]  P&L ${t['pnl_per_share']:+.2f}")
+
+    total_pnl = sum(t["pnl_per_share"] for t in today_trades)
+    wins = sum(1 for t in today_trades if t["pnl_per_share"] > 0)
+
+    lines = [
+        f"[RECONCILE] TQQQ ABOVE-OPEN — {date_str}",
+        "------------------------------",
+        f"Signals today : {len(today_trades)}  ({wins}W / {len(today_trades)-wins}L)",
+        f"Total P&L     : ${total_pnl:+.2f}/share",
+        "------------------------------",
+    ]
+
+    if validated:
+        lines.append("VALIDATED (signal #1):")
+        lines.extend(_line(t) for t in validated)
+    if info_only:
+        lines.append("INFO-ONLY (signal #2+):")
+        lines.extend(_line(t) for t in info_only)
+
+    msg = "\n".join(lines)
+
+    if not DISCORD_WEBHOOK:
+        print("\n" + msg + "\n")
+        return
+    try:
+        requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=10)
+    except Exception as e:
+        log.warning(f"Discord reconcile summary send failed: {e}")
 
 
 def print_summary():
@@ -348,7 +423,7 @@ def fetch_15min_bars() -> pd.DataFrame:
     raw = None
     for attempt in range(MAX_RETRIES):
         try:
-            candidate = yf.download(SYMBOL, period="7d", interval="1m", progress=False, auto_adjust=True)
+            candidate = yf.download(SYMBOL, period="3d", interval="1m", progress=False, auto_adjust=True)  # was 7d — live signal check only ever needs TODAY's own data (day_open + latest bar), no multi-day baseline like the reconcile fetch needs
             if candidate.empty:
                 time.sleep(WAIT_SECONDS)
                 continue
@@ -371,7 +446,7 @@ def fetch_15min_bars() -> pd.DataFrame:
     if raw is None:
         log.warning("Retry loop exhausted — making one final attempt, proceeding with whatever's available.")
         try:
-            raw = yf.download(SYMBOL, period="7d", interval="1m", progress=False, auto_adjust=True)
+            raw = yf.download(SYMBOL, period="3d", interval="1m", progress=False, auto_adjust=True)  # was 7d, same reasoning as above
             if isinstance(raw.columns, pd.MultiIndex):
                 raw.columns = raw.columns.get_level_values(0)
             raw.index = pd.to_datetime(raw.index)
@@ -396,9 +471,23 @@ def fetch_15min_bars() -> pd.DataFrame:
     df = df[df["volume"] > 0].copy()
     df["date"] = df.index.date
 
-    # Day's own opening price — first 15-min bar's open, per day
-    day_open = df.groupby("date")["open"].transform("first")
-    df["day_open"] = day_open
+    # Day's own opening price — explicitly the 9:30 bar, NOT just "first row
+    # of the day" (fixed: the old .transform('first') assumed the first row
+    # present for a date is always the 9:30 bar, which silently breaks if
+    # yfinance ever returns a day with early-session data missing — e.g. a
+    # fetch that only starts from 11:30am for today. That would have made
+    # day_open equal to whatever bar happened to be first, corrupting every
+    # signal that day without any error or warning. Explicitly filtering
+    # for the 9:30 bar means a day missing it correctly gets NaN instead —
+    # and check_signal() already skips any bar where day_open is NaN, so
+    # this fails safe (no alert) rather than firing on a wrong reference
+    # price.)
+    df = df.reset_index()  # preserve the datetime column explicitly through the merge
+    ts_col = df.columns[0]  # the resample index becomes the first column after reset
+    open_930 = df[df[ts_col].dt.time == pd.Timestamp("09:30").time()][["date", "open"]]
+    open_930 = open_930.rename(columns={"open": "day_open"}).drop_duplicates(subset="date")
+    df = df.merge(open_930, on="date", how="left")
+    df = df.set_index(ts_col)
 
     now = datetime.now(ET)
     df = df[df.index + pd.Timedelta(minutes=15) <= now].copy()
@@ -552,13 +641,15 @@ if __name__ == "__main__":
                         help="Reconcile all unreconciled signals against real price data.")
     parser.add_argument("--date", metavar="YYYY-MM-DD",
                         help="With --reconcile, only reconcile signals from this date.")
+    parser.add_argument("--notify", action="store_true",
+                        help="With --reconcile, also post a daily wrap-up summary to Discord.")
     parser.add_argument("--summary", action="store_true",
                         help="Print performance split: validated vs informational signals.")
     args = parser.parse_args()
 
     try:
         if args.reconcile:
-            reconcile(target_date=args.date)
+            reconcile(target_date=args.date, notify=args.notify)
         elif args.summary:
             print_summary()
         else:
