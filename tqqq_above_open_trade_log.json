@@ -1720,5 +1720,26 @@
     "max_favorable": 70.98,
     "max_adverse": 70.68,
     "pnl_per_share": 0.1849
+  },
+  {
+    "date": "2026-07-23",
+    "bar_time": "10:15 ET",
+    "signal_bar_ts": "2026-07-23T10:15:00-04:00",
+    "signal_number": 1,
+    "validated": true,
+    "alert_price": 67.2,
+    "target": 67.7,
+    "stop": 66.8,
+    "day_open": 67.08,
+    "close": 67.2,
+    "pct_above_open": 0.171,
+    "alert_sent_at": "2026-07-23T10:32:02.509548-04:00",
+    "reconciled": true,
+    "exit_price": 66.8,
+    "exit_time": "10:32:00",
+    "exit_reason": "STOP",
+    "max_favorable": 67.31,
+    "max_adverse": 66.78,
+    "pnl_per_share": -0.39
   }
 ]
