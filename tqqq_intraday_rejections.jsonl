@@ -349,3 +349,25 @@
 {"date": "2026-07-31", "time": "15:00", "failed": {"volume": {"actual": 846487, "required": 2278432.0, "pct_of_required": 37.2}}}
 {"date": "2026-07-31", "time": "15:15", "failed": {"volume": {"actual": 1269220, "required": 2629945.0, "pct_of_required": 48.3}}}
 {"date": "2026-07-31", "time": "15:30", "failed": {"volume": {"actual": 1551997, "required": 2254143.0, "pct_of_required": 68.9}}}
+{"date": "2026-08-03", "time": "10:00", "failed": {"volume": {"actual": 4598108, "required": 7364005.0, "pct_of_required": 62.4}}}
+{"date": "2026-08-03", "time": "10:15", "failed": {"volume": {"actual": 3814167, "required": 6860835.0, "pct_of_required": 55.6}}}
+{"date": "2026-08-03", "time": "10:30", "failed": {"volume": {"actual": 3676791, "required": 5288195.0, "pct_of_required": 69.5}}}
+{"date": "2026-08-03", "time": "10:45", "failed": {"volume": {"actual": 3316191, "required": 4464167.0, "pct_of_required": 74.3}}}
+{"date": "2026-08-03", "time": "11:00", "failed": {"volume": {"actual": 2865337, "required": 4159746.0, "pct_of_required": 68.9}}}
+{"date": "2026-08-03", "time": "11:15", "failed": {"volume": {"actual": 2137646, "required": 3368286.0, "pct_of_required": 63.5}}}
+{"date": "2026-08-03", "time": "11:30", "failed": {"volume": {"actual": 2012349, "required": 3253133.0, "pct_of_required": 61.9}}}
+{"date": "2026-08-03", "time": "11:45", "failed": {"volume": {"actual": 1492418, "required": 2499536.0, "pct_of_required": 59.7}}}
+{"date": "2026-08-03", "time": "12:00", "failed": {"volume": {"actual": 1540033, "required": 2352562.0, "pct_of_required": 65.5}}}
+{"date": "2026-08-03", "time": "12:15", "failed": {"volume": {"actual": 968281, "required": 2225408.0, "pct_of_required": 43.5}}}
+{"date": "2026-08-03", "time": "12:30", "failed": {"volume": {"actual": 1101306, "required": 1988868.0, "pct_of_required": 55.4}}}
+{"date": "2026-08-03", "time": "12:45", "failed": {"volume": {"actual": 987065, "required": 1909001.0, "pct_of_required": 51.7}}}
+{"date": "2026-08-03", "time": "13:00", "failed": {"volume": {"actual": 662275, "required": 1672219.0, "pct_of_required": 39.6}}}
+{"date": "2026-08-03", "time": "13:15", "failed": {"volume": {"actual": 920327, "required": 1836691.0, "pct_of_required": 50.1}}}
+{"date": "2026-08-03", "time": "13:30", "failed": {"volume": {"actual": 993502, "required": 1626552.0, "pct_of_required": 61.1}}}
+{"date": "2026-08-03", "time": "13:45", "failed": {"volume": {"actual": 870500, "required": 1377602.0, "pct_of_required": 63.2}}}
+{"date": "2026-08-03", "time": "14:15", "failed": {"volume": {"actual": 1716044, "required": 2097107.0, "pct_of_required": 81.8}}}
+{"date": "2026-08-03", "time": "14:30", "failed": {"volume": {"actual": 1295687, "required": 1296026.0, "pct_of_required": 100.0}, "recovery": {"actual": 67.9037, "required": 67.9444, "pct_of_required": 99.9}}}
+{"date": "2026-08-03", "time": "14:45", "failed": {"volume": {"actual": 1120893, "required": 2288034.0, "pct_of_required": 49.0}}}
+{"date": "2026-08-03", "time": "15:00", "failed": {"volume": {"actual": 1149864, "required": 2208246.0, "pct_of_required": 52.1}}}
+{"date": "2026-08-03", "time": "15:15", "failed": {"volume": {"actual": 1221235, "required": 2653569.0, "pct_of_required": 46.0}, "recovery": {"actual": 67.965, "required": 67.9859, "pct_of_required": 100.0}}}
+{"date": "2026-08-03", "time": "15:30", "failed": {"volume": {"actual": 864932, "required": 2228127.0, "pct_of_required": 38.8}}}
