@@ -250,23 +250,37 @@ def support_to_dicts(support: list) -> list:
 
 # ---------- Cross-referencing support against specific ladder rungs ----------
 
-def annotate_support_with_ladder(support_levels: list, ladder: list, current_price: float) -> list:
-    """For each SupportLevel, report the nearest reference point (current
-    price or a specific ladder rung) and the exact dollar/percent gap to
-    it -- no threshold, no "aligned vs not" judgment call. Purely
-    descriptive -- returns a list of label strings parallel to
-    support_levels; doesn't alter support_levels, the ladder, or any price."""
-    points = [("current price", current_price)] + [(f"Level {i}", lvl.price) for i, lvl in enumerate(ladder, start=1)]
+@dataclass
+class SupportPosition:
+    nearest_label: str              # "Level 2" or "current price"
+    nearest_price: float
+    gap: float
+    gap_pct: float
+    level_index: Optional[int]      # 1-based index into the ladder if nearest
+                                     # point is a specific rung, else None (nearest
+                                     # is current price itself)
 
-    labels = []
+
+def locate_support_relative_to_ladder(support_levels: list, ladder: list, current_price: float) -> list:
+    """For each SupportLevel, find the nearest reference point (current price
+    or a specific ladder rung) and the exact gap to it -- structured output
+    so the caller (the bot) can decide how to group/render it, e.g.
+    attaching a support line directly under the ladder level it's nearest
+    to, rather than as a disconnected list. No threshold, no aligned/not
+    judgment call -- purely nearest-point-and-distance."""
+    points = [("current price", current_price, None)] + [(f"Level {i}", lvl.price, i) for i, lvl in enumerate(ladder, start=1)]
+
+    results = []
     for s in support_levels:
-        nearest_name, nearest_price = min(points, key=lambda p: abs(s.tqqq_price - p[1]))
-        gap = s.tqqq_price - nearest_price
-        gap_pct = (gap / nearest_price * 100) if nearest_price else 0.0
-        direction = "above" if gap > 0 else "below" if gap < 0 else "at"
-        labels.append(
-            f"closest to {nearest_name} (${nearest_price:.2f}), "
-            f"${abs(gap):.2f} {direction} ({abs(gap_pct):.2f}%)"
-        )
+        name, price, idx = min(points, key=lambda p: abs(s.tqqq_price - p[1]))
+        gap = s.tqqq_price - price
+        gap_pct = (gap / price * 100) if price else 0.0
+        results.append(SupportPosition(
+            nearest_label=name,
+            nearest_price=price,
+            gap=gap,
+            gap_pct=gap_pct,
+            level_index=idx,
+        ))
 
-    return labels
+    return results
