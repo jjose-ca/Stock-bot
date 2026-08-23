@@ -49,7 +49,7 @@ from ladder_core import (
     ladder_to_dicts,
     find_support_in_range,
     support_to_dicts,
-    annotate_support_with_ladder,
+    locate_support_relative_to_ladder,
 )
 
 # Decision (backed by backtest_ladder.py): optimize for frequency of fill,
@@ -174,14 +174,12 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
 
         embed = discord.Embed(
             title=f"TQQQ position: {shares:g} sh @ ${price:.2f} basis",
-            description=(
-                f"**TQQQ now:** ${current_tqqq_price:.2f} | "
-                f"**QQQ close:** ${qqq_close:.2f} | "
-                f"**QQQ 14-day ATR:** {qqq_atr_pct * 100:.2f}%"
-            ),
             color=discord.Color.blue(),
             timestamp=datetime.now(timezone.utc),
         )
+        embed.add_field(name="TQQQ now", value=f"${current_tqqq_price:.2f}", inline=True)
+        embed.add_field(name="QQQ close", value=f"${qqq_close:.2f}", inline=True)
+        embed.add_field(name="QQQ 14-day ATR", value=f"{qqq_atr_pct * 100:.2f}%", inline=True)
 
         if not ladder:
             embed.add_field(
@@ -190,26 +188,45 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
                 inline=False,
             )
         else:
+            support_positions = locate_support_relative_to_ladder(support_levels, ladder, current_tqqq_price)
+            # Group support lines by which ladder level they're nearest to,
+            # so a confirming support level shows up directly under the
+            # buy target it backs up, instead of a disconnected list.
+            support_by_level = {}
+            unattached_support = []
+            for s, pos in zip(support_levels, support_positions):
+                line = (
+                    f"📍 ${s.tqqq_price:.2f} confirms this level "
+                    f"(${abs(pos.gap):.2f} {'above' if pos.gap > 0 else 'below'}, {abs(pos.gap_pct):.2f}%) "
+                    f"— QQQ swing low {s.swing_low_date}"
+                )
+                if pos.level_index is not None:
+                    support_by_level.setdefault(pos.level_index, []).append(line)
+                else:
+                    unattached_support.append(
+                        f"${s.tqqq_price:.2f} — near current price, "
+                        f"${abs(pos.gap):.2f} {'above' if pos.gap > 0 else 'below'} "
+                        f"(QQQ swing low {s.swing_low_date})"
+                    )
+
             for i, lvl in enumerate(ladder, start=1):
+                field_value = f"QQQ -{lvl.qqq_drop_pct:.1f}% [{lvl.basis}]"
+                if i in support_by_level:
+                    field_value += "\n" + "\n".join(support_by_level[i])
                 embed.add_field(
-                    name=f"Buy {i}: ${lvl.price:.2f} (-{lvl.tqqq_drop_pct:.1f}% from basis)",
-                    value=f"QQQ -{lvl.qqq_drop_pct:.1f}% [{lvl.basis}]",
+                    name=f"🎯 Buy {i}: ${lvl.price:.2f} (-{lvl.tqqq_drop_pct:.1f}% from basis)",
+                    value=field_value,
                     inline=False,
                 )
 
-        if support_levels:
-            position_labels = annotate_support_with_ladder(support_levels, ladder, current_tqqq_price)
-            support_lines = []
-            for s, label in zip(support_levels, position_labels):
-                support_lines.append(
-                    f"${s.tqqq_price:.2f} — {label}\n"
-                    f"    QQQ swing low from {s.swing_low_date} (QQQ -{s.qqq_drop_pct:.1f}%)"
+            if unattached_support:
+                embed.add_field(
+                    name="📍 Other support nearby (info only)",
+                    value="\n".join(unattached_support),
+                    inline=False,
                 )
-            embed.add_field(
-                name="📍 Support nearby (info only, not a buy target)",
-                value="\n".join(support_lines),
-                inline=False,
-            )
+
+        log_ladder(shares, price, current_tqqq_price, qqq_atr_pct, ladder)
 
         embed.set_footer(text="Pure ATR spacing, anchored to your basis -- update it only after a real fill")
         await interaction.followup.send(embed=embed)
