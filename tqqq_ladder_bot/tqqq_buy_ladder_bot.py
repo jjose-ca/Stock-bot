@@ -50,6 +50,8 @@ from ladder_core import (
     find_support_in_range,
     support_to_dicts,
     locate_support_relative_to_ladder,
+    ATR_STEP,
+    LEVERAGE_FACTOR,
 )
 
 # Decision (backed by backtest_ladder.py): optimize for frequency of fill,
@@ -101,14 +103,20 @@ def get_market_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def log_ladder(shares: float, basis_price: float, current_tqqq_price: float,
-                qqq_atr_pct: float, ladder: list) -> dict:
+                qqq_close: float, qqq_atr_pct: float, market_data_last_date: str,
+                ladder: list, support_levels: list) -> dict:
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "shares": shares,
         "tqqq_basis_price": basis_price,
         "tqqq_current_price": current_tqqq_price,
+        "qqq_close": qqq_close,
         "qqq_atr_pct": round(qqq_atr_pct * 100, 2),
+        "market_data_last_date": market_data_last_date,
+        "atr_step": ATR_STEP,          # pulled from ladder_core, never redeclared here --
+        "leverage_factor": LEVERAGE_FACTOR,  # keeps this log truthful if either is ever tuned
         "ladder": ladder_to_dicts(ladder),
+        "support_displayed": support_to_dicts(support_levels),
     }
     with open(LADDER_LOG_PATH, "a") as f:
         f.write(json.dumps(record) + "\n")
@@ -146,6 +154,7 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
         qqq_close = float(qqq_df["close"].iloc[-1])
         current_tqqq_price = float(tqqq_df["close"].iloc[-1])
         qqq_atr_pct = compute_atr_pct(qqq_df)
+        market_data_last_date = qqq_df.index[-1].strftime("%Y-%m-%d")
 
         # The ladder itself uses NO swing-low data (frequency-of-fill decision).
         ladder = build_ladder(
@@ -170,7 +179,8 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
             max_results=MAX_SUPPORT_DISPLAY,
         )
 
-        log_ladder(shares, price, current_tqqq_price, qqq_atr_pct, ladder)
+        log_ladder(shares, price, current_tqqq_price, qqq_close, qqq_atr_pct,
+                   market_data_last_date, ladder, support_levels)
 
         embed = discord.Embed(
             title=f"TQQQ position: {shares:g} sh @ ${price:.2f} basis",
@@ -225,8 +235,6 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
                     value="\n".join(unattached_support),
                     inline=False,
                 )
-
-        log_ladder(shares, price, current_tqqq_price, qqq_atr_pct, ladder)
 
         embed.set_footer(text="Pure ATR spacing, anchored to your basis -- update it only after a real fill")
         await interaction.followup.send(embed=embed)
