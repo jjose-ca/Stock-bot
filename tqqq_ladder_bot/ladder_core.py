@@ -41,22 +41,18 @@ ATR_STEP = 0.5                   # increment per search iteration (backtest-conf
                                   # meaningfully higher fill rate than 1.0 without
                                   # dropping into 0.25's noise-level ~1.3% triggers)
 MAX_ATR_MULTIPLE = 15.0          # safety cap so the search can't run forever
+SMA_REGIME_PERIOD = 200          # regime filter period, matches tqqq_swing_bot_v2's
+                                  # own convention (QQQ, not TQQQ -- same reasoning as
+                                  # every other structural calculation in this module)
 
 
 # ---------- Structure calculations (QQQ only) ----------
 
 def compute_atr_pct(df: pd.DataFrame, period: int = ATR_PERIOD) -> float:
-    """14-day ATR expressed as a % of the latest close (scale invariant,
-    portable across price regimes and splits)."""
-    high, low, close = df["high"], df["low"], df["close"]
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    atr_series = tr.ewm(alpha=1 / period, adjust=False).mean()
-    return float(atr_series.iloc[-1]) / float(close.iloc[-1])
+    """14-day ATR expressed as a % of the latest close. Derived from
+    compute_atr_pct_series rather than duplicating the TR/EWM computation
+    -- single source of truth for the ATR% formula."""
+    return float(compute_atr_pct_series(df, period).iloc[-1])
 
 
 def compute_atr_pct_series(df: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Series:
@@ -98,6 +94,52 @@ def find_confirmed_swing_lows_asof(df: pd.DataFrame, as_of_idx: int,
     return find_confirmed_swing_lows(window_df, wings=wings, lookback_days=lookback_days)
 
 
+# ---------- Regime filter (QQQ 200-day SMA, informational only) ----------
+
+@dataclass
+class RegimeStatus:
+    below_sma: bool
+    qqq_close: float
+    sma_200: float
+    pct_below: float   # 0.0 when NOT below (caller should not display anything in that case)
+
+
+def compute_sma(df: pd.DataFrame, period: int = SMA_REGIME_PERIOD) -> float:
+    """Simple moving average of close, most recent value. Requires at
+    least `period` rows of real data -- caller should fetch enough
+    history (see fetch_daily_bars' lookback_days in the bot) or this will
+    silently compute over a shorter, less meaningful window."""
+    return float(df["close"].rolling(window=period).mean().iloc[-1])
+
+
+def compute_regime_status(qqq_df: pd.DataFrame, period: int = SMA_REGIME_PERIOD) -> RegimeStatus:
+    """QQQ vs its own 200-day SMA -- deliberately QQQ, not TQQQ, for the
+    same reason every other structural calculation in this module uses
+    QQQ: TQQQ's own price series is decay-contaminated and not a clean
+    read of the underlying trend. Purely informational -- this does not
+    gate or alter build_ladder(); the caller decides how/whether to
+    surface it (see bot: badge shown only when below_sma is True, no
+    mention at all when above, by design)."""
+    qqq_close = float(qqq_df["close"].iloc[-1])
+    sma = compute_sma(qqq_df, period)
+    below = qqq_close < sma
+    pct_below = round((sma - qqq_close) / sma * 100, 2) if below else 0.0
+    return RegimeStatus(below_sma=below, qqq_close=qqq_close, sma_200=round(sma, 2), pct_below=pct_below)
+
+
+def compute_signed_trend_distance(qqq_df: pd.DataFrame, period: int = SMA_REGIME_PERIOD) -> float:
+    """QQQ's % distance from its 200-day SMA, SIGNED: positive when above
+    (uptrend), negative when below (downtrend) -- unlike RegimeStatus.pct_below,
+    which is deliberately one-directional (0.0 when not below) to keep the
+    ladder's asymmetric badge design simple. This is a separate calculation
+    for /marketcheck specifically, where full situational awareness (not
+    avoiding clutter) is the whole point -- you want to see how far above
+    the trend you are just as much as how far below."""
+    qqq_close = float(qqq_df["close"].iloc[-1])
+    sma = compute_sma(qqq_df, period)
+    return round((qqq_close - sma) / sma * 100, 2)
+
+
 # ---------- Ladder ----------
 
 @dataclass
@@ -105,7 +147,9 @@ class LadderLevel:
     price: float
     qqq_drop_pct: float
     tqqq_drop_pct: float
-    basis: str
+    label: str                          # renamed from `basis` -- was colliding
+                                         # conceptually with basis_price (a float);
+                                         # this is a display string like "QQQ ATR x1.5"
     swing_low_date: Optional[str] = None
 
 
@@ -163,7 +207,7 @@ def build_ladder(
                 price=target_price,
                 qqq_drop_pct=round(final_qqq_drop_pct * 100, 2),
                 tqqq_drop_pct=round(tqqq_drop_pct * 100, 2),
-                basis=f"QQQ ATR x{mult:g}",
+                label=f"QQQ ATR x{mult:g}",
                 swing_low_date=snap_date,
             ))
 
