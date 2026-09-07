@@ -51,6 +51,7 @@ from ladder_core import (
     support_to_dicts,
     locate_support_relative_to_ladder,
     compute_regime_status,
+    compute_signed_trend_distance,
     ATR_STEP,
     LEVERAGE_FACTOR,
     SWING_SNAP_TOLERANCE_ATR,
@@ -185,6 +186,61 @@ async def on_ready():
     log.info(f"Logged in as {client.user}")
 
 
+@tree.command(name="marketcheck", description="Current QQQ regime, trend distance, and volatility -- no position needed")
+async def marketcheck(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    try:
+        qqq_df, tqqq_df = await asyncio.to_thread(get_market_data)
+
+        qqq_now = float(qqq_df["close"].iloc[-1])
+        tqqq_now = float(tqqq_df["close"].iloc[-1])
+        qqq_atr_pct = compute_atr_pct(qqq_df)
+        market_data_last_date = qqq_df.index[-1].strftime("%Y-%m-%d")
+        regime = compute_regime_status(qqq_df)
+        signed_trend_distance = compute_signed_trend_distance(qqq_df)
+
+        # Scope note: this is deliberately minimal for now -- regime, ATR%,
+        # and signed trend distance only. No RSI/signal-mirroring yet (see
+        # the earlier discussion on tqqq_bot.py vs tqqq_swing_bot_v2.py --
+        # unresolved which signal, if either, this should mirror). No
+        # composite "safe to buy" verdict either -- facts only, same
+        # philosophy as everything else in this bot.
+        embed = discord.Embed(
+            title="Market check",
+            color=discord.Color.orange() if regime.below_sma else discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="QQQ now", value=f"${qqq_now:.2f}", inline=True)
+        embed.add_field(name="TQQQ now", value=f"${tqqq_now:.2f}", inline=True)
+        embed.add_field(name="QQQ 14-day ATR", value=f"{qqq_atr_pct * 100:.2f}%", inline=True)
+
+        trend_direction = "above" if signed_trend_distance >= 0 else "below"
+        embed.add_field(
+            name=f"Distance to 200-SMA",
+            value=f"{signed_trend_distance:+.2f}% ({trend_direction} trend, SMA ${regime.sma_200:.2f})",
+            inline=False,
+        )
+
+        if regime.below_sma:
+            embed.add_field(
+                name="⚠️ Regime: QQQ below 200-day SMA",
+                value=(
+                    "Bearish/distressed regime. TQQQ's decay compounds fastest in "
+                    "choppy, directionless conditions -- this is the exact scenario "
+                    "the ladder's own regime badge exists to flag. Treat any new "
+                    "entry with extra caution."
+                ),
+                inline=False,
+            )
+
+        embed.set_footer(text=f"Data as of {market_data_last_date} -- informational only, no buy/sell verdict")
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        log.exception("marketcheck failed")
+        await interaction.followup.send(f"Error computing market check: {e}")
+
+
 @tree.command(name="buyfilled", description="Get your next 3 TQQQ buy levels, anchored to your average cost")
 @app_commands.describe(
     shares="Total position size (shares held)",
@@ -264,7 +320,7 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
             )
 
         embed.add_field(name="TQQQ now", value=f"${current_tqqq_price:.2f}", inline=True)
-        embed.add_field(name="QQQ close", value=f"${qqq_close:.2f}", inline=True)
+        embed.add_field(name="QQQ now", value=f"${qqq_close:.2f}", inline=True)
         embed.add_field(name="QQQ 14-day ATR", value=f"{qqq_atr_pct * 100:.2f}%", inline=True)
 
         support_positions = locate_support_relative_to_ladder(support_levels, ladder, current_tqqq_price)
