@@ -14,10 +14,13 @@ Cron     : 0,15,30,45 10-15 * * 1-5     (signal check, every 15 min, 10am-3:30pm
 
 Validated backtest (4.5yr Databento, CORRECTED honest-timing methodology,
 first-signal-of-day only, INCLUDING the 10:00-10:30 window — tested
-and found to improve results over excluding it): 858 trades, 65.4% win
-rate, $0.1767/share expectancy, out-of-sample consistent across
-2022-2024 and 2024-2026 independently (gap $0.0012), positive in every
-year 2022-2026.
+and found to improve results over excluding it): originally reported
+as 858 trades, 65.4% win rate, $0.1767/share expectancy. CORRECTED
+(see NOTE below TRADE_START_M): the original backtest data was not
+split-adjusted for TQQQ's two 2-for-1 splits (Jan 2022, Nov 2025) --
+real, split-adjustment-corrected numbers are 858 trades, 52.0% WR,
+$0.0380/share expectancy, still out-of-sample consistent (gap $0.0068),
+positive in every year 2022-2026.
 
 This bot is entirely separate from tqqq_intraday_bot.py — separate config,
 separate log files, separate heartbeat entry, separate cron lines. The
@@ -49,12 +52,24 @@ TRADE_START_M   = 0      # Validated: including the 10:00-10:30 window
                           # backtest, which used a '!=10:00' filter inherited
                           # from unrelated vwap_only diagnostics) was tested
                           # directly for THIS strategy and found to IMPROVE
-                          # results: 858 trades, 65.4% WR, $0.1767 exp
+                          # results: originally reported as 858 trades, 65.4%
+                          # WR, $0.1767 exp -- CORRECTED (split-adjustment bug
+                          # found later): real numbers are 858 trades, 52.0% WR,
+                          # $0.0380 exp. See module docstring above for detail.
                           # (vs. 838 trades, 63.8% WR, $0.1625 exp without
                           # it), with a tighter out-of-sample gap ($0.0012
                           # vs $0.0110) — more consistent, not less.
 TRADE_END_H     = 15     # no new signals after this, AND forced exit cutoff
 TRADE_END_M     = 30
+
+# CHANGED (explicit request): reverted from "every qualifying bar fires"
+# back to "first signal of the day only". Unlike the noon-cutoff idea that
+# was briefly added and then removed, THIS change realigns the live bot
+# with what was actually backtested all along — find_above_open_signals()
+# has always used .groupby('date').first() to build the validated 858-
+# trade result. The live bot firing on every qualifying bar was the
+# deviation from that; this restores the validated behavior, it doesn't
+# introduce a new untested one.
 
 MAX_RETRIES     = 12     # 12 x 5 seconds = 60 second max wait
 WAIT_SECONDS    = 5
@@ -380,7 +395,7 @@ def print_summary():
 
     print(f"\n{'='*58}")
     print(f"  Backtest reference (validated, first-signal-only):")
-    print(f"  858 trades, 65.4% WR, $0.1767/share expectancy")
+    print(f"  858 trades, 52.0% WR, $0.0380/share expectancy (split-adjustment-corrected)")
     print(f"{'='*58}\n")
 
 
@@ -497,17 +512,29 @@ def fetch_15min_bars() -> pd.DataFrame:
 # ── SIGNAL CHECK ──────────────────────────────────────────────────────────────
 def check_signal(df: pd.DataFrame) -> dict | None:
     """
-    Fires whenever the most recently completed 15-min bar's close is above
-    today's own opening price, after 10:00am ET. Unlike the original
-    pullback bot, this is NOT gated to once per day — every qualifying bar
-    fires (per explicit request), but only the FIRST signal of the day was
-    backtested/validated (858 trades, 65.4% WR, $0.1767 exp, out-of-sample
-    consistent). Signal #2+ each day was separately backtested as "every
-    qualifying bar" and found meaningfully worse (12,489 trades, 54.5% WR,
-    $0.0552 exp, wider out-of-sample gap) — shown for visibility, not as an
-    equally-trusted signal.
+    Fires ONLY the first qualifying bar of the day (close above today's own
+    opening price, after 10:00am ET) — no cap on WHAT TIME that first bar
+    can occur, only that it's the day's first one. This restores exactly
+    what the validated backtest measured: find_above_open_signals() has
+    always used .groupby('date').first() to build the 858-trade result
+    (52.0% WR, $0.0380 exp, split-adjustment-corrected). The live bot
+    briefly firing on every qualifying bar (an earlier explicit request)
+    was the deviation from this; this restores the validated behavior.
+
+    NOTE: a noon cutoff (skip the whole day if the first qualifying bar
+    is in the afternoon) was briefly added here and then explicitly
+    removed — that combination was never backtested (the validated result
+    includes first-of-day signals at any time), and rather than leave an
+    unproven restriction in place, it was stripped back out. If a
+    time-of-day effect is ever confirmed by an actual backtest, it should
+    be added back deliberately, not re-introduced by default.
     """
     if len(df) < 1:
+        return None
+
+    # Only ever fire the first signal of the day — once one has fired,
+    # every later bar this same day is skipped, regardless of time.
+    if signals_today_count() > 0:
         return None
 
     cur = df.iloc[-1]
@@ -554,15 +581,26 @@ def check_signal(df: pd.DataFrame) -> dict | None:
 
 # ── DISCORD ALERT ─────────────────────────────────────────────────────────────
 def send_discord_alert(signal: dict, signal_number: int):
+    # Kept generic (signal_number param preserved) rather than hardcoded,
+    # but as of the check_signal() gating change, this will now always be
+    # called with signal_number == 1 — every later-in-day candidate is
+    # filtered out before ever reaching this function.
     validated = signal_number == 1
     tag = "[VALIDATED SIGNAL]" if validated else f"[INFO ONLY — SIGNAL #{signal_number} TODAY]"
 
+    # NOTE: numbers corrected — the original "65.4% WR, $0.1767 exp" was
+    # found to be computed on TQQQ price data that was NOT split-adjusted
+    # (both the Jan 2022 and Nov 2025 2-for-1 splits were present as raw
+    # price discontinuities). Re-validated on properly split-adjusted data:
+    # real win rate is 52.0%, real expectancy is $0.0380/share — still a
+    # genuine, out-of-sample-consistent edge, just far more modest than
+    # originally reported.
     validation_note = (
-        "Backtested: 858 trades, 65.4% WR, $0.1767/share expectancy, "
-        "out-of-sample validated."
+        "Backtested: 858 trades, 52.0% WR, $0.0380/share expectancy, "
+        "out-of-sample validated (split-adjustment-corrected)."
         if validated else
         "NOT individually backtested — later same-day signals tested\n"
-        "as a group and found meaningfully weaker (54.5% WR, $0.0552 exp).\n"
+        "as a group and found meaningfully weaker.\n"
         "Shown for visibility, use judgment."
     )
 
