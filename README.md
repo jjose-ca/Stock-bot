@@ -391,9 +391,19 @@ A single condition, checked on the most recently **completed** 15-min bar:
                                        volume, or pullback pattern at all)
 ```
 Trading window: 10:00am–3:30pm ET (validated as better than 10:30am start —
-see below). No gating to one signal per day — fires on every qualifying
-bar, exactly like the pullback bot's multi-signal design, but with an
-important distinction (next section).
+see below).
+
+**Gated to exactly one signal per day** — fires only on the **first**
+qualifying bar of the day; every later bar that same day is skipped
+regardless of price. This matches the backtest exactly:
+`find_above_open_signals()` has always used `.groupby('date').first()` to
+build the validated result, so this is a restoration of validated
+behavior, not a new restriction. (History: the live bot briefly fired on
+*every* qualifying bar per an earlier explicit request — see
+[Reverted: Every-Bar Alerts](#reverted-every-bar-alerts-restored-to-first-signal-only)
+below — and separately, a noon cutoff was briefly added on top of the
+first-signal gate, then explicitly removed once it was recognized as an
+untested addition with no backtest behind it specifically.)
 
 #### Exit Strategy
 ```
@@ -403,27 +413,20 @@ Time stop:   3:30pm ET (exit before market close regardless of P&L)
 R/R ratio:   1.25:1
 ```
 
-#### Validated vs. Informational Signals — Every Alert Is Labeled
-Only the **first** signal each day was individually backtested — 858
-trades, 65.4% win rate, $0.1767/share expectancy (see
-[Validated Parameters](#tqqq_above_open_bot---validated-parameters) below).
-A separate backtest tested taking **every** qualifying bar (not just the
-first) and found it meaningfully weaker: 12,489 trades, 54.5% win rate,
-$0.0552/share expectancy, exit mix degraded toward TIME (32.5% vs. the
-first-signal-only version's 7.1%).
-
-Given this, every alert is explicitly labeled:
-- `[VALIDATED SIGNAL]` — signal #1 of the day. Alert includes the real
-  backtest numbers.
-- `[INFO ONLY — SIGNAL #N TODAY]` — signal #2+. Alert explicitly states it
-  was not individually validated and that the group-tested result was
-  weaker, with the specific numbers, so the trader can weigh it
-  accordingly rather than treating every alert as equally trustworthy.
-
-This mirrors the pullback bot's multi-signal design (every setup is
-flagged, judgment is left to the trader) but goes further by attaching
-honest, differentiated statistical context to each signal number, since
-this bot's own backtesting showed the two categories are not equivalent.
+#### Reverted: Every-Bar Alerts Restored to First-Signal-Only
+Originally, every alert was labeled `[VALIDATED SIGNAL]` (signal #1) or
+`[INFO ONLY — SIGNAL #N TODAY]` (signal #2+) and fired on every qualifying
+bar, per an earlier explicit request. This was later reverted back to
+first-signal-only, for a specific reason worth being precise about: taking
+every qualifying bar (not just the first) was **separately backtested**
+and found meaningfully weaker (roughly 12,500 trades, ~54.5% WR vs. the
+first-signal-only version's real ~52.0% WR, with exit mix degraded toward
+TIME) — but more importantly, first-signal-only **is** the actual
+validated strategy; firing on every bar was always the live bot deviating
+from what was backtested, not an equally-valid variant of it. The
+`validated`/`signal_number` fields remain in the trade log schema for
+historical continuity, but as of this gating change, `signal_number` will
+always be `1` going forward — no `INFO ONLY` alerts will fire anymore.
 
 ---
 
@@ -893,15 +896,92 @@ this strategy was never exposed to the lookahead bias bug.
 
 ### Final Validated Result (First Signal of Day Only)
 ```
-Signal rate:    77% of trading days (858 signals)
-Win rate:       65.4%  (561W / 297L)
-Expectancy:     +$0.1767/share
-Exit breakdown: TARGET 59.8% / STOP 33.1% / TIME 7.1%
-Out-of-sample:  Period A (2022-01 to 2024-06): $0.1772 exp
-                Period B (2024-07 to 2026-07): $0.1760 exp
-                Gap: $0.0012 — exceptionally tight, more consistent than
-                any other parameter validated in this system
+Signal rate:    76.1% of trading days (858 signals)
+Win rate:       52.0%  (446W / 412L)
+Expectancy:     +$0.0380/share
+Exit breakdown: STOP 36% / TIME 33% / TARGET 31%
+Out-of-sample:  Period A (2022-01 to 2024-06): 478 trades, 53.6% WR, $0.0411 exp
+                Period B (2024-07 to 2026-07): 380 trades, 50.0% WR, $0.0343 exp
+                Gap: $0.0068 — reasonably tight, real edge holds in both
+                independent periods
+Per-year:       2022 +0.0436 | 2023 +0.0442 | 2024 +0.0441 | 2025 +0.0142 | 2026 +0.0494
+                (every year positive; 2025 notably weaker than the rest —
+                worth watching, not yet a pattern)
 ```
+**These are the corrected numbers.** See the critical section immediately
+below for why they differ substantially from what was originally reported
+and traded on.
+
+### CRITICAL: Split-Adjustment Bug Found and Corrected (Second Major Data Bug in This Project)
+
+**Every number in this section prior to this correction — 858 trades,
+65.4% WR, $0.1767/share expectancy — was computed on TQQQ price data that
+was NOT split-adjusted.** This was discovered by accident, while
+investigating an unrelated question (whether trade volume predicts signal
+quality), when a backtest re-run using a supposedly-identical dataset
+returned 52.0% WR instead of the expected 65.4%.
+
+**Root cause:** TQQQ underwent two confirmed 2-for-1 stock splits within
+this project's date range — 2022-01-13 and 2025-11-20. Databento's
+standard `ohlcv-1m` schema pull is **raw/unadjusted by default**; split
+adjustment requires a separate Reference API call
+(`adjustment_factors.get_range()`) that this project's data pipeline never
+used. Confirmed directly in the raw data: TQQQ's close went from $152.69
+(2022-01-12) to $70.58 (2022-01-13) — an un-adjusted 2:1 split cliff, not
+a real market move. **This same discontinuity was found in the ORIGINAL
+1-minute CSV file used for every backtest in this entire project** — the
+bug did not appear today; it has been present since the very first
+above-open backtest.
+
+**Why this matters mechanically:** target/stop are fixed dollar amounts
+($0.50/$0.40). A fixed dollar move represents a wildly different
+*proportional* move depending on price level — 0.3% of a $150 pre-split
+price vs. 0.7% of a $70 post-split price. Every day before a given split
+was being measured against a target/stop calibrated for a completely
+different relative scale, silently distorting win rate and expectancy
+across the whole dataset (not just near the split dates) without changing
+signal *count* at all — `close > day_open` is a same-day, scale-invariant
+comparison, unaffected by absolute price level, which is exactly why the
+signal count (858) stayed identical while every outcome metric changed.
+
+**Fix:**
+```python
+def apply_split_adjustments(df, ts_col='ts_et'):
+    df = df.copy()
+    splits = [
+        (pd.Timestamp("2022-01-13").date(), 2),
+        (pd.Timestamp("2025-11-20").date(), 2),
+    ]
+    for split_date, ratio in splits:
+        mask = df[ts_col].dt.date < split_date
+        for col in ['open', 'high', 'low', 'close']:
+            df.loc[mask, col] = df.loc[mask, col] / ratio
+        df.loc[mask, 'volume'] = df.loc[mask, 'volume'] * ratio
+    return df
+```
+Applied immediately after `load_data()`, before anything else touches
+price data. Verified against an independently-documented real price
+(TQQQ closed $102.05 pre-split on 2025-11-17; corrected data shows
+$51.005 = $102.05 ÷ 2, an exact match) — confirming the corrected dataset
+is accurate, not just internally self-consistent.
+
+**Is this a retraction, like the pullback bot's?** No — this is a
+correction, not a retraction. Unlike the pullback bot (which lost to
+random entry once its bug was fixed), the above-open strategy remains
+genuinely, out-of-sample-consistently profitable after correction — every
+single year 2022-2026 is positive, and the two independent test periods
+both show real edge. **The magnitude was overstated by roughly 4.6x; the
+underlying effect (intraday momentum persistence) is real, just
+considerably more modest than believed.**
+
+**Downstream impact — every test below this point in the document was run
+against the OLD, uncorrected 65.4% baseline.** Their *directional*
+findings (volume hurts, EMA hurts, ORB is weaker, the stop-streak breaker
+helps) are likely still valid, since they were relative comparisons against
+a baseline computed the same (flawed) way — but their specific *magnitudes*
+have not been re-verified on corrected data and should not be trusted at
+face value until re-run. This is noted individually below where most
+relevant, but applies throughout.
 
 ### Why the Signal Was Found: Ablation Testing After the Pullback Bot's Failure
 
@@ -930,6 +1010,10 @@ indicator.
 
 ### Why 10:00am Start, Not 10:30am
 
+> ⚠️ Numbers below computed on the pre-split-adjustment-fix baseline —
+> see the split-adjustment correction above. Directional conclusion
+> (10:00 beats 10:30) not yet re-verified on corrected data.
+
 The original validated backtest (838 trades, 63.8% WR, $0.1625 exp)
 accidentally excluded the bar labeled `10:00` — a diagnostic filter added
 while investigating `vwap_only`'s inflated numbers (above) that was never
@@ -948,6 +1032,12 @@ meaningfully tighter out-of-sample gap.
 
 ### Why No Volume Confirmation
 
+> ⚠️ Numbers below computed on the pre-split-adjustment-fix baseline.
+> Re-checked separately post-fix via a volume-bucket breakdown (see
+> below) — directional conclusion (volume doesn't help) confirmed to
+> still hold on corrected data specifically, not just inherited from the
+> old baseline.
+
 Directly tested as a filter on top of the validated above-open signal —
 degraded results, same as it did for the pullback bot:
 ```
@@ -957,7 +1047,37 @@ Above-open + volume≥1.2x: 646 trades, 59.8% WR, $0.1226 exp
 Fewer trades, lower win rate, lower expectancy, TIME-exit rate roughly
 doubled (7.1% → 15.5%).
 
+#### Re-Checked Post-Correction: Volume-Level Breakdown
+
+After the split-adjustment fix, the binary volume filter question was
+re-examined more granularly — not just "does a ≥1.2x threshold help"
+(already answered: no), but "does win rate vary meaningfully across the
+full spectrum of volume levels behind each signal, at all":
+```
+Vol Bucket     Trades  WinRate    Exp      TIME%
+<0.5x            78    57.7%   $0.0555   42.3%
+0.5-0.75x       199    50.3%   $0.0234   31.2%
+0.75-1.0x       226    52.7%   $0.0426   32.7%
+1.0-1.25x       131    48.1%   $0.0019   30.5%
+1.25-1.5x        91    59.3%   $0.0933   33.0%
+>1.5x           132    48.5%   $0.0363   34.1%
+
+Below 1x:   503 trades, 52.5% WR, $0.0370 exp
+At/above 1x: 354 trades, 51.1% WR, $0.0382 exp
+```
+The practically-relevant split (below vs. at/above 1x) is essentially
+flat — confirms no clean, actionable volume-based filter exists, on
+corrected data specifically, not just inherited from the old baseline.
+The two extreme buckets (`<0.5x` and `1.25-1.5x`) show better numbers than
+the middle, a mild U-shape — but per-bucket samples here (78-232 trades)
+are thin enough that this could be noise; not validated out-of-sample, not
+actionable without further testing.
+
 ### Why No EMA Trend Confirmation
+
+> ⚠️ Numbers below computed on the pre-split-adjustment-fix baseline; not
+> yet re-checked post-fix (unlike volume, above). Directional conclusion
+> plausible but unconfirmed on corrected data.
 
 Also directly tested, despite `ema_trend_only` showing real standalone
 edge in the ablation test above — the standalone result did not
@@ -978,17 +1098,32 @@ This is the second independent condition (after volume) confirmed to hurt
 when layered onto above-open, suggesting the strategy's edge specifically
 depends on staying simple rather than adding "extra confirmation."
 
-### Why Every-Bar Alerts Are Labeled Info-Only, Not Suppressed
+### Why Every-Bar Alerts Were Reverted Back to First-Signal-Only
 
-Tested directly (see [Validated vs. Informational Signals](#validated-vs-informational-signals--every-alert-is-labeled)
-above) — taking every qualifying bar each day, not just the first,
-roughly triples signal count but degrades win rate from 65.4% to 54.5%
-and expectancy from $0.1767 to $0.0552, with TIME-exit rate climbing from
-7.1% to 32.5%. Not suppressed entirely (per explicit request — every
-signal is still alerted) but clearly labeled so the trader can weight
-first-of-day signals more heavily than later re-crossings.
+> ⚠️ Comparative numbers below from the pre-split-adjustment-fix baseline;
+> the *decision* to revert stands regardless (see reasoning below), but
+> the specific percentages are unverified on corrected data.
+
+Every-bar alerting was implemented once (per an earlier explicit request),
+then reverted. Taking every qualifying bar each day, not just the first,
+roughly triples signal count but degrades win rate and expectancy
+noticeably, with TIME-exit rate climbing substantially (documented at the
+time as ~65% → ~55% WR territory, ~32% TIME-exit rate vs. ~7% for
+first-only — magnitudes need re-verification post-split-fix, but the
+degradation pattern itself is a structural one, not a coincidence of the
+old data: taking every re-crossing includes progressively later, lower-
+quality, more-whipsaw-prone signals). More fundamentally: first-signal-only
+**is** what the backtest has always measured (`.groupby('date').first()`);
+every-bar was always the live bot deviating from validated behavior, not
+an equally-valid alternative reading of it. The live bot now fires exactly
+once per day, matching the backtest precisely — see
+[Reverted: Every-Bar Alerts](#reverted-every-bar-alerts-restored-to-first-signal-only)
+in Signal Conditions above for the current, deployed behavior.
 
 ### ORB (Opening Range Breakout) — Tested, Weaker Than Above-Open
+
+> ⚠️ Numbers below computed on the pre-split-adjustment-fix baseline; not
+> yet re-checked post-fix.
 
 Built and corrected (an earlier draft had the same lookahead bug plus a
 separate risk/reward anchoring issue, both fixed before this result) as a
@@ -1005,6 +1140,13 @@ pattern as ATR-based exits. Not pursued further; above-open remains the
 stronger, simpler strategy.
 
 ### Stop-Streak Circuit Breaker — Validated, Not Yet Deployed
+
+> ⚠️ Numbers below computed on the pre-split-adjustment-fix baseline. This
+> is now a HIGHER priority to re-validate and deploy, not lower: the real
+> edge is roughly 4.6x smaller than believed when this was tested, meaning
+> there's much less margin to absorb clustered-loss days — the exact
+> problem this breaker addresses. Re-run before deploying, don't assume
+> the old ~4x-improvement ratio holds at the corrected baseline.
 
 Motivated by a real live example (July 14, 2026 — 14 signals fired in one
 choppy session, all 14 lost) — tested whether suppressing new signals
@@ -1040,6 +1182,25 @@ already disproven by the pullback bot's retraction (above) — not expected
 to outperform above-open's simpler signal. A backtest cell was built to
 verify directly rather than dismiss on pattern-matching alone; result not
 yet run/recorded as of this writing.
+
+### Considered and Removed: Noon Signal Cutoff
+
+A noon cutoff (skip the entire day if the first qualifying signal occurs
+after 12:00pm) was briefly added alongside the first-signal-only reversion
+above, then explicitly removed once the distinction between the two
+changes was clarified. **First-signal-only** restores validated backtest
+behavior (`.groupby('date').first()` has always meant exactly this). **The
+noon cutoff was a genuinely new, untested restriction** — the validated
+858-trade result includes first-of-day signals at any time, morning or
+afternoon, with no time-of-day restriction. Rather than leave an unproven
+addition in place under the assumption it was probably safe, it was
+stripped back out once this was recognized. A time-of-day backtest (does
+the first signal's own performance vary by what hour it fires) was scoped
+during this same investigation but not run to completion before the
+split-adjustment bug was discovered and took priority — remains a
+legitimate open question, see [Known Gaps](#known-gaps-not-yet-done)
+below. If a real time-of-day effect is ever confirmed, it should be added
+back deliberately with backtest evidence, not reintroduced by default.
 
 ### Not Yet Tested: Below-Open (Short) Mirror Strategy on SQQQ
 
@@ -1088,8 +1249,18 @@ tqqq_ladder_bot/
 │                               deployed on the VPS). Not committed with
 │                               secrets; pulls QQQ/TQQQ history live via
 │                               yfinance, no local data file needed.
-├── ladder_log.jsonl          ← gitignored. Append-only log of every
+├── requirements.txt          ← pinned deps (yfinance>=0.2.48 specifically,
+│                               to guarantee the multi_level_index kwarg
+│                               is supported — see yfinance-version note
+│                               below).
+├── ladder_log.jsonl          ← TRACKED in git, pushed to GitHub (not
+│                               gitignored — see its own section below for
+│                               why this changed). Append-only log of every
 │                               /buyfilled call and the ladder it produced.
+├── .gitignore                 ← .env, __pycache__/, venv/, *.pyc only.
+│                               (Was missing entirely for a period during
+│                               development — see the corrupted-file
+│                               incident below.)
 └── .env                      ← gitignored. DISCORD_BOT_TOKEN,
                                  DISCORD_GUILD_ID (optional).
 ```
@@ -1309,16 +1480,152 @@ not adopted from a stale historical average.
 ### Current Parameters (`ladder_core.py`)
 
 ```python
-ATR_PERIOD = 14                  # QQQ ATR lookback, Wilder-smoothed
+ATR_PERIOD = 14                  # QQQ ATR lookback, Wilder-smoothed. Swept
+                                  # against 5/7/21 (see below) -- kept at 14,
+                                  # a deliberate decision not to change, not
+                                  # an unexamined default.
 SWING_LOOKBACK_DAYS = 90         # QQQ swing-low search window
 SWING_FRACTAL_WINGS = 3          # bars each side to confirm a swing low
 SWING_SNAP_TOLERANCE_ATR = 0.5   # unused by the live ladder (confluence off);
-                                  # retained for the support-display snap logic
+                                  # reused by /marketcheck's "confirms vs
+                                  # nearest to" wording (see below)
 REQUIRED_LEVELS = 3              # target ladder size
 LEVERAGE_FACTOR = 3.0            # TQQQ vs QQQ, approximate (see caveat below)
 ATR_STEP = 0.5                   # search increment — see spacing sweep above
 MAX_ATR_MULTIPLE = 15.0          # safety cap on the filter-and-extend search
+SMA_REGIME_PERIOD = 200          # QQQ 200-day SMA, used by the regime badge
+                                  # and /marketcheck's trend-distance display
+RSI_PERIOD = 14                  # matches tqqq_bot.py's live Path A signal
+                                  # period exactly (see /marketcheck below)
+RSI_TREND_LOOKBACK = 1           # trading days back for rising/falling
+                                  # comparison, i.e. yesterday. Cosmetic
+                                  # display only (no price/level depends on
+                                  # this) — a reasoned default, not a
+                                  # backtested one, unlike ATR_STEP.
 ```
+
+### Why `ATR_PERIOD = 14` Was Tested and Deliberately Kept, Not Changed
+
+Unlike `ATR_STEP` and `SWING_FRACTAL_WINGS`, this parameter was inherited
+from Wilder's original convention rather than validated for this specific
+use case — worth testing the same way, rather than assuming. Swept against
+5, 7, and 21 (confluence off, `ATR_STEP` held at 0.5):
+
+- **Fill rate and Level-1 depth**: essentially flat across all four periods
+  (well under 1 percentage point of spread) — this parameter doesn't move
+  fill rate the way `ATR_STEP` did, and there's no sign of a short period
+  dragging spacing into the noise zone either.
+- **Spacing stability** (mean day-to-day % change in the ATR% series):
+  monotonic and real — 5-day is ~3.3x noisier than 21-day, ~2.5x noisier
+  than the 14-day default. A shorter period means the ladder's rungs
+  visibly shift between consecutive `/buyfilled` checks even on days with
+  no real news.
+- **2022 drawdown reactivity** (ATR% just before the selloff vs. its peak
+  60 trading days later): shorter periods do react faster and further —
+  5-day widened +2.37 percentage points vs. 21-day's +1.55pp — but this is
+  one historical episode (n=1 crash), suggestive not statistically robust,
+  same caveat as every other deep-drawdown-regime claim in this system.
+
+**Decision: kept at 14.** Nothing in the data made a compelling case to
+move off it — the one place a shorter period helps (crash reactivity) is a
+weak signal from a single event, while the day-to-day jumpiness cost is
+real and constant. This is a case where the sweep earns its keep by
+confirming a default rather than by finding something to change.
+
+### Bugs Found and Fixed During Development
+
+Worth documenting explicitly — these are real defects that shipped and
+were later caught, not design decisions:
+
+- **Support-anchor bug (the most significant one).** `translate_qqq_price_to_tqqq()`
+  originally anchored the QQQ→TQQQ translation to `basis_price` — correct
+  for the *ladder* (an actionable buy target that must not chase the
+  market) but wrong for the *support display* (a factual "where does
+  structure sit relative to today" statement, which must anchor to LIVE
+  price to correctly absorb realized decay). In a drawdown scenario (e.g.
+  basis $100, live price $50), this bug could silently drop or badly
+  misplace genuinely nearby support, because the filter's own bounds
+  (`low_bound`/`high_bound`, live-price-based) were being compared against
+  a basis-anchored translation — two different coordinate systems.
+  **Fixed**: `find_support_in_range()` and `translate_qqq_price_to_tqqq()`
+  now take `tqqq_reference_price` explicitly, and the live bot always
+  passes the current live TQQQ price, never basis.
+- **Dead `USE_CONFLUENCE` flag.** The bot declared this constant but never
+  actually read it — the empty-Series-vs-real-swing-lows choice was
+  hardcoded inline instead, meaning the flag and the actual behavior could
+  silently diverge if either was edited without the other. **Fixed**: the
+  flag now genuinely controls whether `qqq_swing_lows_all` or an empty
+  Series is passed to `build_ladder()`, mirroring exactly how the backtest's
+  `simulate()` makes the same decision.
+- **Duplicate logging.** `log_ladder()` was being called twice per
+  `/buyfilled` invocation — once before the embed was built, again after —
+  writing two near-identical lines to `ladder_log.jsonl` per real call.
+  **Fixed**: single call, placed after all the data (including support) it
+  needs to log already exists.
+- **Relative log path.** `Path("ladder_log.jsonl")` resolved against
+  whatever the process's current working directory happened to be at
+  runtime — worked only because the systemd unit's `WorkingDirectory`
+  happened to be set correctly, fragile against any future manual
+  invocation from elsewhere. **Fixed**: `Path(__file__).parent / "ladder_log.jsonl"`.
+- **Slash-command re-sync on every reconnect.** `on_ready` fires on every
+  Discord gateway reconnect, not just the initial login — calling
+  `tree.sync()` there risked hitting Discord's rate limits over a
+  long-running process for no benefit (the command set doesn't change
+  between reconnects). **Fixed**: sync moved into a custom `Client`
+  subclass's `setup_hook()`, called exactly once before the first
+  connection; `on_ready` now only logs.
+- **No input validation.** Zero or negative `shares`/`price` silently
+  produced "No levels found" instead of a clear error. **Fixed**: explicit
+  check, clear rejection message, before any computation runs.
+- **`"confirms this level"` had no distance threshold.** `locate_support_relative_to_ladder()`
+  is pure nearest-point matching — a swing low several dollars from a rung
+  still read as "confirms" it. **Fixed**: introduced `CONFIRMS_TOLERANCE_PCT`
+  (reusing the existing, previously-unused `SWING_SNAP_TOLERANCE_ATR`
+  constant, scaled by live ATR% and leverage) — genuinely close matches say
+  "confirms," farther ones say "nearest to."
+- **Swallowed support on an empty ladder.** The entire support-rendering
+  block was nested inside the `else:` of `if not ladder:` — if
+  `build_ladder()` returned empty (e.g. price crashed far below basis,
+  exhausting `MAX_ATR_MULTIPLE`), already-computed support was silently
+  never shown, in exactly the scenario (a real crash) where it would matter
+  most. **Fixed**: support computation and the "unattached" rendering now
+  happen unconditionally, outside the ladder-empty branch.
+- **`low_bound` cutoff excluded support just past the deepest rung.**
+  The support search range was capped exactly at the deepest ladder level
+  — a real QQQ support translating to a TQQQ price one dollar past Level 3
+  would be invisible even though it's clearly relevant. **Fixed**: search
+  range now extends one additional ATR step below the deepest rung
+  (`extra_buffer_pct = ATR_STEP * qqq_atr_pct * LEVERAGE_FACTOR`) — an
+  ATR-scaled buffer, not an arbitrary flat percentage, consistent with
+  every other distance in this module.
+- **Corrupted `ladder_core.py` on GitHub (operational incident, not a code
+  bug).** At one point, GitHub's copy of `ladder_core.py` was accidentally
+  overwritten with the *entire contents* of `tqqq_buy_ladder_bot.py` —
+  almost certainly a copy-paste mixup during a manual "edit this file" step
+  on GitHub's web UI. Symptom: `ImportError: cannot import name
+  'compute_atr_pct' from partially initialized module 'ladder_core' (most
+  likely due to a circular import)` — `ladder_core.py` was trying to import
+  from itself, because it *was* the bot file. `git checkout` did not fix
+  this, since the bad content was already committed and pushed; the fix
+  required manually replacing GitHub's file content with the correct
+  source. **Lesson**: when editing files via GitHub's web UI across two
+  similarly-purposed files in the same PR/session, double-check which file
+  is actually open before pasting.
+- **Naming/labeling issues, all now fixed**: `LadderLevel.basis` (a string
+  label like `"QQQ ATR x1"`) renamed to `label` — was colliding
+  conceptually with `basis_price` (a float, the trader's cost basis).
+  **Note this is a breaking change to `ladder_log.jsonl`'s schema** — old
+  log lines keep the key `"basis"`, new ones use `"label"`; nothing rewrites
+  history. Separately, `compute_atr_pct` was refactored to derive from
+  `compute_atr_pct_series` instead of duplicating the TR/EWM formula
+  (single source of truth). The Discord field "QQQ close" was renamed to
+  "QQQ now" (and the misleading unqualified "QQQ -X%" ladder label was
+  replaced with the true live-distance figure, "QQQ needs ~X% more drop
+  from today") — both were technically inaccurate: `qqq_close`/`QQQ close`
+  implied a settled end-of-day print, when during market hours it's
+  actually QQQ's live, still-updating quote (the daily bar's last row is
+  incomplete until 4pm ET) — see the ATR intraday-partial-bar caveat below
+  for the same underlying mechanic.
 
 ### Caveat: `LEVERAGE_FACTOR = 3.0` Is an Approximation, Not Exact
 
@@ -1384,24 +1691,60 @@ slippage, or the reality of manual (non-auto-filled) execution timing.
 
 ### Log File — `ladder_log.jsonl`
 
-Gitignored, VPS-only, one JSON line per `/buyfilled` call:
+**Tracked in git and pushed to GitHub** — not gitignored/VPS-only as it was
+originally set up. The original approach conflated "secret" with "data":
+`.env` (a real credential) and `ladder_log.jsonl` (just data, no
+credentials in it) were both excluded, which meant no off-VPS backup and no
+easy way to pull the log down for analysis. `tqqq_ladder_bot/.gitignore`
+now only excludes `.env`, `__pycache__/`, `venv/`, `*.pyc`. This matches
+the rest of the system's convention (trade logs pushed daily via
+`push_logs.sh`) — though `ladder_log.jsonl` isn't yet added to that script's
+automatic push list, so pushing it today is still a manual
+`git add`/`commit`/`push` rather than happening on the existing daily
+schedule.
+
+One JSON line per `/buyfilled` call (current schema — see the
+`basis`→`label` rename note above for why older lines may have a different
+key for the same field):
 ```json
 {
-  "ts": "2026-08-22T13:09:00+00:00",
+  "ts": "2026-09-04T20:26:00+00:00",
   "shares": 20,
   "tqqq_basis_price": 74.50,
   "tqqq_current_price": 71.17,
+  "qqq_close": 713.44,
   "qqq_atr_pct": 1.59,
+  "market_data_last_date": "2026-09-04",
+  "atr_step": 0.5,
+  "leverage_factor": 3.0,
+  "regime_below_200sma": false,
+  "regime_sma_200": 656.78,
+  "regime_pct_below": 0.0,
   "ladder": [
-    {"price": 70.95, "qqq_drop_pct": 1.6, "tqqq_drop_pct": 4.8, "basis": "QQQ ATR x1", "swing_low_date": null},
-    {"price": 69.18, "qqq_drop_pct": 2.4, "tqqq_drop_pct": 7.1, "basis": "QQQ ATR x1.5", "swing_low_date": null},
-    {"price": 67.41, "qqq_drop_pct": 3.2, "tqqq_drop_pct": 9.5, "basis": "QQQ ATR x2", "swing_low_date": null}
+    {"price": 70.95, "qqq_drop_pct": 1.6, "tqqq_drop_pct": 4.8, "label": "QQQ ATR x0.5",
+     "swing_low_date": null, "tqqq_pct_from_current": 1.2, "qqq_pct_from_current": 0.4},
+    {"price": 69.18, "qqq_drop_pct": 2.4, "tqqq_drop_pct": 7.1, "label": "QQQ ATR x1",
+     "swing_low_date": null, "tqqq_pct_from_current": 3.5, "qqq_pct_from_current": 1.2},
+    {"price": 67.41, "qqq_drop_pct": 3.2, "tqqq_drop_pct": 9.5, "label": "QQQ ATR x1.5",
+     "swing_low_date": null, "tqqq_pct_from_current": 6.0, "qqq_pct_from_current": 2.0}
+  ],
+  "support_displayed": [
+    {"tqqq_price": 68.05, "qqq_price": 704.66, "qqq_drop_pct": 1.5, "swing_low_date": "2026-09-01"}
   ]
 }
 ```
-`swing_low_date` is always `null` under the current frequency-of-fill
-configuration (confluence disabled) — retained in the schema in case the
-confluence decision above is ever revisited.
+`swing_low_date` inside `ladder` entries is always `null` under the current
+frequency-of-fill configuration (confluence disabled) — retained in the
+schema in case the confluence decision above is ever revisited.
+`atr_step`/`leverage_factor` are read directly from `ladder_core.py` at log
+time, never hardcoded in the logging call, so historical entries stay
+accurate even after either constant is later tuned.
+`tqqq_pct_from_current`/`qqq_pct_from_current` are the corrected
+live-distance figures (see the "QQQ close" label-fix note above) —
+`qqq_drop_pct`/`tqqq_drop_pct` remain the original basis-anchored
+structural distances, both kept side by side rather than one replacing the
+other. `support_displayed` records whatever the support feature showed at
+that moment, independent of and without influencing the `ladder` itself.
 
 ### VPS Deployment — Systemd, Not Cron (unlike every other bot here)
 
@@ -1463,6 +1806,144 @@ that shell convenience is irrelevant to how systemd invokes the process.
   server to keep `/buyfilled` output separate from the other bots' passive
   alert stream.
 
+### `target_avg` — Shares-Needed Calculator (`/buyfilled` extension)
+
+Optional parameter, off by default. Answers a different question than the
+ladder itself: not "where's the next price" but "how many shares, bought
+at a specific rung, would bring my average down to a number I choose."
+
+**Formula** (pure algebra, no market data needed): if you hold `N1` shares
+at basis `P1`, and buy `N2` more at price `P2`, the new blended average is
+`(N1×P1 + N2×P2) / (N1+N2)`. Solved for `N2` given a target average `T`:
+
+```
+N2 = N1 × (P1 − T) / (T − P2)
+```
+
+**Two validity constraints, both mathematically necessary**: `T` must be
+below `P1` (buying more can only lower your average, never raise it — the
+command rejects a target ≥ current basis outright, before any computation
+runs), and `T` must be above the specific rung's own price `P2` (buying at
+a price can pull your average *toward* that price but never *past* it — a
+target at or below a given rung's price is flagged "not reachable at this
+level" rather than silently computed as impossible or infinite).
+
+**Sanity guard on the result itself**, added after a review caught it: as
+`T` approaches either boundary, the denominator `(T − P2)` shrinks toward
+zero and `N2` blows up toward mathematically-correct-but-absurd numbers
+(e.g. needing several times your current position). If the computed share
+count exceeds 10x current position size, the response says plainly that
+the target isn't realistic at that level instead of presenting a giant,
+technically-correct-but-useless number as if it were a real plan.
+
+**Explicitly does not tell you what target to pick, or how to size across
+all three rungs as a coherent plan** — that's the sizing/exposure-cap
+question, still open (see Known Gaps below). This is a calculator, not a
+strategy: you name a number, it tells you the shares required to get
+there, at whichever specific rung you're looking at.
+
+### `/marketcheck` — Pre-Trade Context, No Position Required
+
+A second slash command, added to answer a different question than
+`/buyfilled`: "is now a reasonable moment to place a *first* order," rather
+than "where do I add to a position I already hold." Takes no arguments —
+`shares`/`price` aren't relevant before a position exists.
+
+**Deliberately does not produce a composite "safe to buy: yes/no"
+verdict.** Considered directly and rejected: a blended
+recommendation would be a new, unvalidated signal invented on the spot,
+duplicating (worse) the actual validated entry logic that already exists
+in `tqqq_bot.py`. Instead, `/marketcheck` surfaces individual real facts
+and lets the trader weigh them — same philosophy as the ladder's support
+display and regime badge.
+
+**What it shows, and why each piece was chosen:**
+
+- **Price** — QQQ and TQQQ, same line, correctly labeled "now" (not
+  "close" — see the label-fix note above).
+- **QQQ RSI(2), QQQ RSI(14), TQQQ RSI(14)** — shown together rather than
+  picking one, because there's a real, unresolved tension between two
+  live reference points in this system: `tqqq_bot.py`'s actual live Path A
+  signal checks RSI(14) on **TQQQ's own price** directly (confirmed by
+  reading the deployed code — `if rsi < 35:`, checked first, before any
+  regime gate), while `tqqq_swing_bot_v2.py` (confirmed **not** currently
+  live) uses RSI(2) on **QQQ**. Rather than silently pick one convention,
+  both show, clearly labeled, so the trader can see whether they agree or
+  diverge. QQQ RSI(2) was added second, explicitly for a "trade at least
+  once a day" use case — matching the only existing reference for that
+  specific period/asset combination.
+  - **Trend arrow** (↑/↓/→) compares today's value to `RSI_TREND_LOOKBACK`
+    days back (currently 1, i.e. yesterday) — cosmetic only, no backtest
+    behind the lookback choice, unlike the price-affecting parameters
+    elsewhere in this bot.
+  - **Badges** (🔴 overbought / 🟢 oversold) use **period-correct
+    thresholds, not one blanket number for both periods**: RSI(2) at
+    ≤10/≥90 (matching `tqqq_swing_bot_v2.py`'s actual convention — RSI(2)
+    swings far more than RSI(14) by design), RSI(14) at ≤30/≥70 (the
+    standard Wilder convention). An earlier draft of this feature proposed
+    a single 80/20 threshold for both, which would have incorrectly
+    flagged ordinary RSI(2) readings as "extreme" — caught and corrected
+    before shipping.
+- **QQQ volume (5d vs 20d average)** — a plain ratio, no "Elevated"/"Drying
+  up" style interpretive label. Chosen over a considered
+  ATR-based "volatility spike" indicator specifically because it measures
+  something ATR doesn't: *participation* behind a move, not price range —
+  genuinely new information rather than a restatement of what the ATR%
+  field already implies.
+- **QQQ 14-day ATR%** — same figure the ladder itself uses, for context.
+- **Nearest QQQ support, translated to TQQQ** — reuses
+  `find_confirmed_swing_lows()` and `translate_qqq_price_to_tqqq()`
+  as-is, anchored to **live** TQQQ price (there's no basis yet, so this is
+  necessarily the live-price-anchored case). Purely informational — no
+  RSI-divergence or volume-fade gating decides *whether* to show it, and
+  no proposed order accompanies it, both deliberately rejected (see below).
+  Support lines lead with the TQQQ-equivalent price in bold, since that's
+  the number actually needed for a decision, with QQQ source details
+  following as context.
+- **Signed distance to 200-SMA** — a separate calculation
+  (`compute_signed_trend_distance()`) from the ladder's own regime badge
+  field (`RegimeStatus.pct_below`), which is deliberately one-directional
+  (0.0 when not below, to keep the ladder's asymmetric display simple).
+  `/marketcheck`'s whole point is full situational awareness, so this one
+  shows positive (above trend) or negative (below trend) either way.
+- **Regime warning** — reuses `compute_regime_status()` verbatim, same
+  asymmetric display as the ladder (shown only when below the 200-SMA).
+
+**UI iteration**: originally every metric got its own Discord embed field,
+which Discord stacks vertically even for fields marked `inline=True` on
+mobile — a genuine wall of text requiring heavy scrolling. Consolidated
+into 4 grouped fields (Price / Momentum & Volatility / Support / Trend)
+using newlines within each field's value instead of one field per metric.
+
+**Explicitly considered and rejected, with reasons:**
+- **VWAP.** True VWAP is fundamentally an intraday concept (resets each
+  session, computed from intraday price×volume) — this bot has
+  deliberately stayed on daily bars throughout (same line already held
+  against 15-minute structural-exit and intraday vol-snapshot proposals).
+  A "daily-bar anchored VWAP" is a real but different, non-standard
+  technique; not built, to avoid shipping something mislabeled.
+- **ADX / a generic "momentum & strength" composite score.** No validated
+  threshold exists for this bot's specific instrument/timeframe;
+  building one would mean inventing a new, unbacktested indicator.
+- **RSI-divergence + volume-fade gated support recommendation, with a
+  proposed order to place.** A more elaborate version of the support
+  feature was proposed: detect "fading strength" via RSI divergence and
+  declining volume, then find the nearest support and output an explicit
+  "place your buy limit at $X." Rejected on two grounds: (1) it invents a
+  new, unbacktested entry-timing strategy wearing already-built functions
+  as a costume — bearish divergence detection specifically is a real,
+  fussy pattern-recognition problem, not the "quick metric" it was framed
+  as; (2) the final "Action: place order at $X" output directly
+  contradicts the facts-only, no-verdict design this command was built
+  around from the start.
+- **A hard gate on the 200-SMA regime** (refuse to show anything if
+  below trend, matching `tqqq_swing_bot_v2.py`'s use of the same filter as
+  an entry gate). Rejected because `/marketcheck` and the swing bot are
+  answering different questions — gating a *new entry* decision makes
+  sense (skipping a bad-regime entry costs nothing); this bot is helping
+  manage exposure the trader may already have, where going silent removes
+  the tool's usefulness without reducing actual market exposure.
+
 ### Known Gaps — Not Yet Done (Ladder Bot)
 
 - **No full portfolio P&L simulation.** The backtest measures whether
@@ -1490,6 +1971,41 @@ that shell convenience is irrelevant to how systemd invokes the process.
 - **Support display is informational only** — deliberately does not affect
   the ladder; there is no "boost the level toward support" behavior, by
   design (see confluence discussion above).
+- **No sizing per rung, no exposure cap.** `target_avg` (above) answers
+  "how many shares to hit a target I chose," but nothing tells the trader
+  what target to pick, or caps total capital committed across a cycle.
+  Three rungs is a *display* count, not a *limit* — after a fill, the
+  basis updates and three new rungs appear, with nothing structurally
+  stopping indefinite continued averaging into a sustained decline. Flagged
+  as the sharpest unaddressed gap from an external review; would need its
+  own deliberate design (fixed-dollar vs. volatility-weighted sizing, a
+  max-capital-per-cycle or "stop adding below X" rule) rather than a quick
+  patch.
+- **Levels 2 and 3 are a planning preview, not fixed commitments** — worth
+  stating explicitly rather than leaving implicit. ATR is recomputed fresh
+  on every `/buyfilled` call, so if Level 1 fills and the trader re-runs
+  with a new basis, Levels 2/3 are recalculated from whatever ATR% exists
+  *then*, not what was shown when the ladder was first displayed. In
+  practice the drift is usually small (mean ATR% day-to-day change ~2.9%
+  of its own value at the current `ATR_PERIOD=14`; Level 1's median
+  fill time is ~2 days) — but during a genuine volatility regime shift in
+  that window, the preview could be meaningfully off. No UI currently
+  flags this provisional nature to the trader.
+- **`/marketcheck`'s RSI(2)-fires-daily assumption is unverified.** The
+  trader's stated goal was "trade at least once a day"; RSI(2) was added
+  partly on that basis, but how often it actually crosses its threshold
+  historically has not been checked against real data the way `ATR_STEP`
+  and `SWING_FRACTAL_WINGS` were — worth a quick addition to
+  `backtest_ladder.py` before treating it as delivering on that goal.
+- **RSI(2) vs. RSI(14) correlation is reasoned, not measured.** Both should
+  track closely under normal conditions (leverage largely cancels out of a
+  gain/loss ratio, unlike cumulative price) — divergence between them is
+  theorized to signal decay-driving choppiness, but this hasn't been
+  backtested against real QQQ/TQQQ RSI series the way other claims in this
+  document have been.
+- **`ladder_log.jsonl` is tracked in git but not yet in `push_logs.sh`'s
+  automatic daily push** — pushing today's log requires a manual
+  `git add`/`commit`/`push`, unlike the other bots' logs.
 
 ---
 
@@ -2631,28 +3147,55 @@ since been built; see [Reconcile Discord Notification](#reconcile-discord-notifi
 above. Confirm `--notify` is actually present on the live crontab line
 before assuming it's active.)
 
-- **Stop-streak circuit breaker** (`max_consecutive_stops=2`) — validated
-  in backtest (4x+ expectancy improvement, tight out-of-sample gap), not
-  yet implemented in `tqqq_above_open_bot.py`'s live signal logic.
+**Resolved since last update:** the split-adjustment bug (see
+[CRITICAL: Split-Adjustment Bug](#critical-split-adjustment-bug-found-and-corrected-second-major-data-bug-in-this-project)
+above) is fixed in the backtest pipeline. The live bot itself was never
+affected (it trades on current, already-adjusted real-time prices) — only
+historical backtest validation was corrupted.
+
+- **Re-validate stop-streak circuit breaker on split-adjustment-corrected
+  data** — now HIGHER priority than before, not lower: the real edge is
+  ~4.6x smaller than what was believed when this was tested, meaning
+  materially less margin to absorb clustered-loss days. Don't assume the
+  old ~4x-improvement ratio holds; re-run before deploying.
+- **Re-validate EMA confirmation, ORB comparison, and every-bar-alerts
+  degradation on corrected data** — all were tested against the old,
+  inflated baseline. Directional conclusions (all three hurt/underperform)
+  are plausible but unconfirmed at the corrected baseline specifically.
+  Volume confirmation is the one exception — already re-checked
+  post-correction via a volume-bucket breakdown, conclusion held.
+- **Time-of-day effect on the first signal specifically** — scoped
+  (backtest cell written) but never run to completion; the split-
+  adjustment bug was discovered mid-investigation and took priority. This
+  is the legitimate, still-open question behind the noon-cutoff episode
+  (added, then explicitly removed for lacking backtest support — see
+  [Considered and Removed: Noon Signal Cutoff](#considered-and-removed-noon-signal-cutoff)
+  above). Worth running properly on corrected data before considering any
+  time-based restriction again.
 - **Per-day P&L view for the stop-streak filter** — current validation is
   per-trade win rate/expectancy; a per-day aggregate view was flagged as a
   more decision-relevant metric (since the filter structurally caps
   losses-per-day but not wins-per-day, per-trade win rate alone can
   overstate real account-level impact) and has not yet been built.
-- **VIX correlation with signal outcomes** — not yet tested. Would split
-  above-open's validated signals by VIX level at signal time (e.g.
-  terciles) to check whether win rate/expectancy varies meaningfully with
-  volatility — real question given two rough live sessions so far
-  (2026-07-14 whipsaw day, 2026-07-16 3-for-3 loss day) both plausibly
-  coincided with elevated volatility, though this is presently a
-  hypothesis, not evidence. Backtest cell scoped, not yet run (requires
-  pulling `^VIX` daily closes via `yfinance` and matching against the
-  existing TQQQ signal dataset).
+- **VIX correlation with signal outcomes** — not yet tested, and the two
+  "rough live sessions" cited as motivation (2026-07-14, 2026-07-16) were
+  evaluated against the old, inflated expectation of what a normal day
+  looks like — worth re-framing against the corrected ~52% WR baseline
+  before treating those days as unusually bad rather than fairly typical.
+  Backtest cell scoped, not yet run.
 - **Opening-range pullback to 50 EMA** — backtest cell built, not yet run;
   expected (based on family resemblance to the retracted pullback
   strategy) to underperform above-open, but not yet confirmed.
 - **SQQQ below-open mirror strategy** — SQQQ 1-min Databento data not yet
   pulled; core above-open hypothesis not yet tested on the downside/SQQQ.
+  If pursued, must apply the same split-adjustment fix to SQQQ's own data
+  (SQQQ may have its own corporate-action history independent of TQQQ's).
+- **QQQ-signal / TQQQ-execution hybrid strategy** — considered: compute
+  the above-open condition on QQQ (unleveraged, cleaner signal, no
+  decay/rebalancing noise) while still executing and measuring P&L on
+  TQQQ. Plausible mechanism for a real edge (QQQ's price action may be a
+  more honest read of direction than TQQQ's own leverage-distorted
+  series) — not yet tested; would need QQQ's own 1-min Databento data.
 - **`tqqq_intraday_bot.py`'s ultimate fate** — remains deployed but
   unvalidated; no decision yet made on whether to retire it, attempt a
   genuinely different signal concept for it, or leave it running
@@ -3381,48 +3924,37 @@ Stock-bot/
     ├── ladder_core.py
     ├── tqqq_buy_ladder_bot.py
     ├── backtest_ladder.py        ← Colab-run only, not deployed on VPS
-    ├── ladder_log.jsonl           ← gitignored
+    ├── requirements.txt          ← pinned deps, see its own section above
+    ├── ladder_log.jsonl           ← tracked in git (pushed, not gitignored)
     ├── .env                       ← gitignored (DISCORD_BOT_TOKEN, etc.)
     └── venv/                      ← gitignored, dedicated virtual env
 ```
 
 ---
 
-*Last updated: July 2026 — added the missing reconcile Discord notification
-to tqqq_above_open_bot.py (send_reconcile_summary_to_discord(), split into
-VALIDATED/INFO-ONLY sections, --notify flag) — this had been silently
-absent since the bot was first built, meaning every day's reconcile ran
-correctly but never posted a summary. Fixed two real bugs found via
-external code review: (1) day_open could be silently corrupted by a
-truncated yfinance fetch (was assuming the first row per day is always
-the 9:30 bar; now explicitly locates it, fails safe to NaN/no-alert if
-missing), (2) date.today() read the OS/UTC clock instead of ET, a real
-risk specifically on manual late-evening runs (verified numerically: at
-8:30pm ET, UTC has already rolled to the next calendar day). Reduced the
-live signal-check fetch from period="7d" to "3d" (reconcile's own fetch
-correctly stays at 7d) after confirming this bot has no multi-day
-volume/EMA baseline to preserve, unlike the pullback bot. Two other
-review claims were checked and found NOT to be bugs: the 10:00-vs-10:15
-start-time question was already directly tested and settled the opposite
-way earlier in this project (10:00 start validated as better, not a
-drift from the backtest), and the proposed holiday cached-data check
-already existed in the deployed code. Logged VIX-correlation and the
-existing gap list as open items for the next session.
+*Last updated: July 2026 — MAJOR: found and fixed a second critical data
+bug (first was the pullback bot's lookahead bias). TQQQ's raw Databento
+data was never split-adjusted for two confirmed 2-for-1 splits
+(2022-01-13, 2025-11-20) baked into the ORIGINAL backtest CSV since the
+very first above-open validation. Corrected result: 858 trades, 52.0% WR,
+$0.0380/share expectancy (was reported as 65.4% WR, $0.1767 exp — overstated
+by ~4.6x). This is a CORRECTION, not a retraction — the edge remains real
+and out-of-sample consistent (every year 2022-2026 positive), just far
+more modest than believed. Re-checked volume confirmation specifically on
+corrected data (conclusion held: no clean filter). Reverted
+tqqq_above_open_bot.py from "every qualifying bar fires" back to
+"first-signal-of-day only", restoring exact alignment with what the
+backtest has always measured. Briefly added, then explicitly removed, a
+noon signal cutoff after recognizing it was a genuinely new, untested
+restriction (unlike the first-signal-only reversion, which restores
+validated behavior) layered on top of a correct change. Flagged
+every downstream test in this document (EMA, ORB, stop-streak breaker,
+every-bar degradation, VIX motivation) as needing re-verification against
+the corrected baseline — directional conclusions likely hold, magnitudes
+do not. Elevated the stop-streak breaker's re-validation to higher
+priority given the smaller real edge has less margin for clustered
+losses. Logged a new candidate idea (QQQ-signal/TQQQ-execution hybrid,
+motivated by QQQ being a cleaner, less leverage-distorted price series)
+to Known Gaps.
 *VPS: Servarica V3 KVM Slim Slice 2, <VPS_IP>, Montreal*
 *Python: 3.10.12 | Ubuntu: 22.04 LTS*
-
----
-
-*Addendum: added `tqqq_buy_ladder_bot.py` — a new, architecturally distinct
-Discord slash-command tool (systemd-managed, not cron; own venv; own
-`tqqq_ladder_bot/` subfolder) for computing volatility-aware averaging-down
-buy levels on an existing TQQQ position. Full design history preserved in
-its own dedicated section above, including: the "moving goalposts"
-basis-anchoring decision, why structure is computed on QQQ rather than
-TQQQ's own decayed price history, the confluence-vs-frequency backtest
-(inconclusive once depth-controlled; frequency-of-fill shipped on design
-grounds, not because confluence was proven worse), the `ATR_STEP`
-spacing sweep that landed on `0.5`, and a real anchor-direction bug found
-and fixed in the support-display feature (was incorrectly anchored to
-basis instead of live price, which could silently drop valid nearby
-support during a drawdown).*
