@@ -316,13 +316,20 @@ async def marketcheck(interaction: discord.Interaction):
 @app_commands.describe(
     shares="Total position size (shares held)",
     price="Your average cost basis (not today's market price)",
+    target_avg="Optional: see how many shares at each level would bring your average down to this price",
 )
-async def buyfilled(interaction: discord.Interaction, shares: float, price: float):
+async def buyfilled(interaction: discord.Interaction, shares: float, price: float, target_avg: float = None):
     await interaction.response.defer(thinking=True)
     if shares <= 0 or price <= 0:
         await interaction.followup.send(
             f"Both shares ({shares:g}) and price (${price:.2f}) must be positive numbers -- "
             f"check your input and try again."
+        )
+        return
+    if target_avg is not None and target_avg >= price:
+        await interaction.followup.send(
+            f"Target average (${target_avg:.2f}) must be below your current basis (${price:.2f}) -- "
+            f"buying more shares can only lower your average, not raise it."
         )
         return
     try:
@@ -455,6 +462,43 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
                     f"QQQ needs ~{qqq_pct_from_now:.1f}% more drop from today "
                     f"[{lvl.label}, {lvl.tqqq_drop_pct:.1f}% below basis]"
                 )
+
+                # Optional: shares needed at THIS level's price to reach
+                # target_avg. Algebra: new_avg = (N1*P1 + N2*P2)/(N1+N2).
+                # Solving for N2 given a target T:
+                #   N2 = N1 * (P1 - T) / (T - P2)
+                # Only defined for P2 < T < P1 -- buying at a price can
+                # never pull the average below that price itself, no
+                # matter how many shares, so a target at or below this
+                # level's own price is mathematically unreachable here.
+                if target_avg is not None:
+                    if target_avg <= lvl.price:
+                        field_value += (
+                            f"\n🎯 To reach ${target_avg:.2f} avg: not reachable at this level "
+                            f"(target is at or below this price -- buying here can only approach "
+                            f"${lvl.price:.2f}, never go below it)"
+                        )
+                    else:
+                        shares_needed = shares * (price - target_avg) / (target_avg - lvl.price)
+                        # Sanity guard: as target_avg approaches either boundary
+                        # (current basis, or this level's own price), the
+                        # denominator shrinks toward zero and shares_needed
+                        # blows up toward mathematically-correct-but-absurd
+                        # numbers. Flag it rather than silently show a
+                        # meaningless giant figure as if it were a real plan.
+                        if shares_needed > shares * 10:
+                            field_value += (
+                                f"\n🎯 To reach ${target_avg:.2f} avg: not realistic here -- "
+                                f"would require ~{shares_needed:.0f} shares "
+                                f"({shares_needed / shares:.0f}x your current position). "
+                                f"Target is too close to this level's price or your current basis."
+                            )
+                        else:
+                            field_value += (
+                                f"\n🎯 To reach ${target_avg:.2f} avg: buy ~{shares_needed:.1f} shares here "
+                                f"(new total: {shares + shares_needed:.1f} sh)"
+                            )
+
                 if i in support_by_level:
                     field_value += "\n" + "\n".join(support_by_level[i])
                 embed.add_field(
