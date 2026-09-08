@@ -252,28 +252,36 @@ async def marketcheck(interaction: discord.Interaction):
         embed.add_field(name="QQQ now", value=f"${qqq_now:.2f}", inline=True)
         embed.add_field(name="TQQQ now", value=f"${tqqq_now:.2f}", inline=True)
 
+        # Badges use period-CORRECT thresholds, not one blanket number for
+        # both -- RSI(2) swings far more than RSI(14) by design. RSI(2)
+        # bounds (<10/>90) match tqqq_swing_bot_v2.py's actual live
+        # convention; RSI(14) bounds (<30/>70) are the standard Wilder
+        # convention. Applying RSI(14)'s bounds to RSI(2) would badge
+        # ordinary RSI(2) noise as "extreme," and vice versa. Silent (no
+        # badge) in between -- same asymmetric-display principle as the
+        # regime badge: only flag what's actually notable.
+        def rsi_badge(value: float, oversold: float, overbought: float) -> str:
+            if value <= oversold:
+                return "🟢 "
+            if value >= overbought:
+                return "🔴 "
+            return ""
+
         rsi_arrow = {"rising": "↑", "falling": "↓", "flat": "→"}
-        embed.add_field(
-            name="QQQ RSI(2)",
-            value=f"{qqq_rsi2.value:.1f} {rsi_arrow[qqq_rsi2.direction]} ({qqq_rsi2.direction}, was {qqq_rsi2.prior_value:.1f})",
-            inline=True,
-        )
-        embed.add_field(
-            name="QQQ RSI(14)",
-            value=f"{qqq_rsi.value:.1f} {rsi_arrow[qqq_rsi.direction]} ({qqq_rsi.direction}, was {qqq_rsi.prior_value:.1f})",
-            inline=True,
-        )
-        embed.add_field(
-            name="TQQQ RSI(14)",
-            value=f"{tqqq_rsi.value:.1f} {rsi_arrow[tqqq_rsi.direction]} ({tqqq_rsi.direction}, was {tqqq_rsi.prior_value:.1f})",
-            inline=True,
-        )
-        embed.add_field(
-            name="QQQ volume (5d vs 20d avg)",
-            value=f"{qqq_volume_ratio:.2f}x",
-            inline=True,
-        )
-        embed.add_field(name="QQQ 14-day ATR", value=f"{qqq_atr_pct * 100:.2f}%", inline=True)
+
+        def rsi_line(label: str, status, oversold: float, overbought: float) -> str:
+            badge = rsi_badge(status.value, oversold, overbought)
+            return (f"{badge}{label}: {status.value:.1f} {rsi_arrow[status.direction]} "
+                    f"({status.direction}, was {status.prior_value:.1f})")
+
+        momentum_lines = [
+            rsi_line("QQQ RSI(2)", qqq_rsi2, oversold=10, overbought=90),
+            rsi_line("QQQ RSI(14)", qqq_rsi, oversold=30, overbought=70),
+            rsi_line("TQQQ RSI(14)", tqqq_rsi, oversold=30, overbought=70),
+            f"QQQ volume (5d vs 20d avg): {qqq_volume_ratio:.2f}x",
+            f"QQQ 14-day ATR: {qqq_atr_pct * 100:.2f}%",
+        ]
+        embed.add_field(name="Momentum & Volatility", value="\n".join(momentum_lines), inline=False)
 
         if nearest_supports:
             embed.add_field(
@@ -282,27 +290,19 @@ async def marketcheck(interaction: discord.Interaction):
                 inline=False,
             )
 
-        # 200-SMA distance and regime warning kept together at the end, by
-        # request -- these are background/context checked last, not the
-        # first thing needed to act.
+        # 200-SMA distance and regime warning grouped into ONE field, kept
+        # last -- background/context checked last, not the first thing
+        # needed to act.
         trend_direction = "above" if signed_trend_distance >= 0 else "below"
-        embed.add_field(
-            name=f"Distance to 200-SMA",
-            value=f"{signed_trend_distance:+.2f}% ({trend_direction} trend, SMA ${regime.sma_200:.2f})",
-            inline=False,
-        )
-
+        trend_lines = [f"Distance to 200-SMA: {signed_trend_distance:+.2f}% ({trend_direction} trend, SMA ${regime.sma_200:.2f})"]
         if regime.below_sma:
-            embed.add_field(
-                name="⚠️ Regime: QQQ below 200-day SMA",
-                value=(
-                    "Bearish/distressed regime. TQQQ's decay compounds fastest in "
-                    "choppy, directionless conditions -- this is the exact scenario "
-                    "the ladder's own regime badge exists to flag. Treat any new "
-                    "entry with extra caution."
-                ),
-                inline=False,
+            trend_lines.append(
+                "⚠️ Bearish/distressed regime. TQQQ's decay compounds fastest in "
+                "choppy, directionless conditions -- this is the exact scenario "
+                "the ladder's own regime badge exists to flag. Treat any new "
+                "entry with extra caution."
             )
+        embed.add_field(name="Trend", value="\n".join(trend_lines), inline=False)
 
         embed.set_footer(text=f"Data as of {market_data_last_date} -- informational only, no buy/sell verdict")
         await interaction.followup.send(embed=embed)
