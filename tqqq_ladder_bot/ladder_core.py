@@ -69,6 +69,64 @@ def compute_atr_pct_series(df: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Ser
     return atr_series / close
 
 
+# ---------- RSI (informational only, /marketcheck -- not used by build_ladder) ----------
+
+RSI_PERIOD = 14           # matches tqqq_bot.py's live Path A signal period
+RSI_TREND_LOOKBACK = 3    # trading days back for rising/falling comparison --
+                           # a judgment call, not backtested; purely descriptive
+
+
+@dataclass
+class RSIStatus:
+    value: float
+    prior_value: float
+    direction: str   # "rising" / "falling" / "flat"
+
+
+def compute_rsi_series(df: pd.DataFrame, period: int = RSI_PERIOD) -> pd.Series:
+    """Wilder's RSI, standard formula (same smoothing convention as ATR
+    elsewhere in this module: ewm(alpha=1/period, adjust=False)). Matches
+    the implementation style already used in tqqq_swing_bot_v2.py."""
+    close = df["close"]
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0.0, float("nan"))
+    return (100.0 - 100.0 / (1.0 + rs)).fillna(100.0)
+
+
+def compute_rsi_status(df: pd.DataFrame, period: int = RSI_PERIOD,
+                         trend_lookback: int = RSI_TREND_LOOKBACK) -> RSIStatus:
+    """Current RSI plus a simple rising/falling/flat read vs `trend_lookback`
+    days ago. Purely informational -- no threshold is asserted as
+    meaningful here (unlike tqqq_bot.py's validated `< 35` signal), this
+    just reports the value and its recent direction."""
+    series = compute_rsi_series(df, period)
+    current = float(series.iloc[-1])
+    prior = float(series.iloc[-1 - trend_lookback])
+    if current > prior:
+        direction = "rising"
+    elif current < prior:
+        direction = "falling"
+    else:
+        direction = "flat"
+    return RSIStatus(value=round(current, 1), prior_value=round(prior, 1), direction=direction)
+
+
+def compute_volume_ratio(df: pd.DataFrame, short_window: int = 5, long_window: int = 20) -> float:
+    """5-day average volume vs 20-day average volume, as a plain ratio --
+    >1 means recent volume running above its own longer baseline, <1 means
+    below. No status label or threshold applied here (e.g. "elevated" /
+    "drying up") -- those are unvalidated round numbers, same category as
+    SWING_SNAP_TOLERANCE_ATR before it was tied to an actual formula.
+    Purely descriptive, like everything else /marketcheck shows."""
+    vol_short = df["volume"].tail(short_window).mean()
+    vol_long = df["volume"].tail(long_window).mean()
+    return round(float(vol_short / vol_long), 2) if vol_long > 0 else 1.0
+
+
 def find_confirmed_swing_lows(df: pd.DataFrame, wings: int = SWING_FRACTAL_WINGS,
                                 lookback_days: int = SWING_LOOKBACK_DAYS) -> pd.Series:
     """Confirmed swing-low prices: low[i] is the minimum of the surrounding
