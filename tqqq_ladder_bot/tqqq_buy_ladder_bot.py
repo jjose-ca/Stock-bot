@@ -52,6 +52,9 @@ from ladder_core import (
     locate_support_relative_to_ladder,
     compute_regime_status,
     compute_signed_trend_distance,
+    compute_rsi_status,
+    compute_volume_ratio,
+    translate_qqq_price_to_tqqq,
     ATR_STEP,
     LEVERAGE_FACTOR,
     SWING_SNAP_TOLERANCE_ATR,
@@ -199,12 +202,45 @@ async def marketcheck(interaction: discord.Interaction):
         regime = compute_regime_status(qqq_df)
         signed_trend_distance = compute_signed_trend_distance(qqq_df)
 
-        # Scope note: this is deliberately minimal for now -- regime, ATR%,
-        # and signed trend distance only. No RSI/signal-mirroring yet (see
-        # the earlier discussion on tqqq_bot.py vs tqqq_swing_bot_v2.py --
-        # unresolved which signal, if either, this should mirror). No
-        # composite "safe to buy" verdict either -- facts only, same
-        # philosophy as everything else in this bot.
+        # RSI shown for BOTH assets, clearly labeled, by explicit choice --
+        # tqqq_bot.py's live signal uses RSI(14) on TQQQ directly (no QQQ
+        # involved), while everything else in this bot deliberately uses
+        # QQQ. Rather than pick one and silently favor a convention, both
+        # are shown so you can see whether they agree or diverge. Neither
+        # is asserted as a decision rule here -- purely descriptive,
+        # unlike tqqq_bot.py's actual validated `< 35` threshold.
+        # RSI(2) on QQQ -- fast mean-reversion oscillator, matches the
+        # convention from tqqq_swing_bot_v2.py (not live, but the only
+        # existing reference for this period/asset combo). Reuses
+        # compute_rsi_status with period=2 -- no new function needed, this
+        # is exactly what the period argument already exists for.
+        qqq_rsi2 = compute_rsi_status(qqq_df, period=2)
+
+        qqq_rsi = compute_rsi_status(qqq_df)
+        tqqq_rsi = compute_rsi_status(tqqq_df)
+
+        qqq_volume_ratio = compute_volume_ratio(qqq_df)
+
+        # Nearest historical QQQ support, translated to TQQQ -- a FACT, not
+        # a recommendation. Anchored to live TQQQ price (not a basis --
+        # there's no position yet in this command), same reasoning as the
+        # ladder's own support display: this describes where structure
+        # sits relative to today, it doesn't tell you what to do with it.
+        # Reuses find_confirmed_swing_lows and translate_qqq_price_to_tqqq
+        # as-is -- no new logic, no momentum/RSI gating, no proposed order.
+        MAX_SUPPORT_SHOWN = 2
+        all_swing_lows = find_confirmed_swing_lows(qqq_df)
+        supports_below = all_swing_lows[all_swing_lows < qqq_now].sort_values(ascending=False)
+        nearest_supports = []
+        for date, qqq_support_price in supports_below.head(MAX_SUPPORT_SHOWN).items():
+            tqqq_equiv = translate_qqq_price_to_tqqq(float(qqq_support_price), qqq_now, tqqq_now, LEVERAGE_FACTOR)
+            qqq_gap_pct = (qqq_now - float(qqq_support_price)) / qqq_now * 100
+            date_str = date.strftime("%Y-%m-%d") if hasattr(date, "strftime") else str(date)
+            nearest_supports.append(
+                f"QQQ ${float(qqq_support_price):.2f} (swing low {date_str}, "
+                f"{qqq_gap_pct:.1f}% below today) → TQQQ equivalent ≈ ${tqqq_equiv:.2f}"
+            )
+
         embed = discord.Embed(
             title="Market check",
             color=discord.Color.orange() if regime.below_sma else discord.Color.blue(),
@@ -220,6 +256,35 @@ async def marketcheck(interaction: discord.Interaction):
             value=f"{signed_trend_distance:+.2f}% ({trend_direction} trend, SMA ${regime.sma_200:.2f})",
             inline=False,
         )
+
+        rsi_arrow = {"rising": "↑", "falling": "↓", "flat": "→"}
+        embed.add_field(
+            name="QQQ RSI(2)",
+            value=f"{qqq_rsi2.value:.1f} {rsi_arrow[qqq_rsi2.direction]} ({qqq_rsi2.direction}, was {qqq_rsi2.prior_value:.1f})",
+            inline=True,
+        )
+        embed.add_field(
+            name="QQQ RSI(14)",
+            value=f"{qqq_rsi.value:.1f} {rsi_arrow[qqq_rsi.direction]} ({qqq_rsi.direction}, was {qqq_rsi.prior_value:.1f})",
+            inline=True,
+        )
+        embed.add_field(
+            name="TQQQ RSI(14)",
+            value=f"{tqqq_rsi.value:.1f} {rsi_arrow[tqqq_rsi.direction]} ({tqqq_rsi.direction}, was {tqqq_rsi.prior_value:.1f})",
+            inline=True,
+        )
+        embed.add_field(
+            name="QQQ volume (5d vs 20d avg)",
+            value=f"{qqq_volume_ratio:.2f}x",
+            inline=True,
+        )
+
+        if nearest_supports:
+            embed.add_field(
+                name="📍 Nearest QQQ support (info only, not a target)",
+                value="\n".join(nearest_supports),
+                inline=False,
+            )
 
         if regime.below_sma:
             embed.add_field(
