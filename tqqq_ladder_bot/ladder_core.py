@@ -72,8 +72,15 @@ def compute_atr_pct_series(df: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Ser
 # ---------- RSI (informational only, /marketcheck -- not used by build_ladder) ----------
 
 RSI_PERIOD = 14           # matches tqqq_bot.py's live Path A signal period
-RSI_TREND_LOOKBACK = 3    # trading days back for rising/falling comparison --
-                           # a judgment call, not backtested; purely descriptive
+RSI_TREND_LOOKBACK = 1    # trading days back for rising/falling comparison, i.e.
+                           # yesterday's value. Cosmetic display only (no price or
+                           # level depends on this), so this is a reasoned default
+                           # rather than a backtested one -- unlike ATR_STEP, this
+                           # doesn't need that level of rigor. 1 day was chosen over
+                           # a longer smoothing window because RSI(2) and RSI(14)
+                           # are different-speed indicators (same reason their badge
+                           # thresholds differ) -- a multi-day smoothing window
+                           # picked for one doesn't obviously suit the other.
 
 
 @dataclass
