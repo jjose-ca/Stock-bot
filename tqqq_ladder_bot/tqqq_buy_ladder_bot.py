@@ -236,9 +236,12 @@ async def marketcheck(interaction: discord.Interaction):
             tqqq_equiv = translate_qqq_price_to_tqqq(float(qqq_support_price), qqq_now, tqqq_now, LEVERAGE_FACTOR)
             qqq_gap_pct = (qqq_now - float(qqq_support_price)) / qqq_now * 100
             date_str = date.strftime("%Y-%m-%d") if hasattr(date, "strftime") else str(date)
+            # TQQQ figure leads the line -- that's the number actually
+            # needed for a decision; QQQ source details follow as context,
+            # instead of being buried at the end of a long sentence.
             nearest_supports.append(
-                f"QQQ ${float(qqq_support_price):.2f} (swing low {date_str}, "
-                f"{qqq_gap_pct:.1f}% below today) → TQQQ equivalent ≈ ${tqqq_equiv:.2f}"
+                f"**TQQQ ≈ ${tqqq_equiv:.2f}** — QQQ ${float(qqq_support_price):.2f} "
+                f"({qqq_gap_pct:.1f}% below today, swing low {date_str})"
             )
 
         embed = discord.Embed(
@@ -248,14 +251,6 @@ async def marketcheck(interaction: discord.Interaction):
         )
         embed.add_field(name="QQQ now", value=f"${qqq_now:.2f}", inline=True)
         embed.add_field(name="TQQQ now", value=f"${tqqq_now:.2f}", inline=True)
-        embed.add_field(name="QQQ 14-day ATR", value=f"{qqq_atr_pct * 100:.2f}%", inline=True)
-
-        trend_direction = "above" if signed_trend_distance >= 0 else "below"
-        embed.add_field(
-            name=f"Distance to 200-SMA",
-            value=f"{signed_trend_distance:+.2f}% ({trend_direction} trend, SMA ${regime.sma_200:.2f})",
-            inline=False,
-        )
 
         rsi_arrow = {"rising": "↑", "falling": "↓", "flat": "→"}
         embed.add_field(
@@ -278,6 +273,7 @@ async def marketcheck(interaction: discord.Interaction):
             value=f"{qqq_volume_ratio:.2f}x",
             inline=True,
         )
+        embed.add_field(name="QQQ 14-day ATR", value=f"{qqq_atr_pct * 100:.2f}%", inline=True)
 
         if nearest_supports:
             embed.add_field(
@@ -285,6 +281,16 @@ async def marketcheck(interaction: discord.Interaction):
                 value="\n".join(nearest_supports),
                 inline=False,
             )
+
+        # 200-SMA distance and regime warning kept together at the end, by
+        # request -- these are background/context checked last, not the
+        # first thing needed to act.
+        trend_direction = "above" if signed_trend_distance >= 0 else "below"
+        embed.add_field(
+            name=f"Distance to 200-SMA",
+            value=f"{signed_trend_distance:+.2f}% ({trend_direction} trend, SMA ${regime.sma_200:.2f})",
+            inline=False,
+        )
 
         if regime.below_sma:
             embed.add_field(
