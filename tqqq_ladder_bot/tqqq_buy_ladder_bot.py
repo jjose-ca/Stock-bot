@@ -249,8 +249,7 @@ async def marketcheck(interaction: discord.Interaction):
             color=discord.Color.orange() if regime.below_sma else discord.Color.blue(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name="QQQ now", value=f"${qqq_now:.2f}", inline=True)
-        embed.add_field(name="TQQQ now", value=f"${tqqq_now:.2f}", inline=True)
+        embed.add_field(name="Price", value=f"QQQ ${qqq_now:.2f}  |  TQQQ ${tqqq_now:.2f}", inline=False)
 
         # Badges use period-CORRECT thresholds, not one blanket number for
         # both -- RSI(2) swings far more than RSI(14) by design. RSI(2)
@@ -397,8 +396,7 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
                 inline=False,
             )
 
-        embed.add_field(name="TQQQ now", value=f"${current_tqqq_price:.2f}", inline=True)
-        embed.add_field(name="QQQ now", value=f"${qqq_close:.2f}", inline=True)
+        embed.add_field(name="Price", value=f"TQQQ ${current_tqqq_price:.2f}  |  QQQ ${qqq_close:.2f}", inline=False)
         embed.add_field(name="QQQ 14-day ATR", value=f"{qqq_atr_pct * 100:.2f}%", inline=True)
 
         support_positions = locate_support_relative_to_ladder(support_levels, ladder, current_tqqq_price)
@@ -457,9 +455,10 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
                 # display; the underlying target price itself is untouched.
                 tqqq_pct_from_now = (current_tqqq_price - lvl.price) / current_tqqq_price * 100
                 qqq_pct_from_now = tqqq_pct_from_now / LEVERAGE_FACTOR
+                qqq_target_price = qqq_close * (1 - qqq_pct_from_now / 100)
 
                 field_value = (
-                    f"QQQ needs ~{qqq_pct_from_now:.1f}% more drop from today "
+                    f"QQQ needs ~{qqq_pct_from_now:.1f}% more drop from today (to ~${qqq_target_price:.2f}) "
                     f"[{lvl.label}, {lvl.tqqq_drop_pct:.1f}% below basis]"
                 )
 
