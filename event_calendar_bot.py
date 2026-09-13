@@ -12,26 +12,28 @@ What it covers, and why each is handled the way it is:
   - FOMC meetings        -> hardcoded schedule (published ~1yr ahead by the
                              Fed). No network call needed; just calendar math.
   - OpEx / quad witching -> pure calendar math (3rd Friday of the month).
-  - FRED macro releases  -> CPI, PCE, NFP release *dates* are published
-                             months ahead and rarely move, so these are
-                             fetched in bulk and cached; the daily run just
-                             checks the cache (refreshed ~monthly).
+  - FRED macro releases  -> CPI, PCE, NFP release *dates* are fetched
+                             directly from FRED (the authoritative,
+                             government-sourced calendar) in bulk and
+                             cached; the daily run just checks the cache
+                             (refreshed ~monthly).
   - Top-holding earnings -> the one category that's NOT stable weeks out
                              (companies confirm/shift dates close to the
                              event), so this is re-fetched every day for a
-                             rolling lookahead window.
+                             rolling lookahead window, via yfinance.
 
-Data sources: this version uses yfinance (unofficial, reverse-engineered
-Yahoo endpoints -- no API key needed, but no SLA either) for both the
-macro release calendar and top-holding earnings dates, instead of FRED
-and Finnhub. That trade-off is deliberate -- see the docstrings on
-refresh_macro_cache_if_stale() and fetch_earnings_window() below for
-what to watch out for and how to fall back to FRED/Finnhub if yfinance's
-output turns out to be unreliable in practice.
+Data sources: earnings dates come from yfinance's Ticker.get_earnings_dates()
+(unofficial, reverse-engineered Yahoo endpoint -- no API key needed, but no
+SLA either). Macro release dates (CPI/PCE/NFP) come from FRED's official
+API -- yfinance's aggregated "economic events calendar" was tried and
+rejected here after live testing showed it doesn't reliably surface US
+releases at all (a 45-day/100-row sample returned zero US entries), so
+don't swap that back in without re-verifying the same way first.
 
 Environment variables (all optional -- the bot degrades gracefully and
 flags a section as unavailable rather than crashing on failure):
 
+  FRED_API_KEY      - https://fred.stlouisfed.org/docs/api/api_key.html (free)
   DISCORD_URL       - reuse the same webhook the other bots use, for a
                        daily summary + error visibility
   EVENT_BOT_DATA_DIR         - where to write output (default /opt/stock-bot/data)
@@ -39,7 +41,7 @@ flags a section as unavailable rather than crashing on failure):
 
 Output:
   event_flags.json          - today's flags + a rolling lookahead window
-  macro_release_cache.json  - cached macro release dates (refreshed ~monthly)
+  macro_release_cache.json  - cached FRED release dates (refreshed ~monthly)
 
 Suggested cron (staggered ahead of your other bots, matching the pattern
 in your existing crontab):
@@ -82,6 +84,7 @@ DATA_DIR = Path(os.environ.get("EVENT_BOT_DATA_DIR", "/opt/stock-bot/data"))
 FLAGS_PATH = DATA_DIR / "event_flags.json"
 MACRO_CACHE_PATH = DATA_DIR / "macro_release_cache.json"
 
+FRED_API_KEY = os.environ.get("FRED_API_KEY")
 DISCORD_URL = os.environ.get("DISCORD_URL")
 
 LOOKAHEAD_DAYS = int(os.environ.get("EVENT_BOT_LOOKAHEAD_DAYS", "5"))
@@ -120,6 +123,15 @@ FOMC_MEETINGS = [
     (dt.date(2027, 10, 26), dt.date(2027, 10, 27), False),
     (dt.date(2027, 12, 7), dt.date(2027, 12, 8), False),
 ]
+
+# FRED release IDs for the macro prints that matter most to QQQ/TQQQ.
+# Verify against https://fred.stlouisfed.org/releases if FRED ever renumbers
+# these -- they're stable in practice but not contractually guaranteed.
+FRED_RELEASES = {
+    "cpi": 10,   # Consumer Price Index
+    "pce": 54,   # Personal Income and Outlays (core PCE)
+    "nfp": 50,   # Employment Situation (nonfarm payrolls)
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -197,51 +209,30 @@ def refresh_macro_cache_if_stale(max_age_days: int = 25) -> dict:
     today = today_et()
     horizon = today + dt.timedelta(days=180)
     old_releases = cached.get("releases", {})
-    releases = {"cpi": old_releases.get("cpi", []),
-                "pce": old_releases.get("pce", []),
-                "nfp": old_releases.get("nfp", [])}
+    releases = {name: old_releases.get(name, []) for name in FRED_RELEASES}
 
-    # NOTE: yfinance is an unofficial, reverse-engineered client for Yahoo's
-    # undocumented endpoints -- it has broken before when Yahoo changed
-    # something server-side, and this economic-events calendar is
-    # aggregated from third-party contributors rather than sourced directly
-    # from BLS/BEA the way FRED is. The column names below ("Event",
-    # "Event Date") are per yfinance's public docs but haven't been
-    # confirmed against live output from this environment -- the first run
-    # logs the raw columns so you can sanity-check them once, and the
-    # try/except means a bad or reshaped response degrades to "keep
-    # whatever was cached before" rather than silently wiping all three
-    # categories at once.
-    try:
-        calendars = yf.Calendars(start=today.isoformat(), end=horizon.isoformat())
-        # yfinance caps this endpoint at 100 regardless of what's requested
-        events_df = calendars.get_economic_events_calendar(limit=100)
-
-        if events_df is not None and not events_df.empty:
-            log.info("yfinance economic events columns: %s", list(events_df.columns))
-            fresh = {"cpi": [], "pce": [], "nfp": []}
-            for _, row in events_df.iterrows():
-                event_name = str(row.get("Event", "")).lower()
-                event_date = row["Event Date"].date().isoformat()
-
-                if "cpi" in event_name or "consumer price index" in event_name:
-                    fresh["cpi"].append(event_date)
-                elif "pce" in event_name or "personal consumption expenditure" in event_name:
-                    fresh["pce"].append(event_date)
-                elif "nonfarm payrolls" in event_name:
-                    fresh["nfp"].append(event_date)
-
-            # Only overwrite a category if the fresh fetch actually found
-            # something for it -- an empty list for "pce" this run more
-            # likely means the string match missed than that there's truly
-            # no PCE release in the next 180 days.
-            for name in ("cpi", "pce", "nfp"):
-                if fresh[name]:
-                    releases[name] = fresh[name]
-        else:
-            log.warning("yfinance economic events calendar returned no rows")
-    except Exception as exc:
-        log.error("yfinance macro fetch failed, keeping previous cache: %s", exc)
+    if not FRED_API_KEY:
+        log.warning("FRED_API_KEY not set -- keeping previous macro cache, if any")
+    else:
+        for name, release_id in FRED_RELEASES.items():
+            try:
+                resp = requests.get(
+                    "https://api.stlouisfed.org/fred/release/dates",
+                    params={
+                        "release_id": release_id,
+                        "realtime_start": today.isoformat(),
+                        "realtime_end": horizon.isoformat(),
+                        "api_key": FRED_API_KEY,
+                        "file_type": "json",
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                dates = [row["date"] for row in resp.json().get("release_dates", [])]
+                if dates:
+                    releases[name] = dates
+            except Exception as exc:
+                log.error("FRED fetch failed for %s, keeping previous cache: %s", name, exc)
 
     cache = {"fetched_at": today.isoformat(), "releases": releases}
     MACRO_CACHE_PATH.write_text(json.dumps(cache, indent=2))
