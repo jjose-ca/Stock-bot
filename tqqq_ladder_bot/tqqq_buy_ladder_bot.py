@@ -60,6 +60,13 @@ from ladder_core import (
     SWING_SNAP_TOLERANCE_ATR,
 )
 
+# event_flags.py must live in the same directory as this file (or
+# somewhere on PYTHONPATH) -- it's the shared read-only helper from
+# event_calendar_bot.py's producer output. No new dependency: it does
+# zero network calls, just reads the local event_flags.json that
+# producer already writes daily.
+from event_flags import get_today_flags
+
 # Decision (backed by backtest_ladder.py): optimize for frequency of fill,
 # not swing-low confluence. The in-sample confluence penalty didn't
 # replicate out-of-sample once depth-controlled, so there's no evidence
@@ -132,7 +139,7 @@ def enrich_ladder_for_log(ladder: list, current_tqqq_price: float, leverage: flo
 
 def log_ladder(shares: float, basis_price: float, current_tqqq_price: float,
                 qqq_close: float, qqq_atr_pct: float, market_data_last_date: str,
-                ladder: list, support_levels: list, regime) -> dict:
+                ladder: list, support_levels: list, regime, event_flags: dict = None) -> dict:
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "shares": shares,
@@ -148,10 +155,44 @@ def log_ladder(shares: float, basis_price: float, current_tqqq_price: float,
         "regime_pct_below": regime.pct_below,
         "ladder": enrich_ladder_for_log(ladder, current_tqqq_price, LEVERAGE_FACTOR),
         "support_displayed": support_to_dicts(support_levels),
+        # Calendar context at the moment of this fill/check -- lets you
+        # later ask "was I buying into a CPI/FOMC/earnings day" without
+        # having to cross-reference dates by hand.
+        "event_flags_date": (event_flags or {}).get("date"),
+        "event_flags_summary": format_event_flags_line(event_flags or {}),
     }
     with open(LADDER_LOG_PATH, "a") as f:
         f.write(json.dumps(record) + "\n")
     return record
+
+
+def format_event_flags_line(flags: dict) -> str:
+    """One-line summary of today's flagged calendar events, for the
+    embed footer/field in both marketcheck and buyfilled. Mirrors the
+    same event types event_calendar_bot.py's own Discord summary uses,
+    kept independent here so this bot has no dependency on that file
+    beyond the shared event_flags.py reader."""
+    bits = []
+    if flags.get("is_fomc_statement_day"):
+        bits.append("FOMC statement today" + (" (+SEP/dot plot)" if flags.get("fomc_has_sep_dot_plot") else ""))
+    elif flags.get("is_fomc_meeting_day"):
+        bits.append("FOMC meeting (day 1)")
+    if flags.get("is_cpi_day"):
+        bits.append("CPI today")
+    if flags.get("is_pce_day"):
+        bits.append("PCE today")
+    if flags.get("is_nfp_day"):
+        bits.append("NFP today")
+    if flags.get("is_quad_witching_day"):
+        bits.append("quad witching")
+    elif flags.get("is_opex_day"):
+        bits.append("monthly OpEx")
+    if flags.get("top_holding_earnings"):
+        bits.append("earnings: " + ", ".join(flags["top_holding_earnings"]))
+    days_to_fomc = flags.get("days_to_next_fomc_statement")
+    if not flags.get("is_fomc_statement_day") and days_to_fomc is not None:
+        bits.append(f"FOMC in {days_to_fomc}d")
+    return "; ".join(bits) if bits else "no flagged events"
 
 
 # ---------- Discord bot ----------
@@ -199,6 +240,7 @@ async def marketcheck(interaction: discord.Interaction):
         tqqq_now = float(tqqq_df["close"].iloc[-1])
         qqq_atr_pct = compute_atr_pct(qqq_df)
         market_data_last_date = qqq_df.index[-1].strftime("%Y-%m-%d")
+        event_flags = get_today_flags()
         regime = compute_regime_status(qqq_df)
         signed_trend_distance = compute_signed_trend_distance(qqq_df)
 
@@ -303,6 +345,11 @@ async def marketcheck(interaction: discord.Interaction):
             )
         embed.add_field(name="Trend", value="\n".join(trend_lines), inline=False)
 
+        calendar_name = f"📅 {event_flags.get('date', 'today')}"
+        if event_flags.get("is_high_impact_day"):
+            calendar_name += " ⚠️"
+        embed.add_field(name=calendar_name, value=format_event_flags_line(event_flags), inline=False)
+
         embed.set_footer(text=f"Data as of {market_data_last_date} -- informational only, no buy/sell verdict")
         await interaction.followup.send(embed=embed)
 
@@ -338,6 +385,7 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
         current_tqqq_price = float(tqqq_df["close"].iloc[-1])
         qqq_atr_pct = compute_atr_pct(qqq_df)
         market_data_last_date = qqq_df.index[-1].strftime("%Y-%m-%d")
+        event_flags = get_today_flags()
         regime = compute_regime_status(qqq_df)
 
         # The ladder itself uses swing-low data only if USE_CONFLUENCE is
@@ -376,7 +424,8 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
         )
 
         log_ladder(shares, price, current_tqqq_price, qqq_close, qqq_atr_pct,
-                   market_data_last_date, ladder, support_levels, regime)
+                   market_data_last_date, ladder, support_levels, regime,
+                   event_flags=event_flags)
 
         embed = discord.Embed(
             title=f"TQQQ position: {shares:g} sh @ ${price:.2f} basis",
@@ -512,6 +561,11 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
                 value="\n".join(unattached_support),
                 inline=False,
             )
+
+        calendar_name = f"📅 {event_flags.get('date', 'today')}"
+        if event_flags.get("is_high_impact_day"):
+            calendar_name += " ⚠️"
+        embed.add_field(name=calendar_name, value=format_event_flags_line(event_flags), inline=False)
 
         embed.set_footer(text="Pure ATR spacing, anchored to your basis -- update it only after a real fill")
         await interaction.followup.send(embed=embed)
