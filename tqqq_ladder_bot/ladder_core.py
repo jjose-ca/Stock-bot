@@ -134,6 +134,45 @@ def compute_volume_ratio(df: pd.DataFrame, short_window: int = 5, long_window: i
     return round(float(vol_short / vol_long), 2) if vol_long > 0 else 1.0
 
 
+# ---------- Rolling N-day extremes (Donchian-style, informational only) ----------
+
+ROLLING_EXTREME_WINDOW = 30  # trading days, per the "biggest dip in ~30 days" question
+
+
+@dataclass
+class RollingExtremeStatus:
+    is_new_low: bool
+    prior_low: float             # lowest LOW over the window, EXCLUDING today
+    high: float                  # highest HIGH over the window, EXCLUDING today
+    drawdown_from_high_pct: float  # current price's % distance below `high`
+
+
+def compute_rolling_extremes(df: pd.DataFrame, current_price: float,
+                               window: int = ROLLING_EXTREME_WINDOW) -> RollingExtremeStatus:
+    """Rolling N-day low/high context -- same core mechanism as Donchian
+    Channels / the classic Turtle Trading system (real, well-precedented
+    technical analysis, not an invented indicator). Answers a genuinely
+    different question than ATR%: ATR measures the typical size of a
+    SINGLE day's move; this measures how far price has fallen from its
+    own recent peak, cumulatively -- a stock can have ordinary ATR while
+    still sitting well below its 30-day high, or vice versa.
+
+    The window EXCLUDES today's own (possibly still-forming) bar, so
+    `current_price` is compared against a genuinely prior reference
+    rather than partly against itself."""
+    prior_window = df.iloc[-(window + 1):-1]
+    prior_low = float(prior_window["low"].min())
+    prior_high = float(prior_window["high"].max())
+    is_new_low = current_price <= prior_low
+    drawdown_from_high_pct = round((prior_high - current_price) / prior_high * 100, 2)
+    return RollingExtremeStatus(
+        is_new_low=is_new_low,
+        prior_low=round(prior_low, 2),
+        high=round(prior_high, 2),
+        drawdown_from_high_pct=drawdown_from_high_pct,
+    )
+
+
 def find_confirmed_swing_lows(df: pd.DataFrame, wings: int = SWING_FRACTAL_WINGS,
                                 lookback_days: int = SWING_LOOKBACK_DAYS) -> pd.Series:
     """Confirmed swing-low prices: low[i] is the minimum of the surrounding
