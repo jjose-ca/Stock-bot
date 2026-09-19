@@ -38,7 +38,10 @@ from typing import Tuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import yfinance as yf
+import yfinance as yf  # used ONLY by is_regular_market_hours_live's holiday
+                        # probe below -- see that function's docstring for
+                        # why this one call is deliberately left as-is
+                        # rather than migrated with the rest of this file
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
@@ -61,6 +64,7 @@ from ladder_core import (
     LEVERAGE_FACTOR,
     SWING_SNAP_TOLERANCE_ATR,
 )
+import alpaca_data as ad
 
 # Decision (backed by backtest_ladder.py): optimize for frequency of fill,
 # not swing-low confluence. The in-sample confluence penalty didn't
@@ -82,6 +86,8 @@ LADDER_LOG_PATH = Path(__file__).parent / "ladder_log.jsonl"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("buy_ladder_bot")
 
+alpaca_client = ad.get_client()
+
 
 # ---------- Data fetching ----------
 
@@ -89,37 +95,28 @@ def fetch_daily_bars(symbol: str, lookback_days: int = 400) -> pd.DataFrame:
     """Blocking network call -- must be run via asyncio.to_thread from
     inside the Discord event loop.
 
+    Primary source: Alpaca (IEX feed) via alpaca_data.fetch_daily_bars --
+    see that function's docstring for the caveat on daily high/low vs.
+    close accuracy. Returns the same shape the yfinance version did
+    (columns open/high/low/close/volume, DatetimeIndex named "date"), so
+    nothing downstream in this file or in ladder_core.py needed to
+    change.
+
     lookback_days=400 (not the earlier 250): a 200-day SMA needs 200
-    genuine TRADING days, and yfinance's period="Nd" counts CALENDAR
-    days -- weekends and holidays mean 250 calendar days only works out
-    to roughly 170-180 trading days, not enough for a reliable 200-day
-    SMA. 400 calendar days comfortably clears 200 trading days with
-    margin for holidays."""
-    df = yf.download(
-        symbol,
-        period=f"{lookback_days}d",
-        interval="1d",
-        progress=False,
-        auto_adjust=True,
-        multi_level_index=False,
-    )
+    genuine TRADING days, and calendar-day lookback needs headroom over
+    that for weekends/holidays -- same reasoning as before, unchanged by
+    the source swap."""
+    df = ad.fetch_daily_bars(alpaca_client, symbol, lookback_days=lookback_days)
     if df.empty:
         raise RuntimeError(f"No data returned for {symbol}")
-    df.columns = [str(c).lower() for c in df.columns]
-    df.index.name = "date"
-    df = df[["open", "high", "low", "close", "volume"]]
     if df["close"].iloc[-1:].isna().any():
-        # A non-empty dataframe with a NaN last row is a real, distinct
-        # failure mode from df.empty -- seen in practice when Yahoo's
-        # backend hasn't finished publishing today's completed bar yet
-        # (a lag can exist right around/after the close). Left unchecked,
-        # NaN silently propagates through every downstream calculation --
-        # ATR, price, filter comparisons (which always evaluate False
-        # against NaN) -- surfacing only as a confusing "No levels found"
-        # with literal "nan" shown in the embed, far from the actual cause.
+        # Same distinct failure mode as before the swap: a non-empty
+        # frame with a NaN last row, seen when the day's bar hasn't
+        # fully settled yet. Left unchecked, NaN silently propagates
+        # through ATR/price/filter comparisons -- see the original
+        # comment this replaces for the full explanation, unchanged.
         raise RuntimeError(
-            f"{symbol}'s latest bar has no valid price data yet (Yahoo's feed "
-            f"may still be publishing today's data) -- try again in a few minutes."
+            f"{symbol}'s latest bar has no valid price data yet -- try again in a few minutes."
         )
     return df
 
@@ -136,20 +133,22 @@ def fetch_live_price_extended_hours(symbol: str) -> float:
 
     Used ONLY when outside regular market hours (see
     is_regular_market_hours_live below), to get a fresher current price
-    than fetch_daily_bars provides -- that function deliberately never
-    passes prepost=True, so its last row freezes at the regular-session
-    close and silently ignores real after-hours/pre-market movement.
+    than fetch_daily_bars provides -- that function's daily bars freeze
+    at the regular-session close and don't reflect real after-hours/
+    pre-market movement.
 
-    Scoped narrowly on purpose: this ONLY overrides the "current price"
-    display/filter value in the calling command. It does NOT feed
-    ATR/RSI/regime/swing-low/rolling-extreme calculations -- those keep
-    using fetch_daily_bars's regular-session-only historical data
-    unconditionally, so nothing about the backtested indicator behavior
-    changes. This is the deliberately more conservative alternative to
-    passing prepost=True globally in fetch_daily_bars, which would also
-    be a legitimate fix but would let extended-hours moves bleed into
-    ATR/RSI/swing-low detection on every fetch, not just the "where is
-    price right now" question this function answers.
+    Kept on yfinance deliberately, NOT migrated to Alpaca like
+    fetch_daily_bars was. Two reasons: (1) this is called once per
+    command invocation, triggered by you -- a much lower request-volume,
+    lower rate-limit-risk profile than the 5-min automated position-
+    tracker loop the Alpaca migration was actually motivated by; (2)
+    IEX's extended-hours liquidity is thinner than its already-small
+    regular-session share of the tape, so an Alpaca latest-trade call
+    here is more likely to be stale enough to get rejected and fall back
+    to the frozen regular-session close -- which defeats the actual
+    purpose of this function. yfinance's prepost data draws from a
+    broader backend than one venue, so it's more likely to have a usable
+    extended-hours print when this function is actually needed.
 
     interval="5m" (not "1d"): a true intraday interval is the
     universally-documented way prepost actually applies in yfinance --
