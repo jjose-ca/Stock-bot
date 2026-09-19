@@ -35,6 +35,7 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Tuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
@@ -130,6 +131,112 @@ def get_market_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
     return qqq_df, tqqq_df
 
 
+def fetch_live_price_extended_hours(symbol: str) -> float:
+    """Blocking network call -- must be run via asyncio.to_thread.
+
+    Used ONLY when outside regular market hours (see
+    is_regular_market_hours_live below), to get a fresher current price
+    than fetch_daily_bars provides -- that function deliberately never
+    passes prepost=True, so its last row freezes at the regular-session
+    close and silently ignores real after-hours/pre-market movement.
+
+    Scoped narrowly on purpose: this ONLY overrides the "current price"
+    display/filter value in the calling command. It does NOT feed
+    ATR/RSI/regime/swing-low/rolling-extreme calculations -- those keep
+    using fetch_daily_bars's regular-session-only historical data
+    unconditionally, so nothing about the backtested indicator behavior
+    changes. This is the deliberately more conservative alternative to
+    passing prepost=True globally in fetch_daily_bars, which would also
+    be a legitimate fix but would let extended-hours moves bleed into
+    ATR/RSI/swing-low detection on every fetch, not just the "where is
+    price right now" question this function answers.
+
+    interval="5m" (not "1d"): a true intraday interval is the
+    universally-documented way prepost actually applies in yfinance --
+    daily-interval + prepost is at best unclear, so this avoids relying
+    on that combination at all. period="5d" stays generous even at 5m
+    granularity, comfortably covering a long holiday weekend."""
+    df = yf.download(
+        symbol,
+        period="5d",
+        interval="5m",
+        progress=False,
+        auto_adjust=True,
+        multi_level_index=False,
+        prepost=True,
+    )
+    if df.empty:
+        raise RuntimeError(f"No extended-hours data returned for {symbol}")
+    df.columns = [str(c).lower() for c in df.columns]
+    if df["close"].iloc[-1:].isna().any():
+        raise RuntimeError(f"{symbol}'s extended-hours price is not available right now")
+    return float(df["close"].iloc[-1])
+
+
+def get_extended_hours_prices() -> Tuple[float, float]:
+    """(qqq_price, tqqq_price), both including pre/post-market activity.
+    Callers should wrap this in try/except and fall back to the regular-
+    session close on any failure -- this is a best-effort freshness
+    upgrade, not something that should ever crash a command outright when
+    it fails, since a valid regular-session price is already in hand by
+    the time this gets called."""
+    return fetch_live_price_extended_hours("QQQ"), fetch_live_price_extended_hours("TQQQ")
+
+
+_ET = ZoneInfo("America/New_York")
+
+
+def is_regular_market_hours_live(now: datetime = None) -> bool:
+    """Combines two checks, both required to return True:
+      1. Is the current time within the 9:30am-4:00pm ET clock window --
+         cheap, no network, checked FIRST so nights/weekends short-circuit
+         before ever touching the network.
+      2. Is today actually a trading day (not a market holiday) -- a live
+         1-minute SPY probe, mirroring tqqq_bot.py's is_market_open_today()
+         (which itself mirrors soxl_intraday_bot.py) -- reused for
+         consistency with that already-proven precedent rather than a
+         third, different implementation. No hardcoded holiday calendar:
+         infers today's status from whether the data actually exists.
+
+    A plain clock check alone isn't enough for our purpose: it can't tell
+    a holiday from a normal trading day. But tqqq_bot.py's probe ALONE
+    isn't enough either -- it only answers "did the market open today,"
+    not "are we within the 9:30-4 window right now" (at 5:48pm on an
+    ordinary trading day, their function alone would still say "market
+    opened today," missing the after-hours case entirely).
+
+    Blocking network call (when the clock check passes) -- must be run
+    via asyncio.to_thread. Fails OPEN if the SPY probe itself errors,
+    matching tqqq_bot.py's exact reasoning -- for our use here, "open"
+    just means we'll attempt one extra, already-fallback-protected
+    freshness fetch, low cost either way if this guess is wrong."""
+    now = (now or datetime.now(_ET)).astimezone(_ET)
+
+    if now.weekday() >= 5:  # Saturday=5, Sunday=6
+        return False
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    if not (market_open <= now <= market_close):
+        return False
+
+    # Within the clock window -- confirm today isn't a holiday via a live probe.
+    try:
+        probe = yf.download("SPY", period="1d", interval="1m",
+                             auto_adjust=True, progress=False)
+        if isinstance(probe.columns, pd.MultiIndex):
+            probe.columns = probe.columns.get_level_values(0)
+        if probe.empty:
+            return False  # holiday -- no data at all today
+        last = probe.index[-1]
+        if hasattr(last, "tz_convert"):
+            last = last.tz_convert(_ET)
+        if last.date() < now.date():
+            return False  # stale -- no trading has happened today
+        return True
+    except Exception:
+        return True  # fail open, matching tqqq_bot.py
+
+
 def enrich_ladder_for_log(ladder: list, current_tqqq_price: float, leverage: float) -> list:
     """Adds the TRUE distance-from-current-price alongside each level's
     existing structural (distance-from-basis) fields, so historical log
@@ -216,6 +323,21 @@ async def marketcheck(interaction: discord.Interaction):
         market_data_last_date = qqq_df.index[-1].strftime("%Y-%m-%d")
         regime = compute_regime_status(qqq_df)
         signed_trend_distance = compute_signed_trend_distance(qqq_df)
+
+        # Outside regular market hours, qqq_now/tqqq_now above are frozen
+        # at the regular-session close (fetch_daily_bars never requests
+        # prepost data). Try a fresher, extended-hours price here -- best
+        # effort only: on any failure, silently keep the regular-session
+        # close already in hand rather than erroring the whole command.
+        # This ONLY affects the price shown/used below; ATR, RSI, regime,
+        # and rolling-extremes above are untouched, still computed from
+        # the regular-session-only qqq_df/tqqq_df.
+        if not await asyncio.to_thread(is_regular_market_hours_live):
+            try:
+                fresh_qqq, fresh_tqqq = await asyncio.to_thread(get_extended_hours_prices)
+                qqq_now, tqqq_now = fresh_qqq, fresh_tqqq
+            except Exception as e:
+                log.warning(f"Extended-hours price fetch failed, using regular-session close instead: {e}")
 
         # RSI shown for BOTH assets, clearly labeled, by explicit choice --
         # tqqq_bot.py's live signal uses RSI(14) on TQQQ directly (no QQQ
@@ -366,6 +488,20 @@ async def buyfilled(interaction: discord.Interaction, shares: float, price: floa
         qqq_atr_pct = compute_atr_pct(qqq_df)
         market_data_last_date = qqq_df.index[-1].strftime("%Y-%m-%d")
         regime = compute_regime_status(qqq_df)
+
+        # Same extended-hours freshness upgrade as /marketcheck -- see its
+        # comment for the full reasoning. Critically, this updates
+        # current_tqqq_price BEFORE build_ladder() runs below, so the
+        # filter-and-extend logic (deciding whether a level is already
+        # stale) uses the fresher price too, not just the embed display --
+        # a display-only fix would leave the filter silently comparing
+        # against the old, frozen regular-session close underneath.
+        if not await asyncio.to_thread(is_regular_market_hours_live):
+            try:
+                fresh_qqq, fresh_tqqq = await asyncio.to_thread(get_extended_hours_prices)
+                qqq_close, current_tqqq_price = fresh_qqq, fresh_tqqq
+            except Exception as e:
+                log.warning(f"Extended-hours price fetch failed, using regular-session close instead: {e}")
 
         # The ladder itself uses swing-low data only if USE_CONFLUENCE is
         # True -- this flag now actually controls the behavior (previously
