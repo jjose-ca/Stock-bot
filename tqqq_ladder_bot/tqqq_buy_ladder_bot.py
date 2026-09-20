@@ -318,9 +318,113 @@ def clear_position_state() -> None:
         POSITION_STATE_PATH.unlink()
 
 
+def compute_blended_average(existing_shares: float, existing_price: float,
+                              fill_shares: float, fill_price: float) -> tuple:
+    """(new_total_shares, new_blended_avg). Standard weighted-average
+    formula -- same math already used by the target_avg calculator.
+    Works correctly even from a fresh flat position (existing_shares=0):
+    the blended average simply reduces to fill_price."""
+    new_total = existing_shares + fill_shares
+    new_avg = (existing_shares * existing_price + fill_shares * fill_price) / new_total
+    return new_total, new_avg
+
+
 # ---------- Discord bot ----------
 
 intents = discord.Intents.default()
+
+
+class FilledSharesModal(discord.ui.Modal, title="Confirm fill"):
+    """One field only -- price is already known (the alert's own target
+    price), we just need how many shares to correctly blend the new
+    average. Triggered by 'Filled at Target'."""
+
+    shares_input = discord.ui.TextInput(label="Shares bought", placeholder="e.g. 10", required=True)
+
+    def __init__(self, target_price: float):
+        super().__init__()
+        self.target_price = target_price
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await handle_fill_confirmation(interaction, self.target_price, self.shares_input.value)
+
+
+class CustomFillModal(discord.ui.Modal, title="Record custom fill"):
+    """Both fields -- neither price nor shares can be assumed here, since
+    this is specifically for when the actual fill differed from the
+    alerted target price. Triggered by 'Custom Fill'."""
+
+    shares_input = discord.ui.TextInput(label="Shares bought", placeholder="e.g. 10", required=True)
+    price_input = discord.ui.TextInput(label="Actual fill price", placeholder="e.g. 68.42", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await handle_fill_confirmation(interaction, self.price_input.value, self.shares_input.value)
+
+
+async def handle_fill_confirmation(interaction: discord.Interaction, price_str, shares_str: str):
+    """Shared by both modals -- parses input, blends the average against
+    whatever's currently tracked in position_state.json (0/None if
+    genuinely flat, in which case the blend correctly reduces to just the
+    fill price), then calls build_buyfilled_response -- the SAME function
+    /buyfilled itself uses, so the ladder posted here is never a
+    second, divergent implementation."""
+    await interaction.response.defer(thinking=True)
+    try:
+        fill_price = float(price_str)
+        fill_shares = float(shares_str)
+    except ValueError:
+        await interaction.followup.send("Shares and price must both be numbers -- please try again.")
+        return
+    if fill_shares <= 0 or fill_price <= 0:
+        await interaction.followup.send("Shares and price must both be positive numbers.")
+        return
+
+    existing = read_position_state()
+    existing_shares = existing["shares"] if existing else 0.0
+    existing_price = existing["price"] if existing else 0.0
+
+    new_shares, new_avg = compute_blended_average(existing_shares, existing_price, fill_shares, fill_price)
+
+    try:
+        embed = await build_buyfilled_response(new_shares, new_avg)
+        await interaction.followup.send(
+            content=f"✅ Fill recorded: {fill_shares:g} sh @ ${fill_price:.2f} "
+                    f"(new position: {new_shares:g} sh @ ${new_avg:.2f} avg)",
+            embed=embed,
+        )
+    except ValueError as e:
+        await interaction.followup.send(str(e))
+    except Exception as e:
+        log.exception("handle_fill_confirmation failed")
+        await interaction.followup.send(f"Error computing ladder: {e}")
+
+
+class DipAlertResponseView(discord.ui.View):
+    """Attached to each dip alert. NOT a persistent view (unlike
+    ClearPositionView) -- target_price is specific to one particular
+    alert instance, so a fixed custom_id can't route back to the right
+    context after a bot restart the way it can for Clear Position's
+    single, global action. The 5-min polling task that posts these
+    alerts is still to be built -- this view is ready for it to attach."""
+
+    def __init__(self, target_price: float):
+        super().__init__(timeout=None)
+        self.target_price = target_price
+
+    @discord.ui.button(label="Filled at Target", style=discord.ButtonStyle.success)
+    async def filled_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(FilledSharesModal(self.target_price))
+
+    @discord.ui.button(label="Custom Fill", style=discord.ButtonStyle.primary)
+    async def custom_fill_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(CustomFillModal())
+
+    @discord.ui.button(label="Skip Dip", style=discord.ButtonStyle.secondary)
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # No state change at all -- position_state.json untouched, so the
+        # polling loop's gate check keeps watching for the next dip
+        # exactly as before. Just acknowledges the alert visually.
+        await interaction.response.edit_message(content="⏭️ Skipped -- still watching for the next dip.", view=None)
 
 
 class ClearPositionView(discord.ui.View):
@@ -552,6 +656,166 @@ async def position(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, view=ClearPositionView())
 
 
+async def build_buyfilled_response(shares: float, price: float, target_avg: float = None) -> discord.Embed:
+    """Core of /buyfilled, extracted so both the slash command AND the
+    dip-alert button callbacks (Filled at Target / Custom Fill) call this
+    ONE implementation -- single source of truth, same principle already
+    applied everywhere else in this bot (compute_atr_pct deriving from
+    compute_atr_pct_series, /marketcheck and /buyfilled sharing
+    ladder_core's functions, etc). Raises on invalid input or failure --
+    callers are responsible for catching and reporting to the user in
+    whatever way fits their context (slash command vs. button response)."""
+    if shares <= 0 or price <= 0:
+        raise ValueError(
+            f"Both shares ({shares:g}) and price (${price:.2f}) must be positive numbers -- "
+            f"check your input and try again."
+        )
+    if target_avg is not None and target_avg >= price:
+        raise ValueError(
+            f"Target average (${target_avg:.2f}) must be below your current basis (${price:.2f}) -- "
+            f"buying more shares can only lower your average, not raise it."
+        )
+
+    qqq_df, tqqq_df = await asyncio.to_thread(get_market_data)
+
+    qqq_close = float(qqq_df["close"].iloc[-1])
+    current_tqqq_price = float(tqqq_df["close"].iloc[-1])
+    qqq_atr_pct = compute_atr_pct(qqq_df)
+    market_data_last_date = qqq_df.index[-1].strftime("%Y-%m-%d")
+    regime = compute_regime_status(qqq_df)
+
+    if not await asyncio.to_thread(is_regular_market_hours_live):
+        try:
+            fresh_qqq, fresh_tqqq = await asyncio.to_thread(get_extended_hours_prices)
+            qqq_close, current_tqqq_price = fresh_qqq, fresh_tqqq
+        except Exception as e:
+            log.warning(f"Extended-hours price fetch failed, using regular-session close instead: {e}")
+
+    qqq_swing_lows_all = find_confirmed_swing_lows(qqq_df)
+    ladder = build_ladder(
+        basis_price=price,
+        current_tqqq_price=current_tqqq_price,
+        qqq_close=qqq_close,
+        qqq_atr_pct=qqq_atr_pct,
+        qqq_swing_lows=qqq_swing_lows_all if USE_CONFLUENCE else pd.Series(dtype=float),
+    )
+
+    deepest_ladder_price = min((lvl.price for lvl in ladder), default=0.0)
+    extra_buffer_pct = ATR_STEP * qqq_atr_pct * LEVERAGE_FACTOR
+    low_bound = deepest_ladder_price * (1 - extra_buffer_pct) if deepest_ladder_price else 0.0
+    support_levels = find_support_in_range(
+        tqqq_reference_price=current_tqqq_price,
+        qqq_close=qqq_close,
+        qqq_swing_lows=qqq_swing_lows_all,
+        low_bound=low_bound,
+        high_bound=current_tqqq_price,
+        max_results=MAX_SUPPORT_DISPLAY,
+    )
+
+    log_ladder(shares, price, current_tqqq_price, qqq_close, qqq_atr_pct,
+               market_data_last_date, ladder, support_levels, regime)
+    write_position_state(shares, price)  # marks "in position" for the dip-alert gate
+
+    embed = discord.Embed(
+        title=f"TQQQ position: {shares:g} sh @ ${price:.2f} basis",
+        color=discord.Color.orange() if regime.below_sma else discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    if regime.below_sma:
+        embed.add_field(
+            name="⚠️ Regime: QQQ below 200-day SMA",
+            value=(
+                f"QQQ ${regime.qqq_close:.2f} is {regime.pct_below:.1f}% below its "
+                f"200-SMA (${regime.sma_200:.2f}) — bearish/distressed regime. This "
+                f"backtest's sample size for sustained downtrends is thin; treat "
+                f"these levels with more caution than usual."
+            ),
+            inline=False,
+        )
+
+    embed.add_field(name="Price", value=f"TQQQ ${current_tqqq_price:.2f}  |  QQQ ${qqq_close:.2f}", inline=False)
+    embed.add_field(name="QQQ 14-day ATR", value=f"{qqq_atr_pct * 100:.2f}%", inline=True)
+
+    support_positions = locate_support_relative_to_ladder(support_levels, ladder, current_tqqq_price)
+    CONFIRMS_TOLERANCE_PCT = SWING_SNAP_TOLERANCE_ATR * qqq_atr_pct * LEVERAGE_FACTOR * 100
+    support_by_level = {}
+    unattached_support = []
+    for s, pos in zip(support_levels, support_positions):
+        direction = "above" if pos.gap > 0 else "below"
+        verb = "confirms" if abs(pos.gap_pct) <= CONFIRMS_TOLERANCE_PCT else "nearest to"
+        line = (
+            f"📍 ${s.tqqq_price:.2f} {verb} this level "
+            f"(${abs(pos.gap):.2f} {direction}, {abs(pos.gap_pct):.2f}%) "
+            f"— QQQ swing low {s.swing_low_date}"
+        )
+        if pos.level_index is not None:
+            support_by_level.setdefault(pos.level_index, []).append(line)
+        else:
+            unattached_support.append(
+                f"${s.tqqq_price:.2f} — near current price, "
+                f"${abs(pos.gap):.2f} {direction} "
+                f"(QQQ swing low {s.swing_low_date})"
+            )
+
+    if not ladder:
+        embed.add_field(
+            name="No levels found",
+            value="No valid levels below current price within the search range -- ATR may be very low, or price has moved far below basis already.",
+            inline=False,
+        )
+    else:
+        for i, lvl in enumerate(ladder, start=1):
+            tqqq_pct_from_now = (current_tqqq_price - lvl.price) / current_tqqq_price * 100
+            qqq_pct_from_now = tqqq_pct_from_now / LEVERAGE_FACTOR
+            qqq_target_price = qqq_close * (1 - qqq_pct_from_now / 100)
+
+            field_value = (
+                f"QQQ needs ~{qqq_pct_from_now:.1f}% more drop from today (to ~${qqq_target_price:.2f}) "
+                f"[{lvl.label}, {lvl.tqqq_drop_pct:.1f}% below basis]"
+            )
+
+            if target_avg is not None:
+                if target_avg <= lvl.price:
+                    field_value += (
+                        f"\n🎯 To reach ${target_avg:.2f} avg: not reachable at this level "
+                        f"(target is at or below this price -- buying here can only approach "
+                        f"${lvl.price:.2f}, never go below it)"
+                    )
+                else:
+                    shares_needed = shares * (price - target_avg) / (target_avg - lvl.price)
+                    if shares_needed > shares * 10:
+                        field_value += (
+                            f"\n🎯 To reach ${target_avg:.2f} avg: not realistic here -- "
+                            f"would require ~{shares_needed:.0f} shares "
+                            f"({shares_needed / shares:.0f}x your current position). "
+                            f"Target is too close to this level's price or your current basis."
+                        )
+                    else:
+                        field_value += (
+                            f"\n🎯 To reach ${target_avg:.2f} avg: buy ~{shares_needed:.1f} shares here "
+                            f"(new total: {shares + shares_needed:.1f} sh)"
+                        )
+
+            if i in support_by_level:
+                field_value += "\n" + "\n".join(support_by_level[i])
+            embed.add_field(
+                name=f"🎯 Buy {i}: ${lvl.price:.2f} (-{lvl.tqqq_drop_pct:.1f}% from basis)",
+                value=field_value,
+                inline=False,
+            )
+
+    if unattached_support:
+        embed.add_field(
+            name="📍 Other support nearby (info only)",
+            value="\n".join(unattached_support),
+            inline=False,
+        )
+
+    embed.set_footer(text="Pure ATR spacing, anchored to your basis -- update it only after a real fill")
+    return embed
+
+
 @tree.command(name="buyfilled", description="Get your next 3 TQQQ buy levels, anchored to your average cost")
 @app_commands.describe(
     shares="Total position size (shares held)",
@@ -560,218 +824,11 @@ async def position(interaction: discord.Interaction):
 )
 async def buyfilled(interaction: discord.Interaction, shares: float, price: float, target_avg: float = None):
     await interaction.response.defer(thinking=True)
-    if shares <= 0 or price <= 0:
-        await interaction.followup.send(
-            f"Both shares ({shares:g}) and price (${price:.2f}) must be positive numbers -- "
-            f"check your input and try again."
-        )
-        return
-    if target_avg is not None and target_avg >= price:
-        await interaction.followup.send(
-            f"Target average (${target_avg:.2f}) must be below your current basis (${price:.2f}) -- "
-            f"buying more shares can only lower your average, not raise it."
-        )
-        return
     try:
-        qqq_df, tqqq_df = await asyncio.to_thread(get_market_data)
-
-        qqq_close = float(qqq_df["close"].iloc[-1])
-        current_tqqq_price = float(tqqq_df["close"].iloc[-1])
-        qqq_atr_pct = compute_atr_pct(qqq_df)
-        market_data_last_date = qqq_df.index[-1].strftime("%Y-%m-%d")
-        regime = compute_regime_status(qqq_df)
-
-        # Same extended-hours freshness upgrade as /marketcheck -- see its
-        # comment for the full reasoning. Critically, this updates
-        # current_tqqq_price BEFORE build_ladder() runs below, so the
-        # filter-and-extend logic (deciding whether a level is already
-        # stale) uses the fresher price too, not just the embed display --
-        # a display-only fix would leave the filter silently comparing
-        # against the old, frozen regular-session close underneath.
-        if not await asyncio.to_thread(is_regular_market_hours_live):
-            try:
-                fresh_qqq, fresh_tqqq = await asyncio.to_thread(get_extended_hours_prices)
-                qqq_close, current_tqqq_price = fresh_qqq, fresh_tqqq
-            except Exception as e:
-                log.warning(f"Extended-hours price fetch failed, using regular-session close instead: {e}")
-
-        # The ladder itself uses swing-low data only if USE_CONFLUENCE is
-        # True -- this flag now actually controls the behavior (previously
-        # dead: the empty Series was hardcoded here regardless of the
-        # flag's value, so build_ladder's snap-to-swing-low logic and this
-        # flag could silently diverge). Mirrors exactly how
-        # backtest_ladder.py's simulate() decides the same thing.
-        qqq_swing_lows_all = find_confirmed_swing_lows(qqq_df)
-        ladder = build_ladder(
-            basis_price=price,
-            current_tqqq_price=current_tqqq_price,
-            qqq_close=qqq_close,
-            qqq_atr_pct=qqq_atr_pct,
-            qqq_swing_lows=qqq_swing_lows_all if USE_CONFLUENCE else pd.Series(dtype=float),
-        )
-
-        # Support display is unconditional -- independent of USE_CONFLUENCE,
-        # since it never fed into the ladder, only informational display.
-        # Reuses the same swing-low fetch above rather than re-computing.
-        # Search range extends one extra ATR step below the deepest rung --
-        # a support level sitting just past your last order is still worth
-        # knowing about. The buffer is ATR-scaled (not a fixed %) to stay
-        # consistent with every other distance in this bot, which all
-        # scale with current volatility rather than a flat guess.
-        deepest_ladder_price = min((lvl.price for lvl in ladder), default=0.0)
-        extra_buffer_pct = ATR_STEP * qqq_atr_pct * LEVERAGE_FACTOR
-        low_bound = deepest_ladder_price * (1 - extra_buffer_pct) if deepest_ladder_price else 0.0
-        support_levels = find_support_in_range(
-            tqqq_reference_price=current_tqqq_price,
-            qqq_close=qqq_close,
-            qqq_swing_lows=qqq_swing_lows_all,
-            low_bound=low_bound,
-            high_bound=current_tqqq_price,
-            max_results=MAX_SUPPORT_DISPLAY,
-        )
-
-        log_ladder(shares, price, current_tqqq_price, qqq_close, qqq_atr_pct,
-                   market_data_last_date, ladder, support_levels, regime)
-        write_position_state(shares, price)  # marks "in position" for the dip-alert gate
-
-        embed = discord.Embed(
-            title=f"TQQQ position: {shares:g} sh @ ${price:.2f} basis",
-            color=discord.Color.orange() if regime.below_sma else discord.Color.blue(),
-            timestamp=datetime.now(timezone.utc),
-        )
-
-        if regime.below_sma:
-            embed.add_field(
-                name="⚠️ Regime: QQQ below 200-day SMA",
-                value=(
-                    f"QQQ ${regime.qqq_close:.2f} is {regime.pct_below:.1f}% below its "
-                    f"200-SMA (${regime.sma_200:.2f}) — bearish/distressed regime. This "
-                    f"backtest's sample size for sustained downtrends is thin; treat "
-                    f"these levels with more caution than usual."
-                ),
-                inline=False,
-            )
-
-        embed.add_field(name="Price", value=f"TQQQ ${current_tqqq_price:.2f}  |  QQQ ${qqq_close:.2f}", inline=False)
-        embed.add_field(name="QQQ 14-day ATR", value=f"{qqq_atr_pct * 100:.2f}%", inline=True)
-
-        support_positions = locate_support_relative_to_ladder(support_levels, ladder, current_tqqq_price)
-        # Group support lines by which ladder level they're nearest to, so
-        # a confirming support level shows up directly under the buy
-        # target it backs up, instead of a disconnected list. Computed
-        # BEFORE the ladder-empty check below, and unattached_support is
-        # rendered unconditionally after it (see fix note there) -- a
-        # crash-scenario empty ladder must not silently drop support that
-        # was already computed and is arguably most useful right then.
-        # "Confirms" is reserved for genuinely close matches (within
-        # CONFIRMS_TOLERANCE_PCT); anything farther says "nearest to"
-        # instead -- locate_support_relative_to_ladder is pure
-        # nearest-point matching with no distance cutoff, so without
-        # this a support level several dollars away would misleadingly
-        # read as "confirming" a rung it's not actually near.
-        CONFIRMS_TOLERANCE_PCT = SWING_SNAP_TOLERANCE_ATR * qqq_atr_pct * LEVERAGE_FACTOR * 100
-        support_by_level = {}
-        unattached_support = []
-        for s, pos in zip(support_levels, support_positions):
-            direction = "above" if pos.gap > 0 else "below"
-            verb = "confirms" if abs(pos.gap_pct) <= CONFIRMS_TOLERANCE_PCT else "nearest to"
-            line = (
-                f"📍 ${s.tqqq_price:.2f} {verb} this level "
-                f"(${abs(pos.gap):.2f} {direction}, {abs(pos.gap_pct):.2f}%) "
-                f"— QQQ swing low {s.swing_low_date}"
-            )
-            if pos.level_index is not None:
-                support_by_level.setdefault(pos.level_index, []).append(line)
-            else:
-                unattached_support.append(
-                    f"${s.tqqq_price:.2f} — near current price, "
-                    f"${abs(pos.gap):.2f} {direction} "
-                    f"(QQQ swing low {s.swing_low_date})"
-                )
-
-        if not ladder:
-            embed.add_field(
-                name="No levels found",
-                value="No valid levels below current price within the search range -- ATR may be very low, or price has moved far below basis already.",
-                inline=False,
-            )
-            # Note: when ladder is empty, EVERY support level's nearest
-            # point is "current price" (there are no rungs to be nearer
-            # to), so all of it ends up in unattached_support below --
-            # correctly surfaced instead of silently dropped.
-        else:
-            for i, lvl in enumerate(ladder, start=1):
-                # lvl.qqq_drop_pct / lvl.tqqq_drop_pct describe the STRUCTURAL
-                # distance from basis (mult x ATR%) -- correct and unchanged,
-                # but NOT the same as "how far QQQ/TQQQ must still move from
-                # today." Once current price has drifted from basis (true
-                # after any real move since the fill), those two distances
-                # diverge -- see the labeling issue this fixes. Compute the
-                # TRUE distance from current price separately, purely for
-                # display; the underlying target price itself is untouched.
-                tqqq_pct_from_now = (current_tqqq_price - lvl.price) / current_tqqq_price * 100
-                qqq_pct_from_now = tqqq_pct_from_now / LEVERAGE_FACTOR
-                qqq_target_price = qqq_close * (1 - qqq_pct_from_now / 100)
-
-                field_value = (
-                    f"QQQ needs ~{qqq_pct_from_now:.1f}% more drop from today (to ~${qqq_target_price:.2f}) "
-                    f"[{lvl.label}, {lvl.tqqq_drop_pct:.1f}% below basis]"
-                )
-
-                # Optional: shares needed at THIS level's price to reach
-                # target_avg. Algebra: new_avg = (N1*P1 + N2*P2)/(N1+N2).
-                # Solving for N2 given a target T:
-                #   N2 = N1 * (P1 - T) / (T - P2)
-                # Only defined for P2 < T < P1 -- buying at a price can
-                # never pull the average below that price itself, no
-                # matter how many shares, so a target at or below this
-                # level's own price is mathematically unreachable here.
-                if target_avg is not None:
-                    if target_avg <= lvl.price:
-                        field_value += (
-                            f"\n🎯 To reach ${target_avg:.2f} avg: not reachable at this level "
-                            f"(target is at or below this price -- buying here can only approach "
-                            f"${lvl.price:.2f}, never go below it)"
-                        )
-                    else:
-                        shares_needed = shares * (price - target_avg) / (target_avg - lvl.price)
-                        # Sanity guard: as target_avg approaches either boundary
-                        # (current basis, or this level's own price), the
-                        # denominator shrinks toward zero and shares_needed
-                        # blows up toward mathematically-correct-but-absurd
-                        # numbers. Flag it rather than silently show a
-                        # meaningless giant figure as if it were a real plan.
-                        if shares_needed > shares * 10:
-                            field_value += (
-                                f"\n🎯 To reach ${target_avg:.2f} avg: not realistic here -- "
-                                f"would require ~{shares_needed:.0f} shares "
-                                f"({shares_needed / shares:.0f}x your current position). "
-                                f"Target is too close to this level's price or your current basis."
-                            )
-                        else:
-                            field_value += (
-                                f"\n🎯 To reach ${target_avg:.2f} avg: buy ~{shares_needed:.1f} shares here "
-                                f"(new total: {shares + shares_needed:.1f} sh)"
-                            )
-
-                if i in support_by_level:
-                    field_value += "\n" + "\n".join(support_by_level[i])
-                embed.add_field(
-                    name=f"🎯 Buy {i}: ${lvl.price:.2f} (-{lvl.tqqq_drop_pct:.1f}% from basis)",
-                    value=field_value,
-                    inline=False,
-                )
-
-        if unattached_support:
-            embed.add_field(
-                name="📍 Other support nearby (info only)",
-                value="\n".join(unattached_support),
-                inline=False,
-            )
-
-        embed.set_footer(text="Pure ATR spacing, anchored to your basis -- update it only after a real fill")
+        embed = await build_buyfilled_response(shares, price, target_avg)
         await interaction.followup.send(embed=embed)
-
+    except ValueError as e:
+        await interaction.followup.send(str(e))
     except Exception as e:
         log.exception("buyfilled failed")
         await interaction.followup.send(f"Error computing ladder: {e}")
