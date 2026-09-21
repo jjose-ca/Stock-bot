@@ -21,11 +21,20 @@ Usage in Discord:
     real fill.
 
 Requires:
-    pip install discord.py yfinance pandas numpy python-dotenv
+    pip install discord.py yfinance alpaca-py pandas numpy python-dotenv
 
 Env vars (.env or exported):
     DISCORD_BOT_TOKEN
-    DISCORD_GUILD_ID   (optional, for instant guild-scoped command sync)
+    DISCORD_GUILD_ID           (optional, for instant guild-scoped command sync)
+    DISCORD_ALERT_CHANNEL_ID   (required for the dip-alert polling task --
+                                a background task has no Interaction to
+                                derive a channel from, unlike a slash command)
+    DIP_ALERT_THRESHOLD_PCT    (optional, default 0.5 -- see
+                                intraday_entry_backtest.py for how this
+                                value was actually tested, not guessed)
+    ALPACA_API_KEY              (required -- fetch_daily_bars is Alpaca-backed
+    ALPACA_SECRET_KEY            as of this session; bot fails at import time,
+                                before Discord login, if either is missing)
 """
 
 import os
@@ -295,19 +304,35 @@ def is_regular_market_hours_live(now: datetime = None) -> bool:
 
 def is_dip_alert_window(now: datetime = None) -> bool:
     """A DIFFERENT, wider window than is_regular_market_hours_live -- 6:30am
-    to 4:00pm ET, covering standard pre-market through the regular close.
-    Used ONLY by check_dip_alert's polling gate.
+    to 8:00pm ET, covering standard pre-market through standard post-market
+    close. Used ONLY by check_dip_alert's polling gate.
 
     Deliberately NOT the same function as is_regular_market_hours_live,
     even though it would be tempting to just widen that one -- doing so
     would break /marketcheck and /buyfilled: they use
     is_regular_market_hours_live specifically to decide whether to bother
-    with the extended-hours fetch. If that function considered 6:30-9:30am
+    with the extended-hours fetch. If that function considered 6:30am-8pm
     "regular hours," those commands would wrongly skip the fresher prepost
     fetch during exactly the window they need it most, showing yesterday's
-    stale close instead. Two different questions ("is this pre-market
+    stale close instead. Two different questions ("is this pre/post-market
     worth checking for a dip" vs "should I bother re-checking price
     freshness") need two different answers.
+
+    8:00pm ET end, not 4:00pm as an earlier version of this function had it:
+    fetch_live_price_extended_hours already fetches with prepost=True,
+    which covers standard after-hours trading up to ~8pm -- a 4pm cutoff
+    meant the alert stopped watching exactly when after-hours trading
+    STARTS, even though the fetch it relies on was already capable of
+    seeing that activity. 8pm is where that fetch's own real coverage
+    actually runs out too, so this aligns the gate with what the
+    underlying data can actually see, not an arbitrary earlier stop.
+    Widening past 8pm would just mean polling on a frozen price with
+    dip_pct stuck at 0 all night -- the separate Blue Ocean ATS overnight
+    session (8pm-4am ET) isn't visible to a plain yfinance prepost=True
+    fetch at all. Overnight is a genuinely different, currently-unbuilt
+    problem (see Known Gaps) -- Alpaca does offer that session, but only
+    as a paid, "contact sales," 15-min-delayed add-on, deliberately not
+    adopted.
 
     Deliberately a PURE CLOCK CHECK, no SPY holiday probe (unlike
     is_regular_market_hours_live) -- same low-stakes reasoning already
@@ -323,7 +348,7 @@ def is_dip_alert_window(now: datetime = None) -> bool:
     if now.weekday() >= 5:
         return False
     window_start = now.replace(hour=6, minute=30, second=0, microsecond=0)
-    window_end = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    window_end = now.replace(hour=20, minute=0, second=0, microsecond=0)
     return window_start <= now <= window_end
 
 
@@ -494,7 +519,8 @@ class DipAlertResponseView(discord.ui.View):
     alert instance, so a fixed custom_id can't route back to the right
     context after a bot restart the way it can for Clear Position's
     single, global action. The 5-min polling task that posts these
-    alerts is still to be built -- this view is ready for it to attach."""
+    alerts (check_dip_alert, below) is built and live -- this view is
+    attached to its real alerts, not just standing ready for one."""
 
     def __init__(self, target_price: float):
         super().__init__(timeout=None)
@@ -602,7 +628,7 @@ async def check_dip_alert():
     # branch below is taken -- cheap, and directly answers "is this
     # running" via `journalctl -u tqqq-ladder-bot -f`.
     if not await asyncio.to_thread(is_dip_alert_window):
-        log.info("Dip-alert poll: outside window (pre-6:30am, post-4pm, or weekend) -- skipped")
+        log.info("Dip-alert poll: outside window (pre-6:30am, post-8pm, or weekend) -- skipped")
         return
 
     if read_position_state() is not None:
