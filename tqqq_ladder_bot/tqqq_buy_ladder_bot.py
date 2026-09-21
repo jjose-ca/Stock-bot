@@ -244,6 +244,40 @@ def is_regular_market_hours_live(now: datetime = None) -> bool:
         return True  # fail open, matching tqqq_bot.py
 
 
+def is_dip_alert_window(now: datetime = None) -> bool:
+    """A DIFFERENT, wider window than is_regular_market_hours_live -- 6:30am
+    to 4:00pm ET, covering standard pre-market through the regular close.
+    Used ONLY by check_dip_alert's polling gate.
+
+    Deliberately NOT the same function as is_regular_market_hours_live,
+    even though it would be tempting to just widen that one -- doing so
+    would break /marketcheck and /buyfilled: they use
+    is_regular_market_hours_live specifically to decide whether to bother
+    with the extended-hours fetch. If that function considered 6:30-9:30am
+    "regular hours," those commands would wrongly skip the fresher prepost
+    fetch during exactly the window they need it most, showing yesterday's
+    stale close instead. Two different questions ("is this pre-market
+    worth checking for a dip" vs "should I bother re-checking price
+    freshness") need two different answers.
+
+    Deliberately a PURE CLOCK CHECK, no SPY holiday probe (unlike
+    is_regular_market_hours_live) -- same low-stakes reasoning already
+    applied once before: worst case on an actual holiday is a few wasted,
+    harmless polls (price stays frozen, running_high stays flat, dip_pct
+    stays ~0, nothing fires) rather than a real risk worth a second
+    network-probing mechanism for.
+
+    check_dip_alert's own price fetch (fetch_live_price_extended_hours)
+    already uses prepost=True unconditionally, so no change was needed
+    there -- only this gate needed to widen."""
+    now = (now or datetime.now(_ET)).astimezone(_ET)
+    if now.weekday() >= 5:
+        return False
+    window_start = now.replace(hour=6, minute=30, second=0, microsecond=0)
+    window_end = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return window_start <= now <= window_end
+
+
 def enrich_ladder_for_log(ladder: list, current_tqqq_price: float, leverage: float) -> list:
     """Adds the TRUE distance-from-current-price alongside each level's
     existing structural (distance-from-basis) fields, so historical log
@@ -511,7 +545,7 @@ _running_high = None
 async def check_dip_alert():
     global _running_high
 
-    if not await asyncio.to_thread(is_regular_market_hours_live):
+    if not await asyncio.to_thread(is_dip_alert_window):
         return
 
     if read_position_state() is not None:
