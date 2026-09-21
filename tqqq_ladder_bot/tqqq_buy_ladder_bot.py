@@ -38,11 +38,16 @@ from typing import Tuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import yfinance as yf
+import yfinance as yf  # used ONLY by is_regular_market_hours_live's holiday
+                        # probe and fetch_live_price_extended_hours below --
+                        # both deliberately kept on yfinance, not migrated
+                        # with fetch_daily_bars -- see each function's own
+                        # docstring for why
 import discord
 from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
+import alpaca_data as ad
 
 from ladder_core import (
     compute_atr_pct,
@@ -89,6 +94,13 @@ POSITION_STATE_PATH = Path(__file__).parent / "position_state.json"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("buy_ladder_bot")
 
+# Module-level Alpaca client -- created once at import time, reused across
+# every fetch_daily_bars call, same pattern as the confirmed-working
+# version on the other branch of this bot. Requires ALPACA_API_KEY and
+# ALPACA_SECRET_KEY in .env; raises immediately at startup if missing,
+# rather than failing confusingly on the first /buyfilled call.
+alpaca_client = ad.get_client()
+
 
 # ---------- Data fetching ----------
 
@@ -96,14 +108,66 @@ def fetch_daily_bars(symbol: str, lookback_days: int = 400) -> pd.DataFrame:
     """Blocking network call -- must be run via asyncio.to_thread from
     inside the Discord event loop.
 
-    lookback_days=400 (not the earlier 250): a 200-day SMA needs 200
-    genuine TRADING days, and yfinance's period="Nd" counts CALENDAR
-    days -- weekends and holidays mean 250 calendar days only works out
-    to roughly 170-180 trading days, not enough for a reliable 200-day
-    SMA. 400 calendar days comfortably clears 200 trading days with
-    margin for holidays."""
+    Primary source: Alpaca (IEX feed) via alpaca_data.fetch_daily_bars.
+    Migrated from yfinance -- real, measured justification, not a guess:
+    a 5-day/1-min diff test found close-price agreement excellent
+    (median 0.014%, 95th pct 0.065%) -- effectively noise-level for
+    ATR%/RSI/regime, all of which key off closes. Daily high/low accuracy
+    was NOT separately measured (the diff test covered 1-min bars only)
+    -- a real, still-open, honestly-carried-forward caveat: an intraday
+    extreme that printed on a venue other than IEX could in principle be
+    missed by find_confirmed_swing_lows, which reads the daily low
+    column. The underlying justification for the migration itself is the
+    general "yfinance is an undocumented scraper, no SLA" reliability
+    argument -- NOT a rate-limit/call-volume argument (this function is
+    called once per command invocation, not from any tight polling loop;
+    an earlier draft of this comment incorrectly attributed the
+    migration to a 5-min loop that in fact calls a different function,
+    fetch_recent_bars, for a different bot's different purpose).
+
+    Returns the same shape the yfinance version did (columns open/high/
+    low/close/volume, DatetimeIndex named "date"), so nothing downstream
+    in this file or in ladder_core.py needed to change.
+
+    lookback_days=400: a 200-day SMA needs 200 genuine TRADING days, and
+    calendar-day lookback needs headroom over that for weekends/holidays
+    -- same reasoning as before the source swap, unchanged by it."""
+    df = ad.fetch_daily_bars(alpaca_client, symbol, lookback_days=lookback_days)
+    if df["close"].iloc[-1:].isna().any():
+        # Same defensive check as the pre-migration yfinance version --
+        # kept even though Alpaca is a documented API with a different
+        # failure profile than Yahoo's scraped backend. Cheap insurance:
+        # if Alpaca ever returns a non-empty frame with an unsettled last
+        # row for any reason, this still fails loudly here instead of
+        # letting NaN silently propagate through every downstream
+        # calculation (ATR, RSI, filter comparisons, which always
+        # evaluate False against NaN).
+        raise RuntimeError(
+            f"{symbol}'s latest bar has no valid price data yet -- try again in a few minutes."
+        )
+    return df
+
+
+def fetch_qqq_volume_series_yfinance(lookback_days: int = 30) -> pd.Series:
+    """QQQ daily volume, sourced from yfinance specifically -- NOT
+    Alpaca. Deliberate, narrow exception to the Alpaca migration above.
+
+    Why: Alpaca's free tier is IEX-only, carrying ~2-3% of real US
+    equity volume (confirmed via the same diff test that validated
+    close-price accuracy -- volume ratio Alpaca/yfinance measured at
+    ~2%, matching IEX's known market share). Close-price accuracy
+    surviving that gap does NOT imply volume-based metrics do too --
+    untested, so this function exists specifically to keep
+    compute_volume_ratio() meaningful rather than silently comparing one
+    tiny, single-venue volume figure against itself. Same precautionary
+    principle already applied to extended-hours price staying on
+    yfinance: don't let Alpaca's known IEX limitation quietly degrade
+    something that was never actually measured against it. If the
+    IEX-share-cancels-out-of-a-ratio theory is ever validated with its
+    own diff test, this exception could be revisited -- not assumed
+    safe without that test."""
     df = yf.download(
-        symbol,
+        "QQQ",
         period=f"{lookback_days}d",
         interval="1d",
         progress=False,
@@ -111,24 +175,9 @@ def fetch_daily_bars(symbol: str, lookback_days: int = 400) -> pd.DataFrame:
         multi_level_index=False,
     )
     if df.empty:
-        raise RuntimeError(f"No data returned for {symbol}")
+        raise RuntimeError("No yfinance volume data returned for QQQ")
     df.columns = [str(c).lower() for c in df.columns]
-    df.index.name = "date"
-    df = df[["open", "high", "low", "close", "volume"]]
-    if df["close"].iloc[-1:].isna().any():
-        # A non-empty dataframe with a NaN last row is a real, distinct
-        # failure mode from df.empty -- seen in practice when Yahoo's
-        # backend hasn't finished publishing today's completed bar yet
-        # (a lag can exist right around/after the close). Left unchecked,
-        # NaN silently propagates through every downstream calculation --
-        # ATR, price, filter comparisons (which always evaluate False
-        # against NaN) -- surfacing only as a confusing "No levels found"
-        # with literal "nan" shown in the embed, far from the actual cause.
-        raise RuntimeError(
-            f"{symbol}'s latest bar has no valid price data yet (Yahoo's feed "
-            f"may still be publishing today's data) -- try again in a few minutes."
-        )
-    return df
+    return df["volume"]
 
 
 def get_market_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -638,7 +687,13 @@ async def marketcheck(interaction: discord.Interaction):
         qqq_rsi = compute_rsi_status(qqq_df)
         tqqq_rsi = compute_rsi_status(tqqq_df)
 
-        qqq_volume_ratio = compute_volume_ratio(qqq_df)
+        # Volume ratio deliberately sourced from yfinance, NOT the
+        # (now Alpaca-sourced) qqq_df above -- see
+        # fetch_qqq_volume_series_yfinance's docstring for why. Wrapped
+        # into the same single-column DataFrame shape compute_volume_ratio
+        # already expects, so ladder_core.py needed zero changes.
+        qqq_volume_series = await asyncio.to_thread(fetch_qqq_volume_series_yfinance)
+        qqq_volume_ratio = compute_volume_ratio(pd.DataFrame({"volume": qqq_volume_series}))
         qqq_rolling = compute_rolling_extremes(qqq_df, qqq_now)
 
         # Nearest historical QQQ support, translated to TQQQ -- a FACT, not
@@ -762,6 +817,40 @@ async def position(interaction: discord.Interaction):
     embed.set_footer(text="This is what the bot has on file -- if it's stale or wrong, use /buyfilled to update it, or clear it below once you've actually sold")
 
     await interaction.followup.send(embed=embed, view=ClearPositionView())
+
+
+@tree.command(name="testdipalert", description="Manually trigger a test dip alert -- verifies the buttons/modals work without waiting for a real dip")
+async def testdipalert(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    try:
+        current_price = await asyncio.to_thread(fetch_live_price_extended_hours, "TQQQ")
+    except Exception as e:
+        await interaction.followup.send(f"Could not fetch a live TQQQ price for the test: {e}")
+        return
+
+    # Uses the REAL DipAlertResponseView -- same buttons, same modals, same
+    # handle_fill_confirmation() / build_buyfilled_response() the actual
+    # polling task would use. This tests the entire downstream pipeline
+    # for real, not a mock -- worth knowing plainly: clicking "Filled at
+    # Target" or "Custom Fill" below WILL actually write to
+    # position_state.json, exactly as a real fill would. Use /position's
+    # Clear Position button afterward if this was only a test and you
+    # don't want it to stick. "Skip Dip" is the fully inert option if you
+    # just want to confirm the message/buttons render correctly.
+    embed = discord.Embed(
+        title="🧪 TEST dip alert (not a real trigger)",
+        description=(
+            f"TQQQ is currently **${current_price:.2f}**.\n\n"
+            f"This is a manually-triggered test, not a real threshold cross. "
+            f"The buttons below are fully real -- clicking Filled/Custom "
+            f"Fill WILL update your tracked position for real. Use /position's "
+            f"Clear Position button afterward if you don't want the test to stick."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text="Manual test -- does not touch the real polling loop's running_high or armed state")
+    await interaction.followup.send(embed=embed, view=DipAlertResponseView(target_price=current_price))
 
 
 async def build_buyfilled_response(shares: float, price: float, target_avg: float = None) -> discord.Embed:
