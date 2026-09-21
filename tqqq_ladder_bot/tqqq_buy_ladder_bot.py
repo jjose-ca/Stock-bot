@@ -643,7 +643,23 @@ async def check_dip_alert():
         timestamp=datetime.now(timezone.utc),
     )
     embed.set_footer(text="No anti-spam suppression -- this will keep firing every 5 min while the dip persists")
-    await channel.send(embed=embed, view=DipAlertResponseView(target_price=current_price))
+    try:
+        await channel.send(embed=embed, view=DipAlertResponseView(target_price=current_price))
+    except Exception as e:
+        # Distinct from the "THRESHOLD MET" log above on purpose: that
+        # line only confirms the DECISION to fire, not that the alert
+        # actually reached Discord. Without this try/except, a send
+        # failure (permissions, rate limit, a transient API error) would
+        # be an unhandled exception here -- caught by check_dip_alert's
+        # error handler, which logs it, but the alert itself would be
+        # silently lost with no distinct record of that specific failure,
+        # on exactly the cycle it mattered most.
+        log.error(f"Dip-alert poll: ALERT DECIDED BUT SEND FAILED (TQQQ ${current_price:.2f}, "
+                   f"{dip_pct:.2f}% below ${_running_high:.2f}): {e}", exc_info=e)
+        return
+
+    log.info(f"Dip-alert poll: ALERT SENT -- TQQQ ${current_price:.2f}, "
+              f"{dip_pct:.2f}% below ${_running_high:.2f}")
 
 
 @check_dip_alert.error
