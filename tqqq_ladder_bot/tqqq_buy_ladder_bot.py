@@ -41,6 +41,7 @@ import pandas as pd
 import yfinance as yf
 import discord
 from discord import app_commands
+from discord.ext import tasks
 from dotenv import load_dotenv
 
 from ladder_core import (
@@ -76,6 +77,11 @@ load_dotenv()
 
 TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 GUILD_ID = os.environ.get("DISCORD_GUILD_ID")
+ALERT_CHANNEL_ID = int(os.environ.get("DISCORD_ALERT_CHANNEL_ID", 0))
+DIP_ALERT_THRESHOLD_PCT = float(os.environ.get("DIP_ALERT_THRESHOLD_PCT", "0.5"))
+# 0.5% default -- matches the value actually tested in
+# intraday_entry_backtest.py. Configurable via .env rather than hardcoded,
+# so it can be tuned without a code change/redeploy.
 
 LADDER_LOG_PATH = Path(__file__).parent / "ladder_log.jsonl"
 POSITION_STATE_PATH = Path(__file__).parent / "position_state.json"
@@ -477,12 +483,80 @@ class LadderBotClient(discord.Client):
 client = LadderBotClient(intents=intents)
 tree = app_commands.CommandTree(client)
 
+# ---------- Dip-entry polling task (no open position, edge-based, NO anti-spam) ----------
+#
+# Deliberately fires on EVERY poll where price sits below the threshold
+# below the running high -- no armed/re-arm suppression. Considered and
+# explicitly rejected: an armed/re-arm-on-recovery design (fire once, go
+# quiet until price recovers above the threshold line) was proposed, but
+# has a real, confirmed failure case -- if price keeps falling WITHOUT
+# recovering in between, a genuinely deeper, better entry than the one
+# you missed would never get its own alert. Given the actual plan is "get
+# in at a known retraceable threshold, average down further with the
+# ladder if needed," never silently missing a better entry outweighs the
+# real, accepted cost of repeated alerts during a sustained dip. A
+# user-controlled snooze (not automatic bot-side suppression) is the
+# planned way to address alert frequency later, so the choice of when to
+# go quiet stays with the trader, not a guess baked into the bot.
+#
+# running_high is in-memory only (module-level, not persisted) --
+# resets on a bot restart. Deliberate: unlike position_state.json (real
+# financial data, must survive restarts), losing this just means the
+# tracker re-initializes from whatever price it next sees -- a minor,
+# self-correcting inconvenience, not a real loss.
+_running_high = None
+
+
+@tasks.loop(minutes=5)
+async def check_dip_alert():
+    global _running_high
+
+    if not await asyncio.to_thread(is_regular_market_hours_live):
+        return
+
+    if read_position_state() is not None:
+        return  # in a position -- this alert is for the flat/no-position case only
+
+    try:
+        current_price = await asyncio.to_thread(fetch_live_price_extended_hours, "TQQQ")
+    except Exception as e:
+        log.warning(f"Dip-alert poll: price fetch failed, skipping this cycle: {e}")
+        return
+
+    if _running_high is None or current_price > _running_high:
+        _running_high = current_price
+        return  # a fresh high -- nothing to alert on this cycle
+
+    dip_pct = (_running_high - current_price) / _running_high * 100
+    if dip_pct < DIP_ALERT_THRESHOLD_PCT:
+        return
+
+    channel = client.get_channel(ALERT_CHANNEL_ID)
+    if channel is None:
+        log.warning(f"Dip-alert poll: channel {ALERT_CHANNEL_ID} not found -- check DISCORD_ALERT_CHANNEL_ID")
+        return
+
+    embed = discord.Embed(
+        title="🚨 TQQQ dip threshold reached",
+        description=(
+            f"TQQQ is at **${current_price:.2f}**, {dip_pct:.2f}% below the recent high "
+            f"of **${_running_high:.2f}**.\n\nPlace your order manually, then confirm below."
+        ),
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text="No anti-spam suppression -- this will keep firing every 5 min while the dip persists")
+    await channel.send(embed=embed, view=DipAlertResponseView(target_price=current_price))
+
 
 @client.event
 async def on_ready():
     # Sync already happened once in setup_hook -- this just logs connection
     # status, safe to fire on every reconnect.
     log.info(f"Logged in as {client.user}")
+    if not check_dip_alert.is_running():
+        check_dip_alert.start()
+        log.info("Dip-alert polling loop started.")
 
 
 @tree.command(name="marketcheck", description="Current QQQ regime, trend distance, and volatility -- no position needed")
