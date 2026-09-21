@@ -594,11 +594,20 @@ _running_high = None
 async def check_dip_alert():
     global _running_high
 
+    # Heartbeat -- previously this function was COMPLETELY silent on every
+    # normal cycle (only a warning on fetch failure, or the alert itself
+    # firing). That meant there was no way to confirm from logs alone that
+    # polling was actually happening, short of waiting for an error or a
+    # real dip. One INFO line per cycle, always, regardless of which
+    # branch below is taken -- cheap, and directly answers "is this
+    # running" via `journalctl -u tqqq-ladder-bot -f`.
     if not await asyncio.to_thread(is_dip_alert_window):
+        log.info("Dip-alert poll: outside window (pre-6:30am, post-4pm, or weekend) -- skipped")
         return
 
     if read_position_state() is not None:
-        return  # in a position -- this alert is for the flat/no-position case only
+        log.info("Dip-alert poll: position currently tracked -- skipped (alert is for flat only)")
+        return
 
     try:
         current_price = await asyncio.to_thread(fetch_live_price_extended_hours, "TQQQ")
@@ -608,12 +617,17 @@ async def check_dip_alert():
 
     if _running_high is None or current_price > _running_high:
         _running_high = current_price
-        return  # a fresh high -- nothing to alert on this cycle
+        log.info(f"Dip-alert poll: TQQQ ${current_price:.2f} -- new running high, no dip to check yet")
+        return
 
     dip_pct = (_running_high - current_price) / _running_high * 100
     if dip_pct < DIP_ALERT_THRESHOLD_PCT:
+        log.info(f"Dip-alert poll: TQQQ ${current_price:.2f}, {dip_pct:.2f}% below "
+                  f"running high ${_running_high:.2f} (threshold {DIP_ALERT_THRESHOLD_PCT}%) -- no alert")
         return
 
+    log.info(f"Dip-alert poll: THRESHOLD MET -- TQQQ ${current_price:.2f}, "
+              f"{dip_pct:.2f}% below ${_running_high:.2f} -- firing alert")
     channel = client.get_channel(ALERT_CHANNEL_ID)
     if channel is None:
         log.warning(f"Dip-alert poll: channel {ALERT_CHANNEL_ID} not found -- check DISCORD_ALERT_CHANNEL_ID")
@@ -630,6 +644,20 @@ async def check_dip_alert():
     )
     embed.set_footer(text="No anti-spam suppression -- this will keep firing every 5 min while the dip persists")
     await channel.send(embed=embed, view=DipAlertResponseView(target_price=current_price))
+
+
+@check_dip_alert.error
+async def check_dip_alert_error(error):
+    # tasks.loop SILENTLY STOPS the loop on any unhandled exception unless
+    # an error handler is registered -- without this, a single unexpected
+    # crash mid-cycle would kill dip-alert polling permanently, with
+    # NOTHING in the logs to explain why it just stopped. This handler
+    # doesn't fix whatever went wrong, but it guarantees the failure is
+    # loud, not silent. Recovery: the next Discord gateway reconnect fires
+    # on_ready again, which already checks is_running() and restarts the
+    # loop if it's not -- so this is usually self-healing, but only if the
+    # failure is visible enough to notice in the meantime.
+    log.error(f"Dip-alert polling loop crashed and stopped: {error}", exc_info=error)
 
 
 @client.event
