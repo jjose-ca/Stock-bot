@@ -615,10 +615,55 @@ tree = app_commands.CommandTree(client)
 # self-correcting inconvenience, not a real loss.
 _running_high = None
 
+# Tracks which source fed the last accepted price -- "alpaca" or
+# "yfinance". Needed because the price source now switches at the
+# 9:30am/4:00pm regular-hours boundary (see fetch_dip_alert_price below)
+# -- without this, comparing a fresh Alpaca price against a running_high
+# set from yfinance (or vice versa) risks a FALSE dip or false new-high
+# purely from two different venues quoting slightly different prices at
+# the same moment, not real market movement.
+_last_price_source = None
+
+
+async def fetch_dip_alert_price() -> tuple:
+    """Returns (price, source_label). Splits the price source by regular-
+    hours status -- added specifically to reduce this bot's yfinance call
+    volume, after review found the dip-alert's ~162 calls/day (single
+    symbol, 5-min cadence across the whole 6:30am-8pm window) was ~3.5x
+    higher than the only proven-safe precedent on this VPS (the existing
+    15-min-cadence bots' combined ~46 calls/day). A yfinance IP block
+    isn't necessarily isolated to this one bot either -- all six bots on
+    this system share one VPS IP, so a block from this alert's volume
+    could plausibly take down tqqq_bot.py, tqqq_above_open_bot.py, and
+    both SOXL bots simultaneously, not just silence this one feature.
+
+    During regular hours (9:30am-4:00pm ET): Alpaca's latest trade --
+    real, liquid regular-session trading, no staleness concern.
+    fetch_latest_trade_price_with_staleness_check raises if the trade is
+    older than its own threshold (default 10 min) rather than silently
+    returning a stale value; caught the same way as any other fetch
+    failure below.
+
+    Outside regular hours (the pre-market/post-market portions of the
+    wider dip-alert window): stays on yfinance's
+    fetch_live_price_extended_hours, unchanged. Same reasoning already
+    established for why extended-hours price was never migrated to
+    Alpaca in the first place -- IEX's extended-hours liquidity is
+    thinner than its already-small regular-session share, so a latest-
+    trade call there is more likely to be stale enough to reject."""
+    if await asyncio.to_thread(is_regular_market_hours_live):
+        price = await asyncio.to_thread(
+            ad.fetch_latest_trade_price_with_staleness_check, alpaca_client, "TQQQ"
+        )
+        return price, "alpaca"
+    else:
+        price = await asyncio.to_thread(fetch_live_price_extended_hours, "TQQQ")
+        return price, "yfinance"
+
 
 @tasks.loop(minutes=5)
 async def check_dip_alert():
-    global _running_high
+    global _running_high, _last_price_source
 
     # Heartbeat -- previously this function was COMPLETELY silent on every
     # normal cycle (only a warning on fetch failure, or the alert itself
@@ -636,23 +681,36 @@ async def check_dip_alert():
         return
 
     try:
-        current_price = await asyncio.to_thread(fetch_live_price_extended_hours, "TQQQ")
+        current_price, source = await fetch_dip_alert_price()
     except Exception as e:
         log.warning(f"Dip-alert poll: price fetch failed, skipping this cycle: {e}")
         return
 
+    # Source just changed (crossing the 9:30am or 4:00pm boundary) --
+    # don't compare across venues. Treat this exactly like a bot restart:
+    # reset the baseline to this reading rather than risk a false dip or
+    # false new-high purely from Alpaca and yfinance quoting slightly
+    # different prices at the same instant, not real market movement.
+    if _last_price_source is not None and source != _last_price_source:
+        _running_high = current_price
+        _last_price_source = source
+        log.info(f"Dip-alert poll: price source switched to {source} (TQQQ ${current_price:.2f}) "
+                  f"-- running high reset to avoid a false cross-venue comparison")
+        return
+    _last_price_source = source
+
     if _running_high is None or current_price > _running_high:
         _running_high = current_price
-        log.info(f"Dip-alert poll: TQQQ ${current_price:.2f} -- new running high, no dip to check yet")
+        log.info(f"Dip-alert poll: TQQQ ${current_price:.2f} ({source}) -- new running high, no dip to check yet")
         return
 
     dip_pct = (_running_high - current_price) / _running_high * 100
     if dip_pct < DIP_ALERT_THRESHOLD_PCT:
-        log.info(f"Dip-alert poll: TQQQ ${current_price:.2f}, {dip_pct:.2f}% below "
+        log.info(f"Dip-alert poll: TQQQ ${current_price:.2f} ({source}), {dip_pct:.2f}% below "
                   f"running high ${_running_high:.2f} (threshold {DIP_ALERT_THRESHOLD_PCT}%) -- no alert")
         return
 
-    log.info(f"Dip-alert poll: THRESHOLD MET -- TQQQ ${current_price:.2f}, "
+    log.info(f"Dip-alert poll: THRESHOLD MET -- TQQQ ${current_price:.2f} ({source}), "
               f"{dip_pct:.2f}% below ${_running_high:.2f} -- firing alert")
     channel = client.get_channel(ALERT_CHANNEL_ID)
     if channel is None:
@@ -680,11 +738,11 @@ async def check_dip_alert():
         # error handler, which logs it, but the alert itself would be
         # silently lost with no distinct record of that specific failure,
         # on exactly the cycle it mattered most.
-        log.error(f"Dip-alert poll: ALERT DECIDED BUT SEND FAILED (TQQQ ${current_price:.2f}, "
+        log.error(f"Dip-alert poll: ALERT DECIDED BUT SEND FAILED (TQQQ ${current_price:.2f} ({source}), "
                    f"{dip_pct:.2f}% below ${_running_high:.2f}): {e}", exc_info=e)
         return
 
-    log.info(f"Dip-alert poll: ALERT SENT -- TQQQ ${current_price:.2f}, "
+    log.info(f"Dip-alert poll: ALERT SENT -- TQQQ ${current_price:.2f} ({source}), "
               f"{dip_pct:.2f}% below ${_running_high:.2f}")
 
 
