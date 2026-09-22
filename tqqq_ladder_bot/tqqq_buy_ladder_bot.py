@@ -302,6 +302,36 @@ def is_regular_market_hours_live(now: datetime = None) -> bool:
         return True  # fail open, matching tqqq_bot.py
 
 
+def is_regular_hours_clock_only(now: datetime = None) -> bool:
+    """Same 9:30am-4:00pm ET weekday window as is_regular_market_hours_live,
+    deliberately WITHOUT its live SPY holiday probe. Exists specifically
+    for fetch_dip_alert_price, which runs every cycle of a 5-min polling
+    loop -- reusing the full holiday-aware version there would silently
+    defeat that function's own stated purpose: is_regular_market_hours_live
+    makes its SPY probe call EVERY time it's invoked within the clock
+    window, uncached, so gating the Alpaca/yfinance switch on it would
+    still cost one yfinance call per regular-hours cycle, just relabeled
+    from "fetch TQQQ price" to "probe SPY for a holiday" rather than
+    actually eliminated. No network at all here -- pure clock check,
+    genuinely free to call every cycle.
+
+    Same low-stakes reasoning already applied to is_dip_alert_window's
+    own pure-clock design: this can't tell an actual holiday from a
+    normal trading day, but the cost of guessing wrong is low and
+    already handled downstream -- fetch_dip_alert_price's Alpaca branch
+    simply raises (no real trades to find), caught by the caller's
+    existing try/except, which skips that cycle with a warning. Not a
+    replacement for is_regular_market_hours_live -- that function's own
+    holiday awareness still matters for /marketcheck and /buyfilled,
+    which call it once per command, not once every 5 minutes all day."""
+    now = (now or datetime.now(_ET)).astimezone(_ET)
+    if now.weekday() >= 5:
+        return False
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return market_open <= now <= market_close
+
+
 def is_dip_alert_window(now: datetime = None) -> bool:
     """A DIFFERENT, wider window than is_regular_market_hours_live -- 6:30am
     to 8:00pm ET, covering standard pre-market through standard post-market
@@ -625,6 +655,82 @@ _running_high = None
 _last_price_source = None
 
 
+def seed_running_high_from_today() -> float:
+    """Best-effort recovery of today's true running high after a bot
+    restart -- without this, _running_high starts at None and silently
+    re-anchors to whatever price the FIRST post-restart poll happens to
+    see, understating any dip that already happened earlier today.
+    Independently confirmed as a real, live bug from this bot's own
+    Sept 21, 2026 log: running high peaked at $79.36 at 3:37pm, then a
+    4:29pm restart reset it to $78.87 -- LOWER than the true day's high,
+    meaning a real pullback from $79.36 would have been measured against
+    the wrong, understated peak for the rest of that session. A restart
+    can trigger this on any ordinary day, crash or manual -- _running_high
+    lives only in RAM (see its own comment above) and any
+    crash-and-systemd-restart cycle wipes it exactly the same way a
+    manual restart does.
+
+    Reuses fetch_live_price_extended_hours's own 5-day/5m prepost=True
+    yfinance pull -- no new data source, no new network pattern, and the
+    same real limitation: this still can't see the Blue Ocean overnight
+    session, so a restart during THAT window would still seed from a
+    lower, visible-hours-only high. Better than None, not a full fix for
+    the same underlying gap. Deliberately stays on yfinance rather than
+    routing through fetch_dip_alert_price's Alpaca/yfinance split -- this
+    runs once, at startup only, not on a 5-min cadence, so the
+    rate-limit motivation for that split doesn't apply here.
+
+    IMPORTANT: the caller (on_ready) MUST also set _last_price_source =
+    "yfinance" alongside _running_high = <this return value>. This
+    function always seeds from yfinance, but if the bot restarts during
+    regular hours, the very first live poll after startup would use
+    Alpaca (via fetch_dip_alert_price) -- without _last_price_source
+    already set here, that first poll's cross-venue-mismatch guard in
+    check_dip_alert never fires (it only triggers when a prior source is
+    already known), so a yfinance-seeded high could get compared
+    straight against a fresh Alpaca price with no protection at all,
+    defeating the exact mechanism built to prevent that. This was a real
+    gap in an earlier version of this seeding function -- fixed by
+    documenting it as a required part of the caller's contract rather
+    than trying to set module globals from inside this function.
+
+    Deliberately filtered down to bars from TODAY's ET calendar date
+    only, NOT the full 5-day window: seeding from a multi-day max risks
+    anchoring to a stale peak from a prior session that's irrelevant to
+    the CURRENT dip-watching cycle. Neither check_dip_alert nor
+    check_rung_alert has a daily reset of its own -- so a stale
+    multi-day peak, once seeded, could sit there unrevisited for days,
+    silently suppressing real alerts far worse than the None-start
+    problem this function exists to fix.
+
+    Returns None (not a fallback price) on any failure or empty result
+    -- caller must treat that as "couldn't seed, fall back to normal
+    cold-start behavior (None)," never invent a substitute value."""
+    try:
+        df = yf.download(
+            "TQQQ",
+            period="5d",
+            interval="5m",
+            progress=False,
+            auto_adjust=True,
+            multi_level_index=False,
+            prepost=True,
+        )
+        if df.empty:
+            return None
+        df.columns = [str(c).lower() for c in df.columns]
+        idx = df.index.tz_convert(_ET) if df.index.tz else df.index.tz_localize(_ET)
+        today = datetime.now(_ET).date()
+        todays_bars = df[idx.date == today]
+        if todays_bars.empty:
+            return None
+        high = float(todays_bars["high"].max())
+        return high if high > 0 else None
+    except Exception as e:
+        log.warning(f"Could not seed running high from today's data: {e}")
+        return None
+
+
 async def fetch_dip_alert_price() -> tuple:
     """Returns (price, source_label). Splits the price source by regular-
     hours status -- added specifically to reduce this bot's yfinance call
@@ -637,12 +743,32 @@ async def fetch_dip_alert_price() -> tuple:
     could plausibly take down tqqq_bot.py, tqqq_above_open_bot.py, and
     both SOXL bots simultaneously, not just silence this one feature.
 
+    Uses is_regular_hours_clock_only() to decide the split, NOT
+    is_regular_market_hours_live() -- this was a real bug in an earlier
+    version of this function: is_regular_market_hours_live's own SPY
+    holiday probe runs on EVERY call within the 9:30-4 clock window, with
+    no caching. Gating the Alpaca/yfinance switch on that function meant
+    every regular-hours cycle still made exactly one yfinance call --
+    just moved from "fetch TQQQ price" to "probe SPY for a holiday,"
+    never actually eliminated. The whole point of this function was to
+    get regular-hours cycles off yfinance entirely; using the holiday-
+    aware check silently defeated that. is_regular_hours_clock_only()
+    is a pure clock check, no network at all, so during regular hours
+    this function now makes ZERO yfinance calls, genuinely delivering
+    the ~162/day reduction described above rather than just relabeling
+    the same call.
+
     During regular hours (9:30am-4:00pm ET): Alpaca's latest trade --
     real, liquid regular-session trading, no staleness concern.
     fetch_latest_trade_price_with_staleness_check raises if the trade is
     older than its own threshold (default 10 min) rather than silently
     returning a stale value; caught the same way as any other fetch
-    failure below.
+    failure below. A guessed-wrong holiday (clock check alone can't tell
+    a holiday from a normal trading day) means this raises with no real
+    trades to find -- caught by the caller's existing try/except, which
+    just skips that cycle with a warning. Same low-stakes "wrong guess
+    is cheap" reasoning already applied to is_dip_alert_window's own
+    pure-clock design, extended here to the same class of guess.
 
     Outside regular hours (the pre-market/post-market portions of the
     wider dip-alert window): stays on yfinance's
@@ -651,7 +777,7 @@ async def fetch_dip_alert_price() -> tuple:
     Alpaca in the first place -- IEX's extended-hours liquidity is
     thinner than its already-small regular-session share, so a latest-
     trade call there is more likely to be stale enough to reject."""
-    if await asyncio.to_thread(is_regular_market_hours_live):
+    if is_regular_hours_clock_only():
         price = await asyncio.to_thread(
             ad.fetch_latest_trade_price_with_staleness_check, alpaca_client, "TQQQ"
         )
@@ -760,14 +886,161 @@ async def check_dip_alert_error(error):
     log.error(f"Dip-alert polling loop crashed and stopped: {error}", exc_info=error)
 
 
+# ---------- Rung-crossing alert (IN a tracked position, opposite gate from check_dip_alert) ----------
+#
+# Closes a real, confirmed gap: check_dip_alert goes silent the moment a
+# position is tracked ("alert is for flat only"), but nothing was ever
+# watching for price reaching the ladder's own Buy 1/2/3 levels while
+# you're actually holding -- Buy 1/2/3 were display-only numbers in the
+# /buyfilled embed, with zero automated monitoring behind them. Confirmed
+# live on Sept 21, 2026: price crossed BOTH Buy 1 ($77.38) and Buy 2
+# ($75.77) with no alert of any kind, because check_dip_alert was already
+# gated off by the tracked position.
+
+@tasks.loop(minutes=5)
+async def check_rung_alert():
+    """Deliberately checks ONLY the ladder's nearest rung (build_ladder's
+    first returned level), not all three shown in /buyfilled -- no
+    separate "watch Buy 2, watch Buy 3" logic is needed or even correct:
+    once this alert's own Filled/Custom Fill button updates
+    position_state.json, the basis (and often the day's qqq_atr_pct)
+    changes, so build_ladder() naturally produces a NEW nearest rung on
+    the very next cycle. Hardcoding a watch on today's Buy 2 price would
+    in fact be WRONG the moment Buy 1 fills, since a fresh basis shifts
+    where Buy 2 actually sits -- watching the ladder's own always-current
+    first level sidesteps that for free, rather than needing to be told
+    to re-target after every fill.
+
+    Uses the SAME view (DipAlertResponseView) and the SAME
+    handle_fill_confirmation() plumbing the dip-alert and /testdipalert
+    already use -- single source of truth for "a fill happened," not a
+    second, divergent recording path. The view's "Filled at Target" /
+    "Custom Fill" / "Skip Dip" labels stay as-is rather than forking a
+    near-duplicate view class just to rename them for this context.
+
+    Same NO-ANTI-SPAM policy as check_dip_alert, for the same reason:
+    if you don't confirm within one 5-min cycle, the next cycle
+    recomputes the (usually near-identical) rung price and fires again
+    rather than going quiet -- silently going dark on a level you're
+    actively trying to average into would be worse than a repeated ping.
+
+    Same is_dip_alert_window gate as check_dip_alert (6:30am-8pm ET,
+    weekdays only) -- this needs the same extended-hours live price
+    fetch, so the same coverage limits apply.
+
+    Uses fetch_dip_alert_price() -- the SAME Alpaca/yfinance regular-
+    hours split check_dip_alert uses (via is_regular_hours_clock_only,
+    not the holiday-probing version -- see fetch_dip_alert_price's own
+    docstring), NOT a separate, unconditional yfinance call. This
+    matters: without sharing the split, this task would silently undo
+    the rate-limit reduction the split exists for on every day you're
+    actually holding a position -- arguably the MORE common state for
+    an averaging-down strategy, not an edge case. Unlike check_dip_alert,
+    this does NOT need the _last_price_source cross-venue reset logic:
+    that exists to protect a REMEMBERED running_high from a false
+    comparison against a differently-sourced fresh price. Here,
+    `nearest.price` is recomputed from scratch every cycle from
+    build_ladder() (itself always fed by Alpaca's fetch_daily_bars,
+    independent of which source fed current_tqqq_price) -- there's no
+    persisted value that a source switch could corrupt, only a
+    same-cycle comparison that starts fresh each time regardless."""
+    if not await asyncio.to_thread(is_dip_alert_window):
+        log.info("Rung-alert poll: outside window (pre-6:30am, post-8pm, or weekend) -- skipped")
+        return
+
+    state = read_position_state()
+    if state is None:
+        log.info("Rung-alert poll: no position tracked -- skipped (alert is for in-position only)")
+        return
+
+    try:
+        qqq_df, tqqq_df = await asyncio.to_thread(get_market_data)
+        current_tqqq_price, source = await fetch_dip_alert_price()
+    except Exception as e:
+        log.warning(f"Rung-alert poll: data fetch failed, skipping this cycle: {e}")
+        return
+
+    qqq_close = float(qqq_df["close"].iloc[-1])
+    qqq_atr_pct = compute_atr_pct(qqq_df)
+    qqq_swing_lows_all = find_confirmed_swing_lows(qqq_df)
+
+    ladder = build_ladder(
+        basis_price=state["price"],
+        current_tqqq_price=current_tqqq_price,
+        qqq_close=qqq_close,
+        qqq_atr_pct=qqq_atr_pct,
+        qqq_swing_lows=qqq_swing_lows_all if USE_CONFLUENCE else pd.Series(dtype=float),
+    )
+
+    if not ladder:
+        log.info(f"Rung-alert poll: TQQQ ${current_tqqq_price:.2f} ({source}) -- no valid ladder level below current price")
+        return
+
+    nearest = ladder[0]
+    log.info(f"Rung-alert poll: TQQQ ${current_tqqq_price:.2f} ({source}), nearest rung ${nearest.price:.2f} "
+              f"({nearest.label}) -- {'AT/BELOW, firing' if current_tqqq_price <= nearest.price else 'above, no alert'}")
+
+    if current_tqqq_price > nearest.price:
+        return
+
+    channel = client.get_channel(ALERT_CHANNEL_ID)
+    if channel is None:
+        log.warning(f"Rung-alert poll: channel {ALERT_CHANNEL_ID} not found -- check DISCORD_ALERT_CHANNEL_ID")
+        return
+
+    embed = discord.Embed(
+        title="🎯 TQQQ buy rung reached",
+        description=(
+            f"TQQQ is at **${current_tqqq_price:.2f}**, at or below your nearest buy rung "
+            f"**${nearest.price:.2f}** ({nearest.label}, {nearest.tqqq_drop_pct:.1f}% below your "
+            f"${state['price']:.2f} basis).\n\nPlace your order manually, then confirm below."
+        ),
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text="No anti-spam suppression -- this will keep firing every 5 min while price stays at/below this rung")
+    try:
+        await channel.send(embed=embed, view=DipAlertResponseView(target_price=nearest.price))
+    except Exception as e:
+        log.error(f"Rung-alert poll: ALERT DECIDED BUT SEND FAILED (TQQQ ${current_tqqq_price:.2f} ({source}), "
+                   f"rung ${nearest.price:.2f}): {e}", exc_info=e)
+        return
+
+    log.info(f"Rung-alert poll: ALERT SENT -- TQQQ ${current_tqqq_price:.2f} ({source}) at/below rung ${nearest.price:.2f}")
+
+
+@check_rung_alert.error
+async def check_rung_alert_error(error):
+    # Same reasoning as check_dip_alert_error -- tasks.loop silently
+    # stops on any unhandled exception without this handler.
+    log.error(f"Rung-alert polling loop crashed and stopped: {error}", exc_info=error)
+
+
 @client.event
 async def on_ready():
     # Sync already happened once in setup_hook -- this just logs connection
     # status, safe to fire on every reconnect.
     log.info(f"Logged in as {client.user}")
     if not check_dip_alert.is_running():
+        global _running_high, _last_price_source
+        seeded = await asyncio.to_thread(seed_running_high_from_today)
+        if seeded is not None:
+            _running_high = seeded
+            # Required alongside the seed itself -- see
+            # seed_running_high_from_today's own docstring for why:
+            # without this, the first live poll after a regular-hours
+            # restart would use Alpaca and skip the cross-venue-mismatch
+            # guard entirely, since that guard only fires once a prior
+            # source is already known.
+            _last_price_source = "yfinance"
+            log.info(f"Dip-alert: seeded running high from today's data -- ${seeded:.2f}")
+        else:
+            log.info("Dip-alert: could not seed running high from today's data -- starting cold (None)")
         check_dip_alert.start()
         log.info("Dip-alert polling loop started.")
+    if not check_rung_alert.is_running():
+        check_rung_alert.start()
+        log.info("Rung-alert polling loop started.")
 
 
 @tree.command(name="marketcheck", description="Current QQQ regime, trend distance, and volatility -- no position needed")
