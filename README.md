@@ -207,7 +207,7 @@ cd /root/Stock-bot && git pull origin master
 | **TQQQ Intraday (Above-Open)** ✅ | `tqqq_above_open_bot.py` | TQQQ | 15-min bars | Every 15 min, 10:00am-3:30pm ET, staggered 2 min from pullback bot |
 | SOXL Swing (PAUSED) | `soxl_bot.py` | SOXL | Daily bars | 3:20pm, 3:35pm, 3:45pm ET |
 | SOXL Intraday (PAUSED) | `soxl_intraday_bot.py` | SOXL | 15-min bars | Every 15 min, 10:00am-3:20pm ET |
-| **TQQQ Buy Ladder** | `tqqq_buy_ladder_bot.py` | TQQQ | Daily bars (QQQ) | **Both**: on-demand via `/buyfilled`, `/marketcheck`, `/position` (no schedule, computes only when invoked) **AND** a continuous background poll every 5 min, 6:30am-4:00pm ET, for the automatic dip-entry alert -- not purely on-demand anymore, see its own section for why the polling has to live in this same process |
+| **TQQQ Buy Ladder** | `tqqq_buy_ladder_bot.py` | TQQQ | Daily bars (QQQ) | **Both**: on-demand via `/buyfilled`, `/marketcheck`, `/position` (no schedule, computes only when invoked) **AND** a continuous background poll every 5 min, 6:30am-8:00pm ET, for the automatic dip-entry alert -- not purely on-demand anymore, see its own section for why the polling has to live in this same process |
 | **Event Calendar** (producer) | `event_calendar_bot.py` | N/A — cross-cutting | N/A | Once daily, early morning (before all other bots' first run) |
 
 ### tqqq_bot.py — TQQQ Mean-Reversion Swing
@@ -2342,18 +2342,32 @@ async def on_ready():
 (`fetch_live_price_extended_hours("TQQQ")`) → track running high → check
 threshold (`DIP_ALERT_THRESHOLD_PCT`, default 0.5%).
 
-**`is_dip_alert_window()` — 6:30am-4:00pm ET — is a SEPARATE function from
+**`is_dip_alert_window()` — 6:30am-8:00pm ET — is a SEPARATE function from
 `is_regular_market_hours_live()`, not a widened version of it.** Widening
 the existing function was considered and rejected: `/marketcheck` and
 `/buyfilled` use `is_regular_market_hours_live()` specifically to decide
 whether to bother with the extended-hours fetch. If that function
-considered 6:30-9:30am "regular hours," those commands would wrongly skip
+considered 6:30am-8pm "regular hours," those commands would wrongly skip
 the fresher prepost fetch during exactly the window they need it most.
 Two different questions need two different answers. Also deliberately a
 **pure clock check, no SPY holiday probe** (unlike its sibling) — same
 low-stakes reasoning: worst case on an actual holiday is a few wasted,
 harmless polls (price stays frozen, `dip_pct` stays ~0, nothing fires),
 not worth a second network-probing mechanism.
+
+**8:00pm end, corrected from an earlier 4:00pm version** — found and
+fixed via a direct file comparison against a version built outside this
+specific conversation thread (same kind of parallel-edit situation as the
+Alpaca migration). The reasoning holds up: `fetch_live_price_extended_hours`
+already fetches with `prepost=True`, which covers standard after-hours
+trading up to ~8pm — a 4pm cutoff meant the alert stopped watching
+exactly when after-hours trading *starts*, even though the fetch it
+depends on was already capable of seeing that activity. 8pm aligns the
+gate with where that fetch's own real coverage actually ends, not an
+arbitrary earlier stop. Widening past 8pm would be pointless with the
+current data source — the separate Blue Ocean ATS overnight session
+(8pm-4am ET) isn't visible to a plain `yfinance prepost=True` fetch at
+all (see Primary Data Source above).
 
 **Uses `TQQQ`'s own price, not QQQ** — deliberate, and consistent with
 how `intraday_entry_backtest.py` was built: this is a factual question
@@ -2390,6 +2404,56 @@ Known Gaps.
 unlike an interactive command, a background task has no `Interaction`
 object to derive a channel from. Can be set to the same channel already
 used for `/buyfilled`/`/marketcheck` — nothing requires a separate one.
+
+### Dip-Alert Price Source — Split by Regular-Hours Status
+
+Originally `check_dip_alert` used `fetch_live_price_extended_hours`
+(`yfinance`) unconditionally, all day. Revisited after calculating the
+real volume: ~162 single-symbol calls/day (5-min cadence across the full
+6:30am-8pm window) — ~3.5x higher than the only proven-safe precedent on
+this VPS (the existing 15-min-cadence bots' combined ~46 calls/day, run
+over a month with zero rate-limiting). No incident had actually happened
+at the time this was changed — this was a precautionary fix based on
+volume math, not a reaction to a confirmed failure, consistent with this
+project's general standard of evidence before action; the exception
+here is that the blast radius mattered more than usual: **all six bots
+on this VPS share one IP**, so a block triggered by this alert's volume
+could plausibly take down every other bot simultaneously, not just this
+one feature. General ASN/network-range-level blocking is a real,
+standard anti-bot industry practice (confirmed against real blocklist
+products), though not specifically confirmed as something Yahoo's
+backend does — the concrete `yfinance` incident reports found describe
+individual-IP blocks, not confirmed range bans. Worth naming directly: a
+dedicated IPv4 (already in place on this VPS) protects against
+collateral damage from other *tenants* on shared infrastructure, but
+does NOT protect against ASN-level blocking, which targets the network
+owner, not the individual address within it.
+
+**`fetch_dip_alert_price()`** now branches on `is_regular_market_hours_live()`:
+- **During regular hours (9:30am-4:00pm ET)**: Alpaca's
+  `fetch_latest_trade_price_with_staleness_check` (from `alpaca_data.py`,
+  written but previously unused) — real, liquid regular-session trading,
+  no staleness concern. Raises if the trade is older than its own
+  threshold (default 10 min) rather than silently returning a stale
+  value; caught the same way as any other fetch failure.
+- **Outside regular hours** (the pre-market/post-market portions of the
+  wider dip-alert window): unchanged, stays on `yfinance`'s
+  `fetch_live_price_extended_hours` — same reasoning already established
+  for why extended-hours price was never migrated to Alpaca elsewhere:
+  IEX's extended-hours liquidity is thinner than its already-small
+  regular-session share.
+
+**A real, distinct risk this split introduces, and how it's handled**:
+splitting sources mid-day means the 9:30am and 4:00pm boundaries could
+otherwise produce a FALSE dip or false new-high purely from Alpaca and
+`yfinance` quoting slightly different prices at the same instant — not
+real market movement. **Fixed** via `_last_price_source` tracking: the
+moment the source changes between consecutive polls, `running_high`
+resets to that fresh reading instead of being compared across venues —
+treated exactly like a bot restart, with its own distinct log line
+("price source switched... running high reset") so it's identifiable in
+`journalctl` and not confused with an actual price move. Every dip-alert
+log line now includes which source produced that reading.
 
 ### Dip-Alert Observability — Added After a Real Gap Was Noticed
 
@@ -4703,7 +4767,37 @@ Stock-bot/
 
 ---
 
-*Last updated: September 2026 (Session 4) — First real deployment of the
+*Last updated: September 2026 (Session 6) — Split the dip-alert's price
+source by regular-hours status: Alpaca during 9:30am-4:00pm ET (real
+liquidity, reduces yfinance load), yfinance outside it (unchanged,
+same extended-hours-liquidity reasoning as before). Precautionary fix,
+not a reaction to a confirmed incident -- driven by volume math (~162
+yfinance calls/day from this one feature, ~3.5x the only proven-safe
+precedent on this VPS) and the fact all six bots share one IP, so a
+block wouldn't just silence this alert. Fixed a real, self-identified
+risk the split itself introduces: comparing prices across two different
+venues at the 9:30am/4pm boundary could produce a false dip or false
+high from quote differences alone, not real movement -- solved via
+source-change detection that resets the running high exactly like a
+restart, logged distinctly so it's never confused with a real price
+move.
+
+*Previously: September 2026 (Session 5) — Found and adopted a real,
+well-reasoned correction via a direct file comparison against a version
+built outside this conversation thread: `is_dip_alert_window()`'s end
+time was 4:00pm, changed to 8:00pm to actually match
+`fetch_live_price_extended_hours`'s real coverage (which already fetches
+with `prepost=True`, covering standard after-hours to ~8pm) — the 4pm
+version stopped watching for dips exactly when after-hours trading
+starts, despite the underlying fetch already being capable of seeing it.
+Also fixed a stale module-level docstring (`Requires:`/`Env vars:`)
+present in both this conversation's copy and the externally-modified one
+— neither had been updated since the Alpaca migration or the dip-alert
+env vars were added; now lists `alpaca-py` and all four newer `.env`
+keys (`DISCORD_ALERT_CHANNEL_ID`, `DIP_ALERT_THRESHOLD_PCT`,
+`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`).
+
+*Previously: September 2026 (Session 4) — First real deployment of the
 dip-alert polling loop (post-Alpaca-migration) confirmed live via
 `journalctl -f`, but also surfaced a real observability gap: the loop was
 completely silent on every normal cycle, and `discord.ext.tasks` loops
