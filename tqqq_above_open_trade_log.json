@@ -8062,5 +8062,26 @@
     "max_favorable": 77.66,
     "max_adverse": 76.78,
     "pnl_per_share": -0.4097
+  },
+  {
+    "date": "2026-09-25",
+    "bar_time": "09:45 ET",
+    "signal_bar_ts": "2026-09-25T09:45:00-04:00",
+    "signal_number": 1,
+    "validated": true,
+    "alert_price": 79.69,
+    "target": 80.19,
+    "stop": 79.29,
+    "day_open": 79.1,
+    "close": 79.69,
+    "pct_above_open": 0.752,
+    "alert_sent_at": "2026-09-25T10:02:05.347964-04:00",
+    "reconciled": true,
+    "exit_price": 79.29,
+    "exit_time": "10:01:00",
+    "exit_reason": "STOP",
+    "max_favorable": 79.73,
+    "max_adverse": 79.28,
+    "pnl_per_share": -0.4
   }
 ]
