@@ -99,7 +99,6 @@ DIP_ALERT_THRESHOLD_PCT = float(os.environ.get("DIP_ALERT_THRESHOLD_PCT", "0.5")
 
 LADDER_LOG_PATH = Path(__file__).parent / "ladder_log.jsonl"
 POSITION_STATE_PATH = Path(__file__).parent / "position_state.json"
-BREAKEVEN_SNOOZE_PATH = Path(__file__).parent / "breakeven_snooze_state.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("buy_ladder_bot")
@@ -453,53 +452,48 @@ def write_position_state(shares: float, price: float) -> None:
         "price": price,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }))
-    # A new fill changes the basis, which is the whole reference point a
-    # breakeven snooze is defined against ("wait for price below basis,
-    # then back above it") -- carrying a snooze set against the OLD basis
-    # forward across a fill would silently suppress alerts against a
-    # target that no longer matches what's displayed anywhere. Clearing
-    # here, not in check_breakeven_alert, means it happens exactly once,
-    # at the moment the basis actually changes, rather than being
-    # re-derived by a guess in the polling loop.
-    write_breakeven_snoozed(False)
 
 
 def clear_position_state() -> None:
     """Called only by the explicit 'Clear Position' button -- the bot
     never clears this on its own (e.g. on a price target), since it has
-    no way to verify a sale actually happened. See the module note above."""
+    no way to verify a sale actually happened. See the module note above.
+
+    Also resets _running_high and _last_price_source back to None --
+    without this, a real, confirmed gap: check_dip_alert is completely
+    frozen the entire time a position is tracked (its own gate returns
+    immediately whenever read_position_state() is not None), so it never
+    observes anything that happens while you're holding -- including any
+    new high reached during the hold itself. Clearing only the position
+    file left _running_high sitting at whatever stale value predates the
+    hold (potentially the high from BEFORE you even bought, hours or days
+    earlier), so the very next poll after clearing could immediately fire
+    a false "dip" purely by comparing today's current price against that
+    stale number -- not a real pullback from anything that's happened
+    since you went flat.
+
+    Resetting to None here reuses the bot's own existing cold-start path
+    (`if _running_high is None or current_price > _running_high:` in
+    check_dip_alert) rather than adding new logic: the next poll simply
+    seeds _running_high from whatever price it sees THEN, and ratchets up
+    normally from there -- exactly the right reference point for
+    re-entry monitoring, which is what this alert is actually for
+    ("tell me when price pulls back so I can consider buying again"),
+    not a historical high-of-day figure that may predate or have nothing
+    to do with your next re-entry decision.
+
+    Deliberately does NOT reseed from seed_running_high_from_today() the
+    way a bot restart does -- that function exists to recover a real
+    high the bot already should have been watching for but momentarily
+    lost (a restart). Here, the bot deliberately wasn't watching for a
+    market-wide high during the hold (that's not its job while a
+    position is tracked) -- a cold start from now is not a bug being
+    patched, it's the correct semantics of "start watching again."""
     if POSITION_STATE_PATH.exists():
         POSITION_STATE_PATH.unlink()
-    # Going flat removes the only thing a breakeven snooze is relative
-    # to (state["price"]) -- same reasoning as write_position_state:
-    # stale snooze state should not silently carry into whatever
-    # position gets tracked next.
-    write_breakeven_snoozed(False)
-
-
-def read_breakeven_snoozed() -> bool:
-    """True if a snooze is currently active (set via the alert's own
-    Snooze button). Persisted to disk, not module-level state -- same
-    reasoning as position_state.json: this is a real trader decision
-    ("I've seen this, don't tell me again until it actually re-crosses"),
-    and losing it silently on a bot restart would be a real regression,
-    not just cosmetic. Missing/corrupt file reads as False (not
-    snoozed) -- same fail-open default read_position_state uses, since
-    the safer failure here is "alert too often," not "silently stay
-    quiet forever with no visible cause."""
-    if not BREAKEVEN_SNOOZE_PATH.exists():
-        return False
-    try:
-        return bool(json.loads(BREAKEVEN_SNOOZE_PATH.read_text()).get("snoozed", False))
-    except Exception:
-        return False
-
-
-def write_breakeven_snoozed(snoozed: bool) -> None:
-    BREAKEVEN_SNOOZE_PATH.write_text(json.dumps({
-        "snoozed": snoozed,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }))
+    global _running_high, _last_price_source
+    _running_high = None
+    _last_price_source = None
 
 
 def compute_blended_average(existing_shares: float, existing_price: float,
@@ -635,42 +629,6 @@ class ClearPositionView(discord.ui.View):
         )
 
 
-class BreakevenAlertView(discord.ui.View):
-    """Persistent view (timeout=None + fixed custom_id), same pattern as
-    ClearPositionView and for the same reason -- a breakeven alert can
-    sit unanswered for hours if you're away from Discord, and the
-    Snooze button needs to still work whenever you actually see it,
-    restart or no restart. Also registered once via client.add_view()
-    in setup_hook.
-
-    Deliberately global, not scoped to one specific alert message or
-    price: snoozing reads/writes breakeven_snooze_state.json, and
-    check_breakeven_alert always re-reads the LIVE basis from
-    position_state.json when it re-arms -- so pressing Snooze on an
-    older alert still behaves correctly even if you've since had a new
-    fill (write_position_state's own snooze-clear would have already
-    reset this anyway, making a stale click on an old message a no-op
-    at worst, never a wrong comparison)."""
-
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="😴 Snooze until re-cross", style=discord.ButtonStyle.secondary,
-                        custom_id="snooze_breakeven_button")
-    async def snooze_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        write_breakeven_snoozed(True)
-        state = read_position_state()
-        basis_note = f"${state['price']:.2f}" if state else "your basis"
-        await interaction.response.edit_message(
-            content=(
-                f"😴 Snoozed -- won't alert again until TQQQ drops below {basis_note} "
-                f"and crosses back above it."
-            ),
-            embed=None,
-            view=None,
-        )
-
-
 class LadderBotClient(discord.Client):
     """Custom Client subclass so slash-command sync happens exactly once,
     in setup_hook (called once before the first connection) -- NOT in
@@ -685,7 +643,6 @@ class LadderBotClient(discord.Client):
         # once per process start so a button click still works correctly
         # even if the bot restarted since the /position message was sent.
         self.add_view(ClearPositionView())
-        self.add_view(BreakevenAlertView())
 
         if GUILD_ID:
             guild = discord.Object(id=int(GUILD_ID))
@@ -1115,112 +1072,6 @@ async def check_rung_alert_error(error):
     log.error(f"Rung-alert polling loop crashed and stopped: {error}", exc_info=error)
 
 
-# ---------- Breakeven alert (price back at/above your average cost basis) ----------
-#
-# Neither check_dip_alert (gated off the moment a position is tracked)
-# nor check_rung_alert (only ever watches the ladder's next BUY rung,
-# which build_ladder's own filter guarantees sits below current price)
-# looks upward -- nothing was watching for price recovering back to or
-# above your own average cost. Same in-position gate as check_rung_alert:
-# this only means anything while actually holding shares, since a flat
-# account has no basis to compare against.
-
-@tasks.loop(minutes=5)
-async def check_breakeven_alert():
-    """Fires when live TQQQ price is at or above your tracked basis
-    (state["price"]) -- i.e. back to break-even or better on your
-    average cost. Deliberately independent of build_ladder(): the
-    ladder only ever returns levels strictly BELOW current price (see
-    its own filter), so it can never surface an upward/breakeven
-    crossing -- this compares the raw basis directly against
-    fetch_dip_alert_price()'s live read instead, no ladder call needed.
-
-    Same is_dip_alert_window gate and same fetch_dip_alert_price()
-    source split as check_rung_alert, for the same reasons given there.
-
-    Unlike check_dip_alert / check_rung_alert, this one is NOT
-    unconditionally no-anti-spam -- it supports a user-controlled
-    snooze (breakeven_snooze_state.json, set via the alert's own Snooze
-    button), matching the "choice of when to go quiet stays with the
-    trader, not a guess baked into the bot" principle already used for
-    the dip-alert design. Default behavior with no snooze active is
-    still the same repeat-every-cycle firing as the other two alerts --
-    snoozing is opt-in per alert, not a standing suppression.
-
-    Re-arm condition is "price drops below basis" specifically, not
-    "N minutes have passed" or any other timeout -- a snooze that wore
-    off automatically while price was still sitting above basis would
-    just silently resume the exact repeat-spam the button exists to
-    stop. Checked every cycle regardless of window/position state
-    below, so re-arming itself doesn't depend on being in the alert
-    branch."""
-    if not await asyncio.to_thread(is_dip_alert_window):
-        log.info("Breakeven-alert poll: outside window (pre-6:30am, post-8pm, or weekend) -- skipped")
-        return
-
-    state = read_position_state()
-    if state is None:
-        log.info("Breakeven-alert poll: no position tracked -- skipped (alert is for in-position only)")
-        return
-
-    try:
-        current_tqqq_price, source = await fetch_dip_alert_price()
-    except Exception as e:
-        log.warning(f"Breakeven-alert poll: price fetch failed, skipping this cycle: {e}")
-        return
-
-    basis = state["price"]
-    snoozed = read_breakeven_snoozed()
-
-    if snoozed:
-        if current_tqqq_price < basis:
-            write_breakeven_snoozed(False)
-            log.info(f"Breakeven-alert poll: TQQQ ${current_tqqq_price:.2f} ({source}) dropped below "
-                      f"basis ${basis:.2f} -- snooze cleared, re-armed for the next cross above")
-        else:
-            log.info(f"Breakeven-alert poll: TQQQ ${current_tqqq_price:.2f} ({source}) vs basis ${basis:.2f} "
-                      f"-- snoozed, no alert")
-        return
-
-    log.info(f"Breakeven-alert poll: TQQQ ${current_tqqq_price:.2f} ({source}) vs basis ${basis:.2f} -- "
-              f"{'AT/ABOVE, firing' if current_tqqq_price >= basis else 'below, no alert'}")
-
-    if current_tqqq_price < basis:
-        return
-
-    channel = client.get_channel(ALERT_CHANNEL_ID)
-    if channel is None:
-        log.warning(f"Breakeven-alert poll: channel {ALERT_CHANNEL_ID} not found -- check DISCORD_ALERT_CHANNEL_ID")
-        return
-
-    gain_pct = (current_tqqq_price - basis) / basis * 100
-    embed = discord.Embed(
-        title="✅ TQQQ back at/above basis",
-        description=(
-            f"TQQQ is at **${current_tqqq_price:.2f}**, at or above your average cost basis "
-            f"**${basis:.2f}** ({gain_pct:+.2f}%) on your tracked {state['shares']:g} sh position."
-        ),
-        color=discord.Color.green(),
-        timestamp=datetime.now(timezone.utc),
-    )
-    embed.set_footer(text="Fires every 5 min while at/above basis -- press Snooze to pause until it drops below and re-crosses")
-    try:
-        await channel.send(embed=embed, view=BreakevenAlertView())
-    except Exception as e:
-        log.error(f"Breakeven-alert poll: ALERT DECIDED BUT SEND FAILED (TQQQ ${current_tqqq_price:.2f} ({source}) "
-                   f"vs basis ${basis:.2f}): {e}", exc_info=e)
-        return
-
-    log.info(f"Breakeven-alert poll: ALERT SENT -- TQQQ ${current_tqqq_price:.2f} ({source}) at/above basis ${basis:.2f}")
-
-
-@check_breakeven_alert.error
-async def check_breakeven_alert_error(error):
-    # Same reasoning as check_dip_alert_error / check_rung_alert_error --
-    # tasks.loop silently stops on any unhandled exception without this.
-    log.error(f"Breakeven-alert polling loop crashed and stopped: {error}", exc_info=error)
-
-
 @client.event
 async def on_ready():
     # Sync already happened once in setup_hook -- this just logs connection
@@ -1246,9 +1097,6 @@ async def on_ready():
     if not check_rung_alert.is_running():
         check_rung_alert.start()
         log.info("Rung-alert polling loop started.")
-    if not check_breakeven_alert.is_running():
-        check_breakeven_alert.start()
-        log.info("Breakeven-alert polling loop started.")
 
 
 @tree.command(name="marketcheck", description="Current QQQ regime, trend distance, and volatility -- no position needed")
