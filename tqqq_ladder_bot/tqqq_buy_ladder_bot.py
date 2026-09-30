@@ -41,7 +41,7 @@ import os
 import json
 import logging
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time as dtime
 from pathlib import Path
 from typing import Tuple
 from zoneinfo import ZoneInfo
@@ -501,9 +501,10 @@ def clear_position_state() -> None:
     patched, it's the correct semantics of "start watching again."""
     if POSITION_STATE_PATH.exists():
         POSITION_STATE_PATH.unlink()
-    global _running_high, _last_price_source
+    global _running_high, _last_price_source, _last_bar_ts
     _running_high = None
     _last_price_source = None
+    _last_bar_ts = None
     # Going flat removes the only thing a breakeven snooze is relative
     # to (state["price"]) -- same reasoning as write_position_state:
     # stale snooze state should not silently carry into whatever
@@ -765,6 +766,19 @@ _running_high = None
 # the same moment, not real market movement.
 _last_price_source = None
 
+# ET calendar date the running high belongs to. check_dip_alert compares this
+# to today's date each poll and starts fresh on a new day -- without it the
+# high carried over from the previous session, so a gap-down morning looked
+# like a "dip" from yesterday's peak.
+_high_date = None
+
+# Start time (ET) of the last 1-min/5-min bar already folded into
+# _running_high. Bars are re-read from this point (inclusive, so a bar that
+# was still forming last poll gets re-read once complete) -- max() makes
+# re-reading harmless, and it means a slow poll or short outage never skips
+# a stretch of bars.
+_last_bar_ts = None
+
 
 def seed_running_high_from_today() -> float:
     """Best-effort recovery of today's true running high after a bot
@@ -898,9 +912,135 @@ async def fetch_dip_alert_price() -> tuple:
         return price, "yfinance"
 
 
+# Extended-hours bar highs are the least trustworthy prints in the day (thin
+# liquidity, one stray trade can print well above where the bar opened and
+# closed). A bar's high is capped at this % above max(open, close) before it
+# is allowed to set the running high. 0.3% is a reasoned starting value, NOT
+# a backtested one -- tune it (or sweep it) before trusting it.
+EXT_HIGH_WICK_TOLERANCE_PCT = 0.3
+
+
+def _alpaca_bars_to_high(bars_df, symbol: str):
+    """(max high, start of last bar in ET) from an alpaca-py bars .df, or
+    (None, None) if there are no bars (e.g. no IEX trades in the window)."""
+    if bars_df is None or bars_df.empty:
+        return None, None
+    if isinstance(bars_df.index, pd.MultiIndex):
+        bars_df = bars_df.xs(symbol, level=0)
+    bars_df = bars_df.dropna(subset=["high"])
+    if bars_df.empty:
+        return None, None
+    last_ts = bars_df.index[-1].tz_convert(_ET)
+    return float(bars_df["high"].max()), last_ts
+
+
+def fetch_alpaca_regular_bar_high(symbol: str, since_ts):
+    """Blocking -- run via asyncio.to_thread. Highest 1-min bar high since
+    `since_ts` (or since today's 9:30 open if None / earlier than the open).
+    Regular session only: the extended-hours stretch is owned by the
+    yfinance branch, so IEX pre-market prints never enter the high."""
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.enums import DataFeed
+
+    now = datetime.now(_ET)
+    session_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    start = max(since_ts, session_open) if since_ts is not None else session_open
+    req = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Minute,
+        start=start,
+        feed=DataFeed.IEX,
+    )
+    bars = alpaca_client.get_stock_bars(req).df
+    return _alpaca_bars_to_high(bars, symbol)
+
+
+def _extended_bars_high(df: pd.DataFrame, since_ts, today):
+    """Pure function (easy to test). From yfinance 5-min prepost bars, returns
+    (sanitized max high, start of last bar used in ET), using only TODAY's
+    bars outside 9:30-16:00 ET (regular hours belong to Alpaca) at or after
+    `since_ts`. Each bar's high is capped at EXT_HIGH_WICK_TOLERANCE_PCT
+    above max(open, close) so a single stray print can't set the high."""
+    df = df.dropna(subset=["open", "high", "close"]).copy()
+    if df.empty:
+        return None, None
+    idx = df.index.tz_convert(_ET) if df.index.tz else df.index.tz_localize(_ET)
+    df.index = idx
+    outside_regular = (idx.time < dtime(9, 30)) | (idx.time >= dtime(16, 0))
+    mask = (idx.date == today) & outside_regular
+    if since_ts is not None:
+        mask = mask & (idx >= since_ts)
+    sel = df[mask]
+    if sel.empty:
+        return None, None
+    cap = sel[["open", "close"]].max(axis=1) * (1 + EXT_HIGH_WICK_TOLERANCE_PCT / 100)
+    sane_high = float(pd.concat([sel["high"], cap], axis=1).min(axis=1).max())
+    return sane_high, sel.index[-1]
+
+
+def fetch_extended_hours_snapshot(symbol: str, since_ts):
+    """Blocking -- run via asyncio.to_thread. ONE yfinance download that
+    returns both the live price (last close, same as
+    fetch_live_price_extended_hours) and the sanitized bar high -- so adding
+    bar highs costs zero extra yfinance calls. Price failures raise exactly
+    as before; a failure computing the bar high alone degrades to
+    (price, None, None) rather than losing the alert cycle."""
+    df = yf.download(
+        symbol,
+        period="5d",
+        interval="5m",
+        progress=False,
+        auto_adjust=True,
+        multi_level_index=False,
+        prepost=True,
+    )
+    if df.empty:
+        raise RuntimeError(f"No extended-hours data returned for {symbol}")
+    df.columns = [str(c).lower() for c in df.columns]
+    if df["close"].iloc[-1:].isna().any():
+        raise RuntimeError(f"{symbol}'s extended-hours price is not available right now")
+    price = float(df["close"].iloc[-1])
+    try:
+        high, last_ts = _extended_bars_high(df, since_ts, datetime.now(_ET).date())
+    except Exception as e:
+        log.warning(f"Dip-alert poll: extended-hours bar high failed, using price only: {e}")
+        high, last_ts = None, None
+    return price, high, last_ts
+
+
+async def fetch_dip_alert_snapshot() -> tuple:
+    """Used ONLY by check_dip_alert. Returns (price, source, bar_high,
+    last_bar_ts). Same Alpaca (regular hours) / yfinance (extended hours)
+    split as fetch_dip_alert_price, which is deliberately left unchanged --
+    check_rung_alert and check_breakeven_alert still use it as-is.
+
+    Regular hours: price = Alpaca latest trade (NOT the last bar's close,
+    which can be up to a minute stale); bar_high = highest 1-min IEX bar
+    high since the last processed bar. A bar-fetch failure degrades to
+    price-only for that cycle.
+    Extended hours: one yfinance download supplies both (see above)."""
+    if is_regular_hours_clock_only():
+        price = await asyncio.to_thread(
+            ad.fetch_latest_trade_price_with_staleness_check, alpaca_client, "TQQQ"
+        )
+        try:
+            bar_high, last_ts = await asyncio.to_thread(
+                fetch_alpaca_regular_bar_high, "TQQQ", _last_bar_ts
+            )
+        except Exception as e:
+            log.warning(f"Dip-alert poll: Alpaca bar fetch failed, using price only: {e}")
+            bar_high, last_ts = None, None
+        return price, "alpaca", bar_high, last_ts
+    price, bar_high, last_ts = await asyncio.to_thread(
+        fetch_extended_hours_snapshot, "TQQQ", _last_bar_ts
+    )
+    return price, "yfinance", bar_high, last_ts
+
+
 @tasks.loop(minutes=5)
 async def check_dip_alert():
-    global _running_high, _last_price_source
+    global _running_high, _last_price_source, _high_date, _last_bar_ts
 
     # Heartbeat -- previously this function was COMPLETELY silent on every
     # normal cycle (only a warning on fetch failure, or the alert itself
@@ -917,8 +1057,19 @@ async def check_dip_alert():
         log.info("Dip-alert poll: position currently tracked -- skipped (alert is for flat only)")
         return
 
+    # New trading day -> start the high fresh (see _high_date's comment).
+    today_et = datetime.now(_ET).date()
+    if _high_date != today_et:
+        if _running_high is not None:
+            log.info(f"Dip-alert poll: new trading day ({today_et}) -- resetting running high "
+                      f"(was ${_running_high:.2f})")
+        _running_high = None
+        _last_price_source = None
+        _last_bar_ts = None
+        _high_date = today_et
+
     try:
-        current_price, source = await fetch_dip_alert_price()
+        current_price, source, bar_high, last_bar_ts = await fetch_dip_alert_snapshot()
     except Exception as e:
         log.warning(f"Dip-alert poll: price fetch failed, skipping this cycle: {e}")
         return
@@ -955,13 +1106,25 @@ async def check_dip_alert():
                       f"-- running high set to this reading (no higher prior value to preserve)")
         _running_high = preserved_high
         _last_price_source = source
+        _last_bar_ts = None  # new source owns a different session -- re-read its bars next cycle
         return
     _last_price_source = source
+    if last_bar_ts is not None:
+        _last_bar_ts = last_bar_ts
 
-    if _running_high is None or current_price > _running_high:
-        _running_high = current_price
-        log.info(f"Dip-alert poll: TQQQ ${current_price:.2f} ({source}) -- new running high, no dip to check yet")
-        return
+    # The high now comes from bar highs as well as the spot price, so a spike
+    # between two 5-min polls still counts. If price spiked and already fell
+    # back, the dip check below runs against that true high (no early return).
+    candidate_high = current_price if bar_high is None else max(current_price, bar_high)
+    if _running_high is None or candidate_high > _running_high:
+        _running_high = candidate_high
+        if bar_high is not None and bar_high > current_price:
+            log.info(f"Dip-alert poll: TQQQ ${current_price:.2f} ({source}) -- new running high "
+                      f"${_running_high:.2f} from bars (between-poll peak)")
+        else:
+            log.info(f"Dip-alert poll: TQQQ ${current_price:.2f} ({source}) -- new running high, no dip to check yet")
+        if current_price >= _running_high:
+            return
 
     dip_pct = (_running_high - current_price) / _running_high * 100
     if dip_pct < DIP_ALERT_THRESHOLD_PCT:
@@ -1261,7 +1424,7 @@ async def on_ready():
     # status, safe to fire on every reconnect.
     log.info(f"Logged in as {client.user}")
     if not check_dip_alert.is_running():
-        global _running_high, _last_price_source
+        global _running_high, _last_price_source, _high_date
         seeded = await asyncio.to_thread(seed_running_high_from_today)
         if seeded is not None:
             _running_high = seeded
@@ -1272,6 +1435,9 @@ async def on_ready():
             # guard entirely, since that guard only fires once a prior
             # source is already known.
             _last_price_source = "yfinance"
+            # Without this the loop's new-day check would see a stale
+            # _high_date and immediately discard the seed just computed.
+            _high_date = datetime.now(_ET).date()
             log.info(f"Dip-alert: seeded running high from today's data -- ${seeded:.2f}")
         else:
             log.info("Dip-alert: could not seed running high from today's data -- starting cold (None)")
