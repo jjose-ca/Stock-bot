@@ -1535,6 +1535,26 @@ async def marketcheck(interaction: discord.Interaction):
         )
         embed.add_field(name="Price", value=f"QQQ ${qqq_now:.2f}  |  TQQQ ${tqqq_now:.2f}", inline=False)
 
+        # What the dip alert is currently measuring against. Read straight
+        # from the in-memory tracker (no extra fetch). Only meaningful while
+        # flat: check_dip_alert is paused whenever a position is tracked, so
+        # its high is stale then and is deliberately not shown as if live.
+        # The tracker only updates on its 5-min polls, so this can lag the
+        # live price above by up to ~5 min.
+        if read_position_state() is not None:
+            tracked_high_value = "Not tracked -- dip alert is paused while a position is open"
+        elif _running_high is None:
+            tracked_high_value = "Not set yet -- dip alert hasn't completed a poll today"
+        else:
+            dip_now = max((_running_high - tqqq_now) / _running_high * 100, 0.0)
+            tracked_high_value = (
+                f"TQQQ ${_running_high:.2f} -- now {dip_now:.2f}% below "
+                f"(alert fires at {DIP_ALERT_THRESHOLD_PCT:g}%)"
+            )
+            if _high_date != datetime.now(_ET).date():
+                tracked_high_value += "\n(from a prior session -- resets on the next in-window poll)"
+        embed.add_field(name="Dip-alert tracked high", value=tracked_high_value, inline=False)
+
         # Badges use period-CORRECT thresholds, not one blanket number for
         # both -- RSI(2) swings far more than RSI(14) by design. RSI(2)
         # bounds (<10/>90) match tqqq_swing_bot_v2.py's actual live
