@@ -501,10 +501,16 @@ def clear_position_state() -> None:
     patched, it's the correct semantics of "start watching again."""
     if POSITION_STATE_PATH.exists():
         POSITION_STATE_PATH.unlink()
-    global _running_high, _last_price_source, _last_bar_ts
+    global _running_high, _last_price_source, _last_bar_ts, _high_date
     _running_high = None
     _last_price_source = None
-    _last_bar_ts = None
+    # Watch for a new peak starting from the moment of clearing: the bar
+    # cursor is the floor for which bars may count toward the high, so
+    # nothing from before the sale (this morning's high, pre-market, the
+    # period you were holding) can set it. _high_date is set to today so
+    # the new-day reset in check_dip_alert doesn't wipe this cursor.
+    _last_bar_ts = datetime.now(_ET)
+    _high_date = datetime.now(_ET).date()
     # Going flat removes the only thing a breakeven snooze is relative
     # to (state["price"]) -- same reasoning as write_position_state:
     # stale snooze state should not silently carry into whatever
@@ -1106,7 +1112,9 @@ async def check_dip_alert():
                       f"-- running high set to this reading (no higher prior value to preserve)")
         _running_high = preserved_high
         _last_price_source = source
-        _last_bar_ts = None  # new source owns a different session -- re-read its bars next cycle
+        # _last_bar_ts is deliberately kept: it is a point in time, so it
+        # stays valid across the hand-off (each source only reads bars from
+        # the session it owns), and it preserves the Clear Position floor.
         return
     _last_price_source = source
     if last_bar_ts is not None:
