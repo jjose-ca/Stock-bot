@@ -32,6 +32,9 @@ Env vars (.env or exported):
     DIP_ALERT_THRESHOLD_PCT    (optional, default 0.5 -- see
                                 intraday_entry_backtest.py for how this
                                 value was actually tested, not guessed)
+    DIP_ALERT_THRESHOLD_EXT_PCT (optional, default 0.6 -- the threshold used
+                                instead outside 9:30am-4:00pm ET, where
+                                prints are thinner and noisier)
     ALPACA_API_KEY              (required -- fetch_daily_bars is Alpaca-backed
     ALPACA_SECRET_KEY            as of this session; bot fails at import time,
                                 before Discord login, if either is missing)
@@ -96,6 +99,12 @@ DIP_ALERT_THRESHOLD_PCT = float(os.environ.get("DIP_ALERT_THRESHOLD_PCT", "0.5")
 # 0.5% default -- matches the value actually tested in
 # intraday_entry_backtest.py. Configurable via .env rather than hardcoded,
 # so it can be tuned without a code change/redeploy.
+DIP_ALERT_THRESHOLD_EXT_PCT = float(os.environ.get("DIP_ALERT_THRESHOLD_EXT_PCT", "0.6"))
+# Pre-market / after-hours threshold. Slightly wider than the regular-hours
+# value because extended-hours prints are thinner and a stray print can lift
+# the running high (see EXT_HIGH_WICK_TOLERANCE_PCT). 0.6% is a reasoned
+# starting value, NOT a backtested one -- intraday_entry_backtest.py's 0.5%
+# result was not an extended-hours test. Same units as above (percent).
 
 LADDER_LOG_PATH = Path(__file__).parent / "ladder_log.jsonl"
 POSITION_STATE_PATH = Path(__file__).parent / "position_state.json"
@@ -1135,9 +1144,12 @@ async def check_dip_alert():
             return
 
     dip_pct = (_running_high - current_price) / _running_high * 100
-    if dip_pct < DIP_ALERT_THRESHOLD_PCT:
+    # Threshold follows where the reading came from: yfinance = extended
+    # hours, alpaca = regular hours (same split fetch_dip_alert_snapshot uses).
+    threshold_pct = DIP_ALERT_THRESHOLD_EXT_PCT if source == "yfinance" else DIP_ALERT_THRESHOLD_PCT
+    if dip_pct < threshold_pct:
         log.info(f"Dip-alert poll: TQQQ ${current_price:.2f} ({source}), {dip_pct:.2f}% below "
-                  f"running high ${_running_high:.2f} (threshold {DIP_ALERT_THRESHOLD_PCT}%) -- no alert")
+                  f"running high ${_running_high:.2f} (threshold {threshold_pct:g}%) -- no alert")
         return
 
     log.info(f"Dip-alert poll: THRESHOLD MET -- TQQQ ${current_price:.2f} ({source}), "
@@ -1555,9 +1567,13 @@ async def marketcheck(interaction: discord.Interaction):
             tracked_high_value = "Not set yet -- dip alert hasn't completed a poll today"
         else:
             dip_now = max((_running_high - tqqq_now) / _running_high * 100, 0.0)
+            threshold_now = (
+                DIP_ALERT_THRESHOLD_PCT if is_regular_hours_clock_only()
+                else DIP_ALERT_THRESHOLD_EXT_PCT
+            )
             tracked_high_value = (
                 f"TQQQ ${_running_high:.2f} -- now {dip_now:.2f}% below "
-                f"(alert fires at {DIP_ALERT_THRESHOLD_PCT:g}%)"
+                f"(alert fires at {threshold_now:g}% right now)"
             )
             if _high_date != datetime.now(_ET).date():
                 tracked_high_value += "\n(from a prior session -- resets on the next in-window poll)"
